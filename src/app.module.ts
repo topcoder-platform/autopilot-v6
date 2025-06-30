@@ -3,8 +3,17 @@ import { AppConfigModule } from './config/config.module';
 import { KafkaModule } from './kafka/kafka.module';
 import { AutopilotModule } from './autopilot/autopilot.module';
 import { HealthModule } from './health/health.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { RecoveryModule } from './recovery/recovery.module';
 
 @Module({
-  imports: [AppConfigModule, KafkaModule, AutopilotModule, HealthModule],
+  imports: [
+    ScheduleModule.forRoot(),
+    AppConfigModule,
+    KafkaModule,
+    AutopilotModule,
+    HealthModule,
+    RecoveryModule,
+  ],
 })
 export class AppModule {}

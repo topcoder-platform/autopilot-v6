@@ -66,6 +66,14 @@ export class ChallengeUpdatePayload {
   @IsDateString()
   @IsOptional()
   date?: string;
+
+  @IsNumber()
+  @IsNotEmpty()
+  phaseId?: number;
+
+  @IsString()
+  @IsNotEmpty()
+  phaseTypeName?: string;
 }
 
 export class ChallengeUpdateMessage extends KafkaMessageTemplate<ChallengeUpdatePayload> {
