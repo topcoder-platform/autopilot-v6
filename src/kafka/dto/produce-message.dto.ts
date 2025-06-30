@@ -63,6 +63,14 @@ export class ChallengeUpdatePayloadDto {
   @IsDateString()
   @IsOptional()
   date?: string;
+
+  @IsNumber()
+  @IsOptional()
+  phaseId?: number;
+
+  @IsString()
+  @IsOptional()
+  phaseTypeName?: string;
 }
 
 export class CommandPayloadDto {
@@ -81,6 +89,10 @@ export class CommandPayloadDto {
   @IsDateString()
   @IsOptional()
   date?: string;
+
+  @IsNumber()
+  @IsOptional()
+  phaseId?: number;
 }
 
 export class BaseMessageDto {

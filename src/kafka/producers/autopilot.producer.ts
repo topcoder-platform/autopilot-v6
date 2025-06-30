@@ -25,6 +25,8 @@ export class AutopilotProducer {
     const message = new ChallengeUpdateMessage({
       ...payload,
       date: payload.date || new Date().toISOString(),
+      phaseId: payload.phaseId ?? 0,
+      phaseTypeName: payload.phaseTypeName ?? 'UNKNOWN',
     });
     await this.kafkaService.produce(message.topic, message);
   }

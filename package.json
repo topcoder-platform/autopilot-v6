@@ -28,6 +28,7 @@
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/schedule": "^6.0.0",
     "@nestjs/terminus": "^11.0.0",
     "avsc": "^5.7.7",
     "axios": "^1.9.0",
