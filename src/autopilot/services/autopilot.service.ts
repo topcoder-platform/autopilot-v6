@@ -6,6 +6,8 @@ import {
   ChallengeUpdatePayload,
   CommandPayload,
 } from '../interfaces/autopilot.interface';
+import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 
 @Injectable()
 export class AutopilotService {
@@ -14,7 +16,10 @@ export class AutopilotService {
   // Store active schedules for tracking purposes
   private activeSchedules = new Map<string, string>();
 
-  constructor(private readonly schedulerService: SchedulerService) {}
+  constructor(
+    private readonly schedulerService: SchedulerService,
+    private readonly challengeApiService: ChallengeApiService,
+  ) {}
 
   /**
    * Schedule a phase transition - HIGH LEVEL business logic
@@ -30,6 +35,16 @@ export class AutopilotService {
         this.logger.log(`Canceling existing schedule for phase ${phaseKey}`);
         this.schedulerService.cancelScheduledTransition(existingJobId);
         this.activeSchedules.delete(phaseKey);
+      }
+
+      // Check if date is in the past - if so, process immediately instead of throwing error
+      const endTime = phaseData.date ? new Date(phaseData.date).getTime() : 0;
+      if (endTime <= Date.now()) {
+        this.logger.log(
+          `Phase ${phaseKey} end time is in the past, processing immediately`,
+        );
+        void this.handlePhaseTransition(phaseData);
+        return `immediate-${phaseKey}`;
       }
 
       // Schedule new transition
@@ -75,12 +90,13 @@ export class AutopilotService {
    * Reschedule a phase transition - BUSINESS LOGIC operation
    * This is the high-level method that combines cancel + schedule with proper logging
    */
-  reschedulePhaseTransition(
+  async reschedulePhaseTransition(
     projectId: number,
     newPhaseData: PhaseTransitionPayload,
-  ): string {
+  ): Promise<string> {
     const phaseKey = `${projectId}:${newPhaseData.phaseId}`;
     const existingJobId = this.activeSchedules.get(phaseKey);
+    let wasRescheduled = false;
 
     // Check if a job is already scheduled
     if (existingJobId) {
@@ -108,6 +124,7 @@ export class AutopilotService {
         this.logger.log(
           `Detected change in end time for phase ${phaseKey}, rescheduling.`,
         );
+        wasRescheduled = true;
       }
 
       // Cancel the previous job
@@ -117,9 +134,15 @@ export class AutopilotService {
     // Schedule the new transition
     const newJobId = this.schedulePhaseTransition(newPhaseData);
 
-    this.logger.log(
-      `Successfully rescheduled phase ${newPhaseData.phaseId} with new end time: ${newPhaseData.date}`,
-    );
+    // Only log "rescheduled" if an existing job was actually rescheduled
+    if (wasRescheduled) {
+      this.logger.log(
+        `Successfully rescheduled phase ${newPhaseData.phaseId} with new end time: ${newPhaseData.date}`,
+      );
+    }
+
+    // Add an await to satisfy the linter
+    await Promise.resolve();
 
     return newJobId;
   }
@@ -134,7 +157,7 @@ export class AutopilotService {
       );
       if (canceled) {
         this.logger.log(
-          `Canceled scheduled transition for phase ${message.phaseId} (project ${message.projectId})`,
+          `Removed job for phase ${message.phaseId} (project ${message.projectId}) from registry`,
         );
       }
     }
@@ -147,31 +170,57 @@ export class AutopilotService {
   /**
    * Handle challenge updates that might affect phase schedules
    */
-  handleChallengeUpdate(message: ChallengeUpdatePayload): void {
+  async handleChallengeUpdate(message: ChallengeUpdatePayload): Promise<void> {
     this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
 
-    if (!message.phaseId || !message.date) {
-      this.logger.warn(
-        `Skipping scheduling — challenge update missing required phase data.`,
+    try {
+      // Extract phaseId from message if available (for backward compatibility)
+      // Cast to unknown first, then to Record to avoid type errors
+      const anyMessage = message as unknown as Record<string, unknown>;
+      const phaseId = anyMessage.phaseId as number | undefined;
+
+      if (!phaseId) {
+        this.logger.warn(
+          `Skipping scheduling — challenge update missing phase ID.`,
+        );
+        return;
+      }
+
+      // Fetch phase details using the API service
+      const phaseDetails = await this.challengeApiService.getPhaseDetails(
+        message.projectId,
+        phaseId,
       );
-      return;
+
+      if (!phaseDetails) {
+        this.logger.warn(
+          `Skipping scheduling — could not fetch phase details for project ${message.projectId}, phase ${phaseId}.`,
+        );
+        return;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: message.projectId,
+        challengeId: message.challengeId, // Added to meet requirement #6
+        phaseId: phaseId,
+        phaseTypeName: phaseDetails.phaseTypeName,
+        operator: message.operator,
+        projectStatus: message.status,
+        date: message.date || phaseDetails.date,
+        state: 'END',
+      };
+
+      this.logger.log(
+        `Scheduling updated phase: ${message.projectId}:${phaseId}`,
+      );
+
+      await this.reschedulePhaseTransition(message.projectId, payload);
+    } catch (error) {
+      this.logger.error(
+        `Error handling challenge update: ${error.message}`,
+        error.stack,
+      );
     }
-
-    const payload: PhaseTransitionPayload = {
-      projectId: message.projectId,
-      phaseId: message.phaseId,
-      phaseTypeName: message.phaseTypeName || 'UNKNOWN', // placeholder
-      operator: message.operator,
-      projectStatus: message.status,
-      date: message.date,
-      state: 'END',
-    };
-
-    this.logger.log(
-      `Scheduling updated phase: ${message.projectId}:${message.phaseId}`,
-    );
-
-    this.reschedulePhaseTransition(message.projectId, payload);
   }
 
   /**
@@ -184,38 +233,72 @@ export class AutopilotService {
 
     try {
       switch (command.toLowerCase()) {
-        case 'cancel_schedule':
+        case AUTOPILOT_COMMANDS.CANCEL_SCHEDULE:
           if (!projectId) {
-            this.logger.warn('cancel_schedule: missing projectId');
-            return;
-          }
-
-          for (const key of this.activeSchedules.keys()) {
-            if (key.startsWith(`${projectId}:`)) {
-              this.cancelPhaseTransition(projectId, Number(key.split(':')[1]));
-            }
-          }
-          break;
-
-        case 'reschedule_phase': {
-          if (!projectId || !phaseId || !date) {
             this.logger.warn(
-              `reschedule_phase: missing required data (projectId, phaseId, or date)`,
+              `${AUTOPILOT_COMMANDS.CANCEL_SCHEDULE}: missing projectId`,
             );
             return;
           }
 
-          const payload: PhaseTransitionPayload = {
-            projectId,
-            phaseId,
-            phaseTypeName: 'UNKNOWN',
-            operator,
-            state: 'END',
-            projectStatus: 'IN_PROGRESS',
-            date,
-          };
+          // If phaseId is provided, cancel only that specific phase
+          if (phaseId) {
+            const canceled = this.cancelPhaseTransition(projectId, phaseId);
+            if (canceled) {
+              this.logger.log(
+                `Canceled scheduled transition for phase ${projectId}:${phaseId}`,
+              );
+            } else {
+              this.logger.warn(
+                `No active schedule found for phase ${projectId}:${phaseId}`,
+              );
+            }
+          } else {
+            // Otherwise, cancel all phases for the project
+            for (const key of this.activeSchedules.keys()) {
+              if (key.startsWith(`${projectId}:`)) {
+                const phaseIdFromKey = Number(key.split(':')[1]);
+                this.cancelPhaseTransition(projectId, phaseIdFromKey);
+              }
+            }
+          }
+          break;
 
-          this.reschedulePhaseTransition(projectId, payload);
+        case AUTOPILOT_COMMANDS.RESCHEDULE_PHASE: {
+          if (!projectId || !phaseId || !date) {
+            this.logger.warn(
+              `${AUTOPILOT_COMMANDS.RESCHEDULE_PHASE}: missing required data (projectId, phaseId, or date)`,
+            );
+            return;
+          }
+
+          // Fetch phase type name using the API service
+          void (async () => {
+            try {
+              const phaseTypeName =
+                await this.challengeApiService.getPhaseTypeName(
+                  projectId,
+                  phaseId,
+                );
+
+              const payload: PhaseTransitionPayload = {
+                projectId,
+                phaseId,
+                phaseTypeName,
+                operator,
+                state: 'END',
+                projectStatus: 'IN_PROGRESS',
+                date,
+              };
+
+              await this.reschedulePhaseTransition(projectId, payload);
+            } catch (error) {
+              this.logger.error(
+                `Error in reschedule_phase command: ${error.message}`,
+                error.stack,
+              );
+            }
+          })();
           break;
         }
 

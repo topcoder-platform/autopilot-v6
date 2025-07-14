@@ -13,6 +13,7 @@ export interface PhaseTransitionPayload {
   operator: string;
   projectStatus: string;
   date?: string;
+  challengeId?: number; // Added to meet requirement #6
 }
 
 export interface ChallengeUpdatePayload {
@@ -21,8 +22,6 @@ export interface ChallengeUpdatePayload {
   status: string;
   operator: string;
   date?: string;
-  phaseId?: number;
-  phaseTypeName?: string;
 }
 
 export interface CommandPayload {
@@ -30,7 +29,7 @@ export interface CommandPayload {
   operator: string;
   projectId?: number;
   date?: string;
-  phaseId?: number;
+  phaseId?: number; // Keep this to support individual phase cancellation
 }
 
 export interface PhaseTransitionMessage extends BaseMessage {

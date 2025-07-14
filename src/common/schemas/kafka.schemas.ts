@@ -1,5 +1,7 @@
+import { KAFKA_TOPICS } from 'src/kafka/constants/topics';
+
 export const KAFKA_SCHEMAS = {
-  'autopilot.phase.transition': {
+  [KAFKA_TOPICS.PHASE_TRANSITION]: {
     type: 'record',
     name: 'PhaseTransition',
     namespace: 'com.autopilot.events',
@@ -33,7 +35,7 @@ export const KAFKA_SCHEMAS = {
       },
     ],
   },
-  'autopilot.challenge.update': {
+  [KAFKA_TOPICS.CHALLENGE_UPDATE]: {
     type: 'record',
     name: 'ChallengeUpdate',
     namespace: 'com.autopilot.events',
@@ -60,7 +62,7 @@ export const KAFKA_SCHEMAS = {
       },
     ],
   },
-  'autopilot.command': {
+  [KAFKA_TOPICS.COMMAND]: {
     type: 'record',
     name: 'Command',
     namespace: 'com.autopilot.events',
