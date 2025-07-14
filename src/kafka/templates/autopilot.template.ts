@@ -37,6 +37,10 @@ export class PhaseTransitionPayload {
   @IsDateString()
   @IsOptional()
   date?: string;
+
+  @IsNumber()
+  @IsOptional()
+  challengeId?: number;
 }
 
 export class PhaseTransitionMessage extends KafkaMessageTemplate<PhaseTransitionPayload> {
@@ -66,14 +70,6 @@ export class ChallengeUpdatePayload {
   @IsDateString()
   @IsOptional()
   date?: string;
-
-  @IsNumber()
-  @IsNotEmpty()
-  phaseId?: number;
-
-  @IsString()
-  @IsNotEmpty()
-  phaseTypeName?: string;
 }
 
 export class ChallengeUpdateMessage extends KafkaMessageTemplate<ChallengeUpdatePayload> {
@@ -99,6 +95,10 @@ export class CommandPayload {
   @IsDateString()
   @IsOptional()
   date?: string;
+
+  @IsNumber()
+  @IsOptional()
+  phaseId?: number;
 }
 
 export class CommandMessage extends KafkaMessageTemplate<CommandPayload> {
