@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
 import {
@@ -13,7 +12,6 @@ import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 export class AutopilotService {
   private readonly logger = new Logger(AutopilotService.name);
 
-  // Store active schedules for tracking purposes
   private activeSchedules = new Map<string, string>();
 
   constructor(
@@ -21,54 +19,37 @@ export class AutopilotService {
     private readonly challengeApiService: ChallengeApiService,
   ) {}
 
-  /**
-   * Schedule a phase transition - HIGH LEVEL business logic
-   * Handles existing schedule cleanup and tracking
-   */
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
     try {
       const phaseKey = `${phaseData.projectId}:${phaseData.phaseId}`;
 
-      // Cancel existing schedule if it exists
       const existingJobId = this.activeSchedules.get(phaseKey);
       if (existingJobId) {
-        this.logger.log(`Canceling existing schedule for phase ${phaseKey}`);
+        this.logger.log(
+          `Canceling existing schedule for phase ${phaseKey} before rescheduling.`,
+        );
         this.schedulerService.cancelScheduledTransition(existingJobId);
         this.activeSchedules.delete(phaseKey);
       }
 
-      // Check if date is in the past - if so, process immediately instead of throwing error
-      const endTime = phaseData.date ? new Date(phaseData.date).getTime() : 0;
-      if (endTime <= Date.now()) {
-        this.logger.log(
-          `Phase ${phaseKey} end time is in the past, processing immediately`,
-        );
-        void this.handlePhaseTransition(phaseData);
-        return `immediate-${phaseKey}`;
-      }
-
-      // Schedule new transition
       const jobId = this.schedulerService.schedulePhaseTransition(phaseData);
       this.activeSchedules.set(phaseKey, jobId);
 
       this.logger.log(
-        `Scheduled phase transition for challenge ${phaseData.projectId}, phase ${phaseData.phaseId} at ${phaseData.date}`,
+        `Scheduled phase transition for challenge ${phaseData.challengeId}, phase ${phaseData.phaseId} at ${phaseData.date}`,
       );
       return jobId;
     } catch (error) {
+      const err = error as Error;
       this.logger.error(
-        `Failed to schedule phase transition: ${error.message}`,
-        error.stack,
+        `Failed to schedule phase transition: ${err.message}`,
+        err.stack,
       );
       throw error;
     }
   }
 
-  /**
-   * Cancel a scheduled phase transition - HIGH LEVEL business logic
-   * Handles tracking cleanup
-   */
-  cancelPhaseTransition(projectId: number, phaseId: number): boolean {
+  cancelPhaseTransition(projectId: number, phaseId: string): boolean {
     const phaseKey = `${projectId}:${phaseId}`;
     const jobId = this.activeSchedules.get(phaseKey);
 
@@ -86,31 +67,23 @@ export class AutopilotService {
     return canceled;
   }
 
-  /**
-   * Reschedule a phase transition - BUSINESS LOGIC operation
-   * This is the high-level method that combines cancel + schedule with proper logging
-   */
-  async reschedulePhaseTransition(
+  reschedulePhaseTransition(
     projectId: number,
     newPhaseData: PhaseTransitionPayload,
-  ): Promise<string> {
+  ): string {
     const phaseKey = `${projectId}:${newPhaseData.phaseId}`;
     const existingJobId = this.activeSchedules.get(phaseKey);
     let wasRescheduled = false;
 
-    // Check if a job is already scheduled
     if (existingJobId) {
       const scheduledJob =
         this.schedulerService.getScheduledTransition(existingJobId);
 
       if (!scheduledJob) {
         this.logger.warn(
-          `No scheduled job found for phase ${phaseKey}, skipping reschedule.`,
+          `No scheduled job found for phase ${phaseKey}, but it was in the active map. Scheduling new job.`,
         );
-        return existingJobId;
-      }
-
-      if (scheduledJob && scheduledJob.date && newPhaseData.date) {
+      } else if (scheduledJob.date && newPhaseData.date) {
         const existingTime = new Date(scheduledJob.date).getTime();
         const newTime = new Date(newPhaseData.date).getTime();
 
@@ -126,29 +99,23 @@ export class AutopilotService {
         );
         wasRescheduled = true;
       }
-
-      // Cancel the previous job
-      this.cancelPhaseTransition(projectId, newPhaseData.phaseId);
     }
 
-    // Schedule the new transition
     const newJobId = this.schedulePhaseTransition(newPhaseData);
 
-    // Only log "rescheduled" if an existing job was actually rescheduled
     if (wasRescheduled) {
       this.logger.log(
         `Successfully rescheduled phase ${newPhaseData.phaseId} with new end time: ${newPhaseData.date}`,
       );
     }
 
-    // Add an await to satisfy the linter
-    await Promise.resolve();
-
     return newJobId;
   }
 
-  async handlePhaseTransition(message: PhaseTransitionPayload): Promise<void> {
-    this.logger.log(`Handling phase transition: ${JSON.stringify(message)}`);
+  handlePhaseTransition(message: PhaseTransitionPayload): void {
+    this.logger.log(
+      `Consumed phase transition event: ${JSON.stringify(message)}`,
+    );
 
     if (message.state === 'END') {
       const canceled = this.cancelPhaseTransition(
@@ -157,75 +124,101 @@ export class AutopilotService {
       );
       if (canceled) {
         this.logger.log(
-          `Removed job for phase ${message.phaseId} (project ${message.projectId}) from registry`,
+          `Cleaned up job for phase ${message.phaseId} (project ${message.projectId}) from registry after consuming event.`,
         );
       }
     }
-
-    // Future: Trigger challenge API update here
-
-    return Promise.resolve();
   }
 
-  /**
-   * Handle challenge updates that might affect phase schedules
-   */
+  async handleNewChallenge(challenge: ChallengeUpdatePayload): Promise<void> {
+    this.logger.log(
+      `Handling new challenge creation: ${JSON.stringify(challenge)}`,
+    );
+    try {
+      // Refactored: Use getActiveChallenge as required
+      const challengeDetails =
+        await this.challengeApiService.getActiveChallenge(
+          challenge.challengeId,
+        );
+
+      if (!challengeDetails.phases) {
+        this.logger.warn(
+          `Challenge ${challenge.challengeId} has no phases to schedule.`,
+        );
+        return;
+      }
+
+      for (const phase of challengeDetails.phases) {
+        if (!phase.scheduledEndDate) {
+          this.logger.warn(
+            `Phase ${phase.id} for new challenge ${challenge.challengeId} has no scheduled end date. Skipping.`,
+          );
+          continue;
+        }
+        const phaseData: PhaseTransitionPayload = {
+          projectId: challengeDetails.projectId,
+          challengeId: challengeDetails.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'END',
+          operator: 'system-new-challenge',
+          projectStatus: challengeDetails.status,
+          date: phase.scheduledEndDate,
+        };
+        this.schedulePhaseTransition(phaseData);
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Error handling new challenge creation for id ${challenge.challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
   async handleChallengeUpdate(message: ChallengeUpdatePayload): Promise<void> {
     this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
 
     try {
-      // Extract phaseId from message if available (for backward compatibility)
-      // Cast to unknown first, then to Record to avoid type errors
-      const anyMessage = message as unknown as Record<string, unknown>;
-      const phaseId = anyMessage.phaseId as number | undefined;
+      // Refactored: Use getActiveChallenge as required
+      const challengeDetails =
+        await this.challengeApiService.getActiveChallenge(message.challengeId);
 
-      if (!phaseId) {
+      if (!challengeDetails.phases) {
         this.logger.warn(
-          `Skipping scheduling — challenge update missing phase ID.`,
+          `Updated challenge ${message.challengeId} has no phases to process.`,
         );
         return;
       }
 
-      // Fetch phase details using the API service
-      const phaseDetails = await this.challengeApiService.getPhaseDetails(
-        message.projectId,
-        phaseId,
-      );
+      for (const phase of challengeDetails.phases) {
+        if (!phase.scheduledEndDate) continue;
 
-      if (!phaseDetails) {
-        this.logger.warn(
-          `Skipping scheduling — could not fetch phase details for project ${message.projectId}, phase ${phaseId}.`,
+        const payload: PhaseTransitionPayload = {
+          projectId: challengeDetails.projectId,
+          challengeId: challengeDetails.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          operator: message.operator,
+          projectStatus: challengeDetails.status,
+          date: phase.scheduledEndDate,
+          state: 'END',
+        };
+
+        this.logger.log(
+          `Rescheduling updated phase from notification: ${challengeDetails.projectId}:${phase.id}`,
         );
-        return;
+        this.reschedulePhaseTransition(challengeDetails.projectId, payload);
       }
-
-      const payload: PhaseTransitionPayload = {
-        projectId: message.projectId,
-        challengeId: message.challengeId, // Added to meet requirement #6
-        phaseId: phaseId,
-        phaseTypeName: phaseDetails.phaseTypeName,
-        operator: message.operator,
-        projectStatus: message.status,
-        date: message.date || phaseDetails.date,
-        state: 'END',
-      };
-
-      this.logger.log(
-        `Scheduling updated phase: ${message.projectId}:${phaseId}`,
-      );
-
-      await this.reschedulePhaseTransition(message.projectId, payload);
     } catch (error) {
+      const err = error as Error;
       this.logger.error(
-        `Error handling challenge update: ${error.message}`,
-        error.stack,
+        `Error handling challenge update: ${err.message}`,
+        err.stack,
       );
     }
   }
 
-  /**
-   * Handle commands (manual operations)
-   */
   handleCommand(message: CommandPayload): void {
     const { command, operator, projectId, date, phaseId } = message;
 
@@ -241,7 +234,6 @@ export class AutopilotService {
             return;
           }
 
-          // If phaseId is provided, cancel only that specific phase
           if (phaseId) {
             const canceled = this.cancelPhaseTransition(projectId, phaseId);
             if (canceled) {
@@ -254,10 +246,9 @@ export class AutopilotService {
               );
             }
           } else {
-            // Otherwise, cancel all phases for the project
             for (const key of this.activeSchedules.keys()) {
               if (key.startsWith(`${projectId}:`)) {
-                const phaseIdFromKey = Number(key.split(':')[1]);
+                const phaseIdFromKey = key.split(':')[1];
                 this.cancelPhaseTransition(projectId, phaseIdFromKey);
               }
             }
@@ -272,30 +263,46 @@ export class AutopilotService {
             return;
           }
 
-          // Fetch phase type name using the API service
           void (async () => {
             try {
+              const challenges =
+                await this.challengeApiService.getAllActiveChallenges({
+                  status: 'ACTIVE',
+                });
+              const associatedChallenge = challenges.find(
+                (c) => c.projectId === projectId,
+              );
+
+              if (!associatedChallenge) {
+                this.logger.error(
+                  `Could not find an active challenge with projectId ${projectId} to reschedule.`,
+                );
+                return;
+              }
+
               const phaseTypeName =
                 await this.challengeApiService.getPhaseTypeName(
-                  projectId,
+                  associatedChallenge.id,
                   phaseId,
                 );
 
               const payload: PhaseTransitionPayload = {
                 projectId,
                 phaseId,
+                challengeId: associatedChallenge.id,
                 phaseTypeName,
                 operator,
                 state: 'END',
-                projectStatus: 'IN_PROGRESS',
+                projectStatus: 'IN_PROGRESS', // Assuming status
                 date,
               };
 
-              await this.reschedulePhaseTransition(projectId, payload);
+              this.reschedulePhaseTransition(projectId, payload);
             } catch (error) {
+              const err = error as Error;
               this.logger.error(
-                `Error in reschedule_phase command: ${error.message}`,
-                error.stack,
+                `Error in reschedule_phase command: ${err.message}`,
+                err.stack,
               );
             }
           })();
@@ -306,25 +313,15 @@ export class AutopilotService {
           this.logger.warn(`Unknown command received: ${command}`);
       }
     } catch (error) {
-      this.logger.error(
-        `Error handling command: ${error.message}`,
-        error.stack,
-      );
+      const err = error as Error;
+      this.logger.error(`Error handling command: ${err.message}`, err.stack);
     }
   }
 
-  /**
-   * Get active schedules with business context
-   * Returns the mapping of phase keys to job IDs
-   */
   getActiveSchedules(): Map<string, string> {
     return new Map(this.activeSchedules);
   }
 
-  /**
-   * Get all scheduled transitions with enhanced info
-   * Combines low-level scheduler data with business context
-   */
   getAllScheduledTransitions(): {
     jobIds: string[];
     activeSchedules: Map<string, string>;

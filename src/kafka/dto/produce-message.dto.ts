@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsDateString,
+  IsUUID,
 } from 'class-validator';
 
 export enum PhaseState {
@@ -19,9 +20,9 @@ export class PhaseTransitionPayloadDto {
   @IsNotEmpty()
   projectId: number;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsNotEmpty()
-  phaseId: number;
+  phaseId: string; // Changed from number to string
 
   @IsString()
   @IsNotEmpty()
@@ -42,9 +43,9 @@ export class PhaseTransitionPayloadDto {
   @IsOptional()
   date?: string;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsOptional()
-  challengeId?: number;
+  challengeId?: string; // Changed from number to string
 }
 
 export class ChallengeUpdatePayloadDto {
@@ -52,9 +53,9 @@ export class ChallengeUpdatePayloadDto {
   @IsNotEmpty()
   projectId: number;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsNotEmpty()
-  challengeId: number;
+  challengeId: string; // Changed from number to string
 
   @IsString()
   @IsNotEmpty()
@@ -86,9 +87,9 @@ export class CommandPayloadDto {
   @IsOptional()
   date?: string;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsOptional()
-  phaseId?: number;
+  phaseId?: string; // Changed from number to string
 }
 
 export class BaseMessageDto {

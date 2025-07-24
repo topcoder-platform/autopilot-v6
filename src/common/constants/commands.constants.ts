@@ -7,8 +7,8 @@ export const AUTOPILOT_COMMANDS = {
    * Cancels scheduled phase transitions
    * Parameters:
    * - projectId: number (required) - The project ID
-   * - phaseId: number (optional) - The specific phase ID to cancel
-   *   If not provided, all phases for the project will be canceled
+   * - phaseId: string (optional) - The specific phase UUID to cancel
+   * If not provided, all phases for the project will be canceled
    */
   CANCEL_SCHEDULE: 'cancel_schedule',
 
@@ -16,7 +16,7 @@ export const AUTOPILOT_COMMANDS = {
    * Reschedules a phase transition
    * Parameters:
    * - projectId: number (required) - The project ID
-   * - phaseId: number (required) - The phase ID to reschedule
+   * - phaseId: string (required) - The phase UUID to reschedule
    * - date: string (required) - The new end time in ISO format
    */
   RESCHEDULE_PHASE: 'reschedule_phase',

@@ -27,6 +27,7 @@ The Autopilot Scheduler is an event-based scheduling system that automatically t
 - **AutopilotService**: High-level business logic, schedule management, event handling
 - **SchedulerService**: Low-level job scheduling, timeout management, Kafka event triggering
 - **RecoveryService**: Application startup recovery, active phase scheduling
+- **SyncService**: Periodically reconciles the scheduler's state with the Challenge API.
 - **KafkaService**: Message publishing and consumption
 
 ## Implementation Details
@@ -47,8 +48,8 @@ ScheduleModule.forRoot() // Added to AppModule
 
 - **Dynamic Job Registration**: Jobs are created and registered at runtime based on phase end times
 - **Unique Job Identification**: Each job uses format `{projectId}:{phaseId}`
-- **Automatic Cleanup**: Jobs are automatically removed after execution
-- **Timeout-Based Execution**: Uses `setTimeout` for precise timing control. This system uses setTimeout (not CronJob) because each phase ends once, not repeatedly. Cron is for recurring schedules; Timeout is better for one-time execution like phase deadlines.
+- **Automatic Cleanup**: Jobs are automatically removed from the registry after execution or cancellation.
+- **Timeout-Based Execution**: Uses `setTimeout` for precise, one-time execution, which is ideal for phase deadlines.
 
 ### 2. Event Generation
 

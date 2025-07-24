@@ -5,7 +5,7 @@ import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
-import { KAFKA_TOPICS } from 'src/kafka/constants/topics';
+import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 
 @Injectable()
 export class SchedulerService {
@@ -18,44 +18,56 @@ export class SchedulerService {
   ) {}
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
-    const { projectId: projectId, phaseId, date: endTime } = phaseData;
+    const { projectId, phaseId, date: endTime } = phaseData;
     const jobId = `${projectId}:${phaseId}`;
 
-    if (!endTime || endTime === '') {
-      throw new Error('End time is required');
+    if (!endTime || endTime === '' || isNaN(new Date(endTime).getTime())) {
+      this.logger.error(
+        `Invalid or missing end time for job ${jobId}. Skipping schedule.`,
+      );
+      throw new Error(
+        'Invalid or missing end time provided for phase transition',
+      );
     }
 
-    // Note: The check for past dates is now handled in AutopilotService
-    // This allows us to process past dates immediately instead of throwing an error
-
     try {
+      const timeoutDuration = new Date(endTime).getTime() - Date.now();
+
+      // Corrected: Ensure the timeout is never negative to prevent the TimeoutNegativeWarning.
+      // If the time is in the past, it will execute on the next tick (timeout of 0).
       const timeout = setTimeout(
         () => {
           void (async () => {
-            await this.triggerKafkaEvent(phaseData);
-            if (this.schedulerRegistry.doesExist('timeout', jobId)) {
-              this.schedulerRegistry.deleteTimeout(jobId);
-              this.logger.log(
-                `Removed job for phase ${jobId} from registry after successful execution`,
+            try {
+              await this.triggerKafkaEvent(phaseData);
+            } catch (e) {
+              this.logger.error(
+                `Failed to trigger Kafka event for job ${jobId}`,
+                e,
               );
-            } else {
-              this.logger.warn(
-                `No timeout found for phase ${jobId}, skipping cleanup`,
-              );
-            }
-            if (this.scheduledJobs.has(jobId)) {
+            } finally {
+              if (this.schedulerRegistry.doesExist('timeout', jobId)) {
+                this.schedulerRegistry.deleteTimeout(jobId);
+                this.logger.log(
+                  `Removed job for phase ${jobId} from registry after execution`,
+                );
+              }
               this.scheduledJobs.delete(jobId);
             }
           })();
         },
-        Math.max(0, new Date(endTime).getTime() - Date.now()),
-      ); // Ensure we don't use negative delays
+        Math.max(0, timeoutDuration),
+      );
 
       this.schedulerRegistry.addTimeout(jobId, timeout);
       this.scheduledJobs.set(jobId, phaseData);
+      this.logger.log(`Successfully scheduled job ${jobId} for ${endTime}`);
       return jobId;
     } catch (error) {
-      this.logger.error('Failed to schedule phase transition', error);
+      this.logger.error(
+        `Failed to schedule phase transition for job ${jobId}`,
+        error,
+      );
       throw error;
     }
   }
@@ -64,13 +76,14 @@ export class SchedulerService {
     try {
       if (this.schedulerRegistry.doesExist('timeout', jobId)) {
         this.schedulerRegistry.deleteTimeout(jobId);
+        this.scheduledJobs.delete(jobId);
         this.logger.log(`Canceled scheduled transition for phase ${jobId}`);
         return true;
       } else {
         this.logger.warn(
           `No timeout found for phase ${jobId}, skipping cancellation`,
         );
-        return false; // Return false when no job was found to cancel
+        return false;
       }
     } catch (error) {
       this.logger.error(
@@ -80,34 +93,23 @@ export class SchedulerService {
     }
   }
 
-  updateScheduledTransition(
-    jobId: string,
-    phaseData: PhaseTransitionPayload,
-  ): string {
-    const canceled = this.cancelScheduledTransition(jobId);
-    if (!canceled) {
-      throw new Error(`Failed to cancel existing job with ID ${jobId}`);
-    }
-    return this.schedulePhaseTransition(phaseData);
-  }
-
   getAllScheduledTransitions(): string[] {
-    return this.schedulerRegistry.getTimeouts();
+    return Array.from(this.scheduledJobs.keys());
   }
 
-  getScheduledTransition(jobId: string): PhaseTransitionPayload | null {
-    return this.scheduledJobs.get(jobId) || null;
+  getAllScheduledTransitionsWithData(): Map<string, PhaseTransitionPayload> {
+    return this.scheduledJobs;
   }
 
-  private async triggerKafkaEvent(data: PhaseTransitionPayload) {
+  getScheduledTransition(jobId: string): PhaseTransitionPayload | undefined {
+    return this.scheduledJobs.get(jobId);
+  }
+
+  public async triggerKafkaEvent(data: PhaseTransitionPayload) {
     const payload: PhaseTransitionPayload = {
-      projectId: data.projectId,
-      phaseId: data.phaseId,
-      challengeId: data.challengeId, // Include challengeId in the payload
-      phaseTypeName: data.phaseTypeName,
+      ...data,
       state: 'END',
-      operator: 'system',
-      projectStatus: 'IN_PROGRESS',
+      operator: 'system-scheduler',
       date: new Date().toISOString(),
     };
 
@@ -121,13 +123,14 @@ export class SchedulerService {
       };
       await this.kafkaService.produce(KAFKA_TOPICS.PHASE_TRANSITION, message);
       this.logger.log(
-        `Successfully sent transition event for challenge ${data.projectId}, phase ${data.phaseId}`,
+        `Successfully sent transition event for challenge ${data.challengeId}, phase ${data.phaseId}`,
       );
-    } catch (err: any) {
+    } catch (error: unknown) {
+      const err = error as Error;
       this.logger.error('Failed to send Kafka event', {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
         err: err.stack || err.message,
       });
+      throw err;
     }
   }
 }

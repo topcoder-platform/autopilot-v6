@@ -125,27 +125,29 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     try {
       this.logger.info('Initializing Kafka schemas...');
 
-      // Register all schemas defined in KAFKA_SCHEMAS
       for (const [topic, schema] of Object.entries(KAFKA_SCHEMAS)) {
         try {
-          const { id } = await this.schemaUtils.registerSchema(topic, schema);
-          this.schemaIds.set(topic, id);
-          this.logger.info(`Schema initialized for topic ${topic}`, {
-            schemaId: id,
-          });
+          const schemaId = await this.schemaUtils.registerSchema(topic, schema);
+          this.schemaIds.set(topic, schemaId);
+          this.logger.info(
+            `Schema initialized for topic ${topic} with ID: ${schemaId}`,
+          );
         } catch (error) {
-          // If schema already exists, get its ID
           if (
             error instanceof Error &&
-            error.message.includes('already exists')
+            (error.message.includes('already exists') ||
+              error.message.includes('incompatible'))
           ) {
-            const { id } = await this.schemaUtils.getLatestSchemaId(
+            this.logger.warn(
+              `Schema for topic ${topic} may already exist. Fetching latest version.`,
+            );
+            const schemaId = await this.schemaUtils.getLatestSchemaId(
               `${topic}-value`,
             );
-            this.schemaIds.set(topic, id);
-            this.logger.info(`Schema already exists for topic ${topic}`, {
-              schemaId: id,
-            });
+            this.schemaIds.set(topic, schemaId);
+            this.logger.info(
+              `Using existing schema for topic ${topic} with ID: ${schemaId}`,
+            );
           } else {
             throw error;
           }
@@ -172,10 +174,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       const subject = `${topic}-value`;
       this.logger.info(`Refreshing schema for ${topic}`);
 
-      const { id } = await this.schemaUtils.getLatestSchemaId(subject);
-      this.schemaIds.set(topic, id);
-      this.logger.info(`Schema refreshed for ${topic}`, { schemaId: id });
-      return id;
+      const schemaId = await this.schemaUtils.getLatestSchemaId(subject);
+      this.schemaIds.set(topic, schemaId);
+      this.logger.info(`Schema refreshed for ${topic} with ID: ${schemaId}`);
+      return schemaId;
     } catch (error) {
       const err = error as Error;
       this.logger.error(`Failed to refresh schema for ${topic}`, {
@@ -216,7 +218,6 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
     try {
       await this.circuitBreaker.execute(async () => {
-        // Attempt to ensure producer is connected
         try {
           await this.producer.send({
             topic: '__kafka_health_check',
@@ -483,11 +484,9 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
   async onApplicationShutdown(signal?: string): Promise<void> {
     this.logger.info('Starting Kafka graceful shutdown', { signal });
-    const shutdownTimeout = 30000; // 30 seconds timeout
-    const startTime = Date.now();
+    const shutdownTimeout = 30000;
 
     try {
-      // Stop accepting new messages
       this.logger.info('Stopping producer...');
       await Promise.race([
         this.producer.disconnect(),
@@ -500,7 +499,6 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       ]);
       this.logger.info('Producer disconnected successfully');
 
-      // Stop all consumers
       this.logger.info('Stopping consumers...');
       const consumerDisconnectPromises = Array.from(
         this.consumers.entries(),
@@ -527,38 +525,30 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       });
 
       await Promise.all(consumerDisconnectPromises);
-
-      const shutdownDuration = Date.now() - startTime;
-      this.logger.info('Kafka connections closed successfully', {
-        duration: shutdownDuration,
-        consumersClosed: this.consumers.size,
-      });
+      this.logger.info('All Kafka connections closed successfully.');
     } catch (error) {
       const err = error as Error;
-      const shutdownDuration = Date.now() - startTime;
       this.logger.error('Error during Kafka shutdown', {
         error: err.stack,
-        duration: shutdownDuration,
         signal,
       });
       throw err;
     } finally {
-      // Clear all consumers from the map
       this.consumers.clear();
     }
   }
 
   async isConnected(): Promise<boolean> {
     try {
-      // Check if producer is connected by attempting to get metadata
       await this.producer.send({
         topic: '__kafka_health_check',
         messages: [{ value: Buffer.from('health_check') }],
       });
 
-      // Check if all consumers are connected by attempting to describe group
       const admin = this.kafka.admin();
+      await admin.connect();
       const consumerGroups = await admin.listGroups();
+      await admin.disconnect();
       const groupIds = Array.from(this.consumers.keys());
 
       const allConsumersConnected = groupIds.every((groupId) =>

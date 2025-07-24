@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { CronExpression } from '@nestjs/schedule';
 
 export const validationSchema = Joi.object({
   // App Configuration
@@ -20,6 +21,16 @@ export const validationSchema = Joi.object({
 
   // Schema Registry Configuration
   SCHEMA_REGISTRY_URL: Joi.string().required(),
-  SCHEMA_REGISTRY_USER: Joi.string().optional(),
-  SCHEMA_REGISTRY_PASSWORD: Joi.string().optional(),
+  SCHEMA_REGISTRY_USER: Joi.string().optional().allow(''),
+  SCHEMA_REGISTRY_PASSWORD: Joi.string().optional().allow(''),
+
+  // Challenge API Configuration
+  CHALLENGE_API_URL: Joi.string().uri().required(),
+  CHALLENGE_API_M2M_TOKEN: Joi.string().optional(),
+  // New: Validation for configurable API retries
+  CHALLENGE_API_RETRY_ATTEMPTS: Joi.number().default(3),
+  CHALLENGE_API_RETRY_DELAY: Joi.number().default(1000),
+
+  // Sync Service Configuration
+  SYNC_CRON_SCHEDULE: Joi.string().default(CronExpression.EVERY_5_MINUTES),
 });

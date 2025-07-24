@@ -1,4 +1,4 @@
-import { KAFKA_TOPICS } from 'src/kafka/constants/topics';
+import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 
 export const KAFKA_SCHEMAS = {
   [KAFKA_TOPICS.PHASE_TRANSITION]: {
@@ -17,7 +17,7 @@ export const KAFKA_SCHEMAS = {
           name: 'PhaseTransitionPayload',
           fields: [
             { name: 'projectId', type: 'long' },
-            { name: 'phaseId', type: 'long' },
+            { name: 'phaseId', type: 'string' }, // Changed from long to string for UUID
             { name: 'phaseTypeName', type: 'string' },
             {
               name: 'state',
@@ -30,6 +30,7 @@ export const KAFKA_SCHEMAS = {
             { name: 'operator', type: 'string' },
             { name: 'projectStatus', type: 'string' },
             { name: 'date', type: 'string' },
+            { name: 'challengeId', type: 'string' }, // Added and set as string for UUID
           ],
         },
       },
@@ -51,11 +52,11 @@ export const KAFKA_SCHEMAS = {
           name: 'ChallengeUpdatePayload',
           fields: [
             { name: 'projectId', type: 'long' },
-            { name: 'challengeId', type: 'long' },
+            { name: 'challengeId', type: 'string' }, // Changed from long to string for UUID
             { name: 'status', type: 'string' },
             { name: 'operator', type: 'string' },
             { name: 'date', type: 'string' },
-            { name: 'phaseId', type: ['null', 'long'], default: null },
+            { name: 'phaseId', type: ['null', 'string'], default: null }, // Changed from long to string
             { name: 'phaseTypeName', type: ['null', 'string'], default: null },
           ],
         },
@@ -81,7 +82,7 @@ export const KAFKA_SCHEMAS = {
             { name: 'operator', type: 'string' },
             { name: 'projectId', type: ['null', 'long'], default: null },
             { name: 'date', type: ['null', 'string'], default: null },
-            { name: 'phaseId', type: ['null', 'long'], default: null },
+            { name: 'phaseId', type: ['null', 'string'], default: null }, // Changed from long to string
             { name: 'phaseTypeName', type: ['null', 'string'], default: null },
           ],
         },
