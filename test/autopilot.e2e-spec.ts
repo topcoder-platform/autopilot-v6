@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { KafkaService } from '../src/kafka/kafka.service';
 import { SchedulerService } from '../src/autopilot/services/scheduler.service';
 import { ChallengeApiService } from '../src/challenge/challenge-api.service';
+import { Auth0Service } from '../src/auth/auth0.service';
 import { KAFKA_TOPICS } from '../src/kafka/constants/topics';
 import { AutopilotConsumer } from '../src/kafka/consumers/autopilot.consumer';
 import { RecoveryService } from '../src/recovery/recovery.service';
@@ -77,11 +78,17 @@ describe('Autopilot Service (e2e)', () => {
         consume: jest.fn(),
         isConnected: jest.fn().mockResolvedValue(true),
       })
+      .overrideProvider(Auth0Service)
+      .useValue({
+        getAccessToken: jest.fn().mockResolvedValue('mock-access-token'),
+        clearTokenCache: jest.fn(),
+      })
       .overrideProvider(ChallengeApiService)
       .useValue({
         getAllActiveChallenges: mockGetAllActiveChallenges,
         getChallenge: mockGetChallenge,
-        getActiveChallenge: mockGetActiveChallenge, // Add the new method to the mock
+        getChallengeById: mockGetActiveChallenge, // Add the new method to the mock
+        advancePhase: jest.fn().mockResolvedValue({ success: true, message: 'Phase advanced' }),
       })
       .compile();
 
@@ -132,7 +139,7 @@ describe('Autopilot Service (e2e)', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      expect(challengeApiService.getActiveChallenge).toHaveBeenCalledWith(
+      expect(challengeApiService.getChallengeById).toHaveBeenCalledWith(
         mockChallenge.id,
       );
       expect(scheduleSpy).toHaveBeenCalledTimes(2);
@@ -170,12 +177,12 @@ describe('Autopilot Service (e2e)', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      expect(challengeApiService.getActiveChallenge).toHaveBeenCalledWith(
+      expect(challengeApiService.getChallengeById).toHaveBeenCalledWith(
         updatedChallenge.id,
       );
       expect(rescheduleSpy).toHaveBeenCalledTimes(1);
       expect(rescheduleSpy).toHaveBeenCalledWith(
-        updatedChallenge.projectId,
+        updatedChallenge.id,
         expect.objectContaining({
           phaseId: updatedChallenge.phases[0].id,
         }),
@@ -204,6 +211,7 @@ describe('Autopilot Service (e2e)', () => {
       await autopilotConsumer.topicHandlers[KAFKA_TOPICS.COMMAND]({
         command: 'cancel_schedule',
         projectId: mockChallenge.projectId,
+        challengeId: mockChallenge.id,
         phaseId: mockChallenge.phases[0].id,
         operator: 'admin',
       });
@@ -211,7 +219,7 @@ describe('Autopilot Service (e2e)', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(autopilotCancelSpy).toHaveBeenCalledWith(
-        mockChallenge.projectId,
+        mockChallenge.id,
         mockChallenge.phases[0].id,
       );
     });

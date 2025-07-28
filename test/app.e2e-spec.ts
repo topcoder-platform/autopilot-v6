@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
 import { ChallengeApiService } from '../src/challenge/challenge-api.service';
+import { Auth0Service } from '../src/auth/auth0.service';
 import { KafkaService } from '../src/kafka/kafka.service';
 
 describe('AppController (e2e)', () => {
@@ -18,11 +19,17 @@ describe('AppController (e2e)', () => {
         consume: jest.fn(),
         isConnected: jest.fn().mockResolvedValue(true),
       })
+      .overrideProvider(Auth0Service)
+      .useValue({
+        getAccessToken: jest.fn().mockResolvedValue('mock-access-token'),
+        clearTokenCache: jest.fn(),
+      })
       .overrideProvider(ChallengeApiService)
       .useValue({
         getAllActiveChallenges: jest.fn().mockResolvedValue([]),
         getChallenge: jest.fn().mockResolvedValue(null),
-        getActiveChallenge: jest.fn().mockResolvedValue(null),
+        getChallengeById: jest.fn().mockResolvedValue(null),
+        advancePhase: jest.fn().mockResolvedValue({ success: true, message: 'Phase advanced' }),
       })
       .compile();
 

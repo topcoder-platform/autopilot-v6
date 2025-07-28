@@ -26,10 +26,39 @@ export const validationSchema = Joi.object({
 
   // Challenge API Configuration
   CHALLENGE_API_URL: Joi.string().uri().required(),
-  CHALLENGE_API_M2M_TOKEN: Joi.string().optional(),
-  // New: Validation for configurable API retries
+  // Removed static M2M token validation - now using Auth0
   CHALLENGE_API_RETRY_ATTEMPTS: Joi.number().default(3),
   CHALLENGE_API_RETRY_DELAY: Joi.number().default(1000),
+
+  // Auth0 Configuration (optional in test environment)
+  AUTH0_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('https://test.auth0.com/oauth/token'),
+      otherwise: Joi.required(),
+    }),
+  AUTH0_CLIENT_ID: Joi.string().when('NODE_ENV', {
+    is: 'test',
+    then: Joi.optional().default('test-client-id'),
+    otherwise: Joi.required(),
+  }),
+  AUTH0_CLIENT_SECRET: Joi.string().when('NODE_ENV', {
+    is: 'test',
+    then: Joi.optional().default('test-client-secret'),
+    otherwise: Joi.required(),
+  }),
+  AUTH0_DOMAIN: Joi.string().when('NODE_ENV', {
+    is: 'test',
+    then: Joi.optional().default('test.auth0.com'),
+    otherwise: Joi.required(),
+  }),
+  AUTH0_AUDIENCE: Joi.string().when('NODE_ENV', {
+    is: 'test',
+    then: Joi.optional().default('https://test-api.topcoder.com'),
+    otherwise: Joi.required(),
+  }),
+  AUTH0_PROXY_SEREVR_URL: Joi.string().optional().allow(''),
 
   // Sync Service Configuration
   SYNC_CRON_SCHEDULE: Joi.string().default(CronExpression.EVERY_5_MINUTES),

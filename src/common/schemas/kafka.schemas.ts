@@ -17,7 +17,7 @@ export const KAFKA_SCHEMAS = {
           name: 'PhaseTransitionPayload',
           fields: [
             { name: 'projectId', type: 'long' },
-            { name: 'phaseId', type: 'string' }, // Changed from long to string for UUID
+            { name: 'phaseId', type: 'string' }, // UUID string
             { name: 'phaseTypeName', type: 'string' },
             {
               name: 'state',
@@ -30,7 +30,7 @@ export const KAFKA_SCHEMAS = {
             { name: 'operator', type: 'string' },
             { name: 'projectStatus', type: 'string' },
             { name: 'date', type: 'string' },
-            { name: 'challengeId', type: 'string' }, // Added and set as string for UUID
+            { name: 'challengeId', type: 'string' }, // UUID string
           ],
         },
       },
@@ -81,8 +81,9 @@ export const KAFKA_SCHEMAS = {
             { name: 'command', type: 'string' },
             { name: 'operator', type: 'string' },
             { name: 'projectId', type: ['null', 'long'], default: null },
+            { name: 'challengeId', type: ['null', 'string'], default: null },
             { name: 'date', type: ['null', 'string'], default: null },
-            { name: 'phaseId', type: ['null', 'string'], default: null }, // Changed from long to string
+            { name: 'phaseId', type: ['null', 'string'], default: null },
             { name: 'phaseTypeName', type: ['null', 'string'], default: null },
           ],
         },

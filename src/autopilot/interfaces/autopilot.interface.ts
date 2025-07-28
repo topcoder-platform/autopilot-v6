@@ -33,6 +33,7 @@ export interface CommandPayload {
   command: string;
   operator: string;
   projectId?: number;
+  challengeId?: string; // Added challengeId for new command handling
   date?: string;
   phaseId?: string; // Changed from number to string
 }

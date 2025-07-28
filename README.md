@@ -31,7 +31,7 @@ Create a `.env` file in the root directory:
 cp .env.example .env
 ```
 
-Open the `.env` file and configure the variables for your environment. It is crucial to set a valid `CHALLENGE_API_M2M_TOKEN`.
+Open the `.env` file and configure the variables for your environment. It is crucial to set valid Auth0 credentials.
 
    ```plaintext
    # -------------------------------------
@@ -57,9 +57,18 @@ Open the `.env` file and configure the variables for your environment. It is cru
    # Challenge API Configuration
    # -------------------------------------
    CHALLENGE_API_URL=https://api.topcoder-dev.com/v6
-   CHALLENGE_API_M2M_TOKEN='your_m2m_token_here' # <-- IMPORTANT: REPLACE THIS
    CHALLENGE_API_RETRY_ATTEMPTS=3
    CHALLENGE_API_RETRY_DELAY=1000
+
+   # -------------------------------------
+   # Auth0 Configuration
+   # -------------------------------------
+   AUTH0_URL=<your-auth0-url> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_CLIENT_ID=<your-auth0-client-id> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_CLIENT_SECRET=<your-auth0-client-secret> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_DOMAIN=<your-auth0-domain> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_AUDIENCE=<your-auth0-audience> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_PROXY_SEREVR_URL=
 
    # -------------------------------------
    # Sync Service Configuration
@@ -218,4 +227,4 @@ For more detailed technical information, please see the documents in the `docs/`
    docker compose up -d
    ```
 
-- **API Authentication Errors**: Ensure `CHALLENGE_API_M2M_TOKEN` in your `.env` file is valid and not expired.
+- **API Authentication Errors**: Ensure Auth0 credentials (`AUTH0_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`) in your `.env` file are valid and not expired.

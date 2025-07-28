@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { KafkaService } from '../../kafka/kafka.service';
+import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
@@ -15,11 +16,12 @@ export class SchedulerService {
   constructor(
     private schedulerRegistry: SchedulerRegistry,
     private readonly kafkaService: KafkaService,
+    private readonly challengeApiService: ChallengeApiService,
   ) {}
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
-    const { projectId, phaseId, date: endTime } = phaseData;
-    const jobId = `${projectId}:${phaseId}`;
+    const { challengeId, phaseId, date: endTime } = phaseData;
+    const jobId = `${challengeId}:${phaseId}`;
 
     if (!endTime || endTime === '' || isNaN(new Date(endTime).getTime())) {
       this.logger.error(
@@ -40,6 +42,9 @@ export class SchedulerService {
           void (async () => {
             try {
               await this.triggerKafkaEvent(phaseData);
+
+              // Call advancePhase method when phase transition is triggered
+              await this.advancePhase(phaseData);
             } catch (e) {
               this.logger.error(
                 `Failed to trigger Kafka event for job ${jobId}`,
@@ -131,6 +136,38 @@ export class SchedulerService {
         err: err.stack || err.message,
       });
       throw err;
+    }
+  }
+
+  public async advancePhase(data: PhaseTransitionPayload): Promise<void> {
+    try {
+      this.logger.log(
+        `Advancing phase ${data.phaseId} for challenge ${data.challengeId}`,
+      );
+
+      const result = await this.challengeApiService.advancePhase(
+        data.challengeId,
+        data.phaseId,
+        'close', // Assuming 'close' operation when phase ends
+      );
+
+      if (result.success) {
+        this.logger.log(
+          `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
+        );
+      } else {
+        this.logger.error(
+          `Failed to advance phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
+        );
+      }
+    } catch (error: unknown) {
+      const err = error as Error;
+      this.logger.error(
+        `Error advancing phase ${data.phaseId} for challenge ${data.challengeId}`,
+        {
+          err: err.stack || err.message,
+        },
+      );
     }
   }
 }

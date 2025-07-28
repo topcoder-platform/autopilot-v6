@@ -21,7 +21,7 @@ export class AutopilotService {
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
     try {
-      const phaseKey = `${phaseData.projectId}:${phaseData.phaseId}`;
+      const phaseKey = `${phaseData.challengeId}:${phaseData.phaseId}`;
 
       const existingJobId = this.activeSchedules.get(phaseKey);
       if (existingJobId) {
@@ -49,8 +49,8 @@ export class AutopilotService {
     }
   }
 
-  cancelPhaseTransition(projectId: number, phaseId: string): boolean {
-    const phaseKey = `${projectId}:${phaseId}`;
+  cancelPhaseTransition(challengeId: string, phaseId: string): boolean {
+    const phaseKey = `${challengeId}:${phaseId}`;
     const jobId = this.activeSchedules.get(phaseKey);
 
     if (!jobId) {
@@ -68,10 +68,10 @@ export class AutopilotService {
   }
 
   reschedulePhaseTransition(
-    projectId: number,
+    challengeId: string,
     newPhaseData: PhaseTransitionPayload,
   ): string {
-    const phaseKey = `${projectId}:${newPhaseData.phaseId}`;
+    const phaseKey = `${challengeId}:${newPhaseData.phaseId}`;
     const existingJobId = this.activeSchedules.get(phaseKey);
     let wasRescheduled = false;
 
@@ -119,12 +119,12 @@ export class AutopilotService {
 
     if (message.state === 'END') {
       const canceled = this.cancelPhaseTransition(
-        message.projectId,
+        message.challengeId,
         message.phaseId,
       );
       if (canceled) {
         this.logger.log(
-          `Cleaned up job for phase ${message.phaseId} (project ${message.projectId}) from registry after consuming event.`,
+          `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
         );
       }
     }
@@ -135,11 +135,10 @@ export class AutopilotService {
       `Handling new challenge creation: ${JSON.stringify(challenge)}`,
     );
     try {
-      // Refactored: Use getActiveChallenge as required
-      const challengeDetails =
-        await this.challengeApiService.getActiveChallenge(
-          challenge.challengeId,
-        );
+      // Refactored: Use getChallengeById as required
+      const challengeDetails = await this.challengeApiService.getChallengeById(
+        challenge.challengeId,
+      );
 
       if (!challengeDetails.phases) {
         this.logger.warn(
@@ -180,9 +179,10 @@ export class AutopilotService {
     this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
 
     try {
-      // Refactored: Use getActiveChallenge as required
-      const challengeDetails =
-        await this.challengeApiService.getActiveChallenge(message.challengeId);
+      // Refactored: Use getChallengeById as required
+      const challengeDetails = await this.challengeApiService.getChallengeById(
+        message.challengeId,
+      );
 
       if (!challengeDetails.phases) {
         this.logger.warn(
@@ -206,9 +206,9 @@ export class AutopilotService {
         };
 
         this.logger.log(
-          `Rescheduling updated phase from notification: ${challengeDetails.projectId}:${phase.id}`,
+          `Rescheduling updated phase from notification: ${challengeDetails.id}:${phase.id}`,
         );
-        this.reschedulePhaseTransition(challengeDetails.projectId, payload);
+        this.reschedulePhaseTransition(challengeDetails.id, payload);
       }
     } catch (error) {
       const err = error as Error;
@@ -235,69 +235,79 @@ export class AutopilotService {
           }
 
           if (phaseId) {
-            const canceled = this.cancelPhaseTransition(projectId, phaseId);
+            const challengeId = message.challengeId;
+            if (!challengeId) {
+              this.logger.warn(
+                `${AUTOPILOT_COMMANDS.CANCEL_SCHEDULE}: missing challengeId for phase ${phaseId}`,
+              );
+              return;
+            }
+            const canceled = this.cancelPhaseTransition(challengeId, phaseId);
             if (canceled) {
               this.logger.log(
-                `Canceled scheduled transition for phase ${projectId}:${phaseId}`,
+                `Canceled scheduled transition for phase ${challengeId}:${phaseId}`,
               );
             } else {
               this.logger.warn(
-                `No active schedule found for phase ${projectId}:${phaseId}`,
+                `No active schedule found for phase ${challengeId}:${phaseId}`,
               );
             }
           } else {
+            const challengeId = message.challengeId;
+            if (!challengeId) {
+              this.logger.warn(
+                `${AUTOPILOT_COMMANDS.CANCEL_SCHEDULE}: missing challengeId`,
+              );
+              return;
+            }
             for (const key of this.activeSchedules.keys()) {
-              if (key.startsWith(`${projectId}:`)) {
+              if (key.startsWith(`${challengeId}:`)) {
                 const phaseIdFromKey = key.split(':')[1];
-                this.cancelPhaseTransition(projectId, phaseIdFromKey);
+                this.cancelPhaseTransition(challengeId, phaseIdFromKey);
               }
             }
           }
           break;
 
         case AUTOPILOT_COMMANDS.RESCHEDULE_PHASE: {
-          if (!projectId || !phaseId || !date) {
+          const challengeId = message.challengeId;
+          if (!challengeId || !phaseId || !date) {
             this.logger.warn(
-              `${AUTOPILOT_COMMANDS.RESCHEDULE_PHASE}: missing required data (projectId, phaseId, or date)`,
+              `${AUTOPILOT_COMMANDS.RESCHEDULE_PHASE}: missing required data (challengeId, phaseId, or date)`,
             );
             return;
           }
 
           void (async () => {
             try {
-              const challenges =
-                await this.challengeApiService.getAllActiveChallenges({
-                  status: 'ACTIVE',
-                });
-              const associatedChallenge = challenges.find(
-                (c) => c.projectId === projectId,
-              );
+              const challengeDetails =
+                await this.challengeApiService.getChallengeById(challengeId);
 
-              if (!associatedChallenge) {
+              if (!challengeDetails) {
                 this.logger.error(
-                  `Could not find an active challenge with projectId ${projectId} to reschedule.`,
+                  `Could not find challenge with ID ${challengeId} to reschedule.`,
                 );
                 return;
               }
 
               const phaseTypeName =
                 await this.challengeApiService.getPhaseTypeName(
-                  associatedChallenge.id,
+                  challengeDetails.id,
                   phaseId,
                 );
 
               const payload: PhaseTransitionPayload = {
-                projectId,
+                projectId: challengeDetails.projectId,
                 phaseId,
-                challengeId: associatedChallenge.id,
+                challengeId: challengeDetails.id,
                 phaseTypeName,
                 operator,
                 state: 'END',
-                projectStatus: 'IN_PROGRESS', // Assuming status
+                projectStatus: challengeDetails.status,
                 date,
               };
 
-              this.reschedulePhaseTransition(projectId, payload);
+              this.reschedulePhaseTransition(challengeDetails.id, payload);
             } catch (error) {
               const err = error as Error;
               this.logger.error(

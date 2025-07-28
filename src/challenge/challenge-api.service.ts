@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { IPhase, IChallenge } from './interfaces/challenge.interface';
 import { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { Auth0Service } from '../auth/auth0.service';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -44,6 +45,7 @@ export class ChallengeApiService {
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
+    private readonly auth0Service: Auth0Service,
   ) {
     this.challengeApiUrl = this.configService.get<string>(
       'challenge.apiUrl',
@@ -59,15 +61,10 @@ export class ChallengeApiService {
     );
   }
 
-  private getAuthHeader(): { [key: string]: string } {
-    const token = this.configService.get<string>(
-      'challenge.m2mToken',
-      'dummy-token',
-    );
+  private async getAuthHeader(): Promise<{ [key: string]: string }> {
+    const token = await this.auth0Service.getAccessToken();
     return {
       Authorization: `Bearer ${token}`,
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
       Accept: 'application/json, text/plain, */*',
     };
   }
@@ -75,66 +72,93 @@ export class ChallengeApiService {
   async getAllActiveChallenges(
     filters: ChallengeFiltersDto = {},
   ): Promise<IChallenge[]> {
-    const headers = this.getAuthHeader();
-    const params = {
-      isLightweight: true,
-      ...filters,
-    };
+    let allChallenges: IChallenge[] = [];
+    let page = 1;
+    const perPage = 50; // Reasonable page size for API calls
 
-    for (let attempt = 1; attempt <= this.apiRetryAttempts; attempt++) {
-      try {
-        const response = await firstValueFrom(
-          this.httpService.get<IChallenge[]>(
-            `${this.challengeApiUrl}/challenges`,
-            { headers, params, timeout: 15000 },
-          ),
-        );
-        return response.data;
-      } catch (error) {
-        const err = error as IChallengeApiError;
+    while (true) {
+      const params = {
+        isLightweight: true,
+        page,
+        perPage,
+        ...filters,
+      };
 
-        const status = err.response?.status;
-        const retryAfter = err.response?.headers?.['retry-after'];
+      for (let attempt = 1; attempt <= this.apiRetryAttempts; attempt++) {
+        try {
+          const headers = await this.getAuthHeader();
+          const response = await firstValueFrom(
+            this.httpService.get<IChallenge[]>(
+              `${this.challengeApiUrl}/challenges`,
+              { headers, params, timeout: 15000 },
+            ),
+          );
 
-        if (status === 429) {
-          const delay = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : this.apiRetryDelay * Math.pow(2, attempt);
+          const challenges = response.data;
+
+          if (!challenges || challenges.length === 0) {
+            // No more challenges to fetch
+            return allChallenges;
+          }
+
+          allChallenges = [...allChallenges, ...challenges];
+
+          if (challenges.length < perPage) {
+            // Last page reached
+            return allChallenges;
+          }
+
+          // Continue to next page
+          page++;
+          break;
+        } catch (error) {
+          const err = error as IChallengeApiError;
+
+          const status = err.response?.status;
+          const retryAfter = err.response?.headers?.['retry-after'];
+
+          if (status === 429) {
+            const delay = retryAfter
+              ? parseInt(retryAfter, 10) * 1000
+              : this.apiRetryDelay * Math.pow(2, attempt);
+            this.logger.warn(
+              `Rate limit exceeded on page ${page}. Retrying after ${delay / 1000} seconds...`,
+              { attempt, retries: this.apiRetryAttempts },
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+
+          if (attempt === this.apiRetryAttempts || (status && status < 500)) {
+            this.logger.error(
+              `Failed to fetch active challenges on page ${page} after ${attempt} attempts: ${err.message}`,
+              err.stack,
+              {
+                status: err.response?.status,
+                statusText: err.response?.statusText,
+                data: err.response?.data,
+                page,
+                totalFetched: allChallenges.length,
+              },
+            );
+            // Return what we have collected so far instead of empty array
+            return allChallenges;
+          }
+
+          const delay = this.apiRetryDelay * Math.pow(2, attempt - 1);
           this.logger.warn(
-            `Rate limit exceeded. Retrying after ${delay / 1000} seconds...`,
-            { attempt, retries: this.apiRetryAttempts },
+            `Attempt ${attempt} failed to fetch active challenges on page ${page}. Retrying in ${delay / 1000}s...`,
+            { error: err.message },
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
-          continue;
         }
-
-        if (attempt === this.apiRetryAttempts || (status && status < 500)) {
-          this.logger.error(
-            `Failed to fetch active challenges after ${attempt} attempts: ${err.message}`,
-            err.stack,
-            {
-              status: err.response?.status,
-              statusText: err.response?.statusText,
-              data: err.response?.data,
-            },
-          );
-          return [];
-        }
-
-        const delay = this.apiRetryDelay * Math.pow(2, attempt - 1);
-        this.logger.warn(
-          `Attempt ${attempt} failed to fetch active challenges. Retrying in ${delay / 1000}s...`,
-          { error: err.message },
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
-    return [];
   }
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
-    const headers = this.getAuthHeader();
     try {
+      const headers = await this.getAuthHeader();
       const response = await firstValueFrom(
         this.httpService.get<IChallenge>(
           `${this.challengeApiUrl}/challenges/${challengeId}`,
@@ -158,10 +182,10 @@ export class ChallengeApiService {
   }
 
   /**
-   * Added to match the requirement's example interface.
-   * This is an alias for the getChallenge method.
+   * Retrieves a specific challenge by its ID.
+   * This method fetches challenge details but does not verify if the challenge is active.
    */
-  async getActiveChallenge(challengeId: string): Promise<IChallenge> {
+  async getChallengeById(challengeId: string): Promise<IChallenge> {
     const challenge = await this.getChallenge(challengeId);
     if (!challenge) {
       throw new NotFoundException(
@@ -197,9 +221,9 @@ export class ChallengeApiService {
     phaseId: string,
     operation: 'open' | 'close',
   ): Promise<PhaseAdvanceResponseDto> {
-    const headers = this.getAuthHeader();
     const body = { phaseId, operation };
     try {
+      const headers = await this.getAuthHeader();
       const response = await firstValueFrom(
         this.httpService.post<PhaseAdvanceResponseDto>(
           `${this.challengeApiUrl}/challenges/${challengeId}/advance-phase`,

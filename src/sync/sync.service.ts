@@ -46,7 +46,7 @@ export class SyncService {
           const phaseEndDate = phase.scheduledEndDate;
           if (!phaseEndDate) continue;
 
-          const phaseKey = `${challenge.projectId}:${phase.id}`;
+          const phaseKey = `${challenge.id}:${phase.id}`;
           activePhaseKeys.add(phaseKey);
 
           const scheduledJob = scheduledJobs.get(phaseKey);
@@ -77,7 +77,7 @@ export class SyncService {
               `Phase ${phaseKey} has updated timing. Rescheduling...`,
             );
             void this.autopilotService.reschedulePhaseTransition(
-              challenge.projectId,
+              challenge.id,
               phaseData,
             );
             updated++;
@@ -91,11 +91,8 @@ export class SyncService {
           this.logger.log(
             `Obsolete schedule found: ${scheduledPhaseKey}. Cancelling...`,
           );
-          const [projectId, phaseId] = scheduledPhaseKey.split(':');
-          this.autopilotService.cancelPhaseTransition(
-            parseInt(projectId, 10),
-            phaseId,
-          );
+          const [challengeId, phaseId] = scheduledPhaseKey.split(':');
+          this.autopilotService.cancelPhaseTransition(challengeId, phaseId);
           removed++;
         }
       }
