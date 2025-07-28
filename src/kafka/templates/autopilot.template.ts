@@ -5,6 +5,7 @@ import {
   IsEnum,
   IsOptional,
   IsDateString,
+  IsUUID,
 } from 'class-validator';
 import { KafkaMessageTemplate } from './kafka.template';
 import { KAFKA_TOPICS } from '../constants/topics';
@@ -15,9 +16,9 @@ export class PhaseTransitionPayload {
   @IsNotEmpty()
   projectId: number;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsNotEmpty()
-  phaseId: number;
+  phaseId: string; // Changed from number to string
 
   @IsString()
   @IsNotEmpty()
@@ -38,9 +39,9 @@ export class PhaseTransitionPayload {
   @IsOptional()
   date?: string;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsOptional()
-  challengeId?: number;
+  challengeId?: string; // Changed from number to string
 }
 
 export class PhaseTransitionMessage extends KafkaMessageTemplate<PhaseTransitionPayload> {
@@ -55,9 +56,9 @@ export class ChallengeUpdatePayload {
   @IsNotEmpty()
   projectId: number;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsNotEmpty()
-  challengeId: number;
+  challengeId: string; // Changed from number to string
 
   @IsString()
   @IsNotEmpty()
@@ -96,9 +97,9 @@ export class CommandPayload {
   @IsOptional()
   date?: string;
 
-  @IsNumber()
+  @IsUUID() // Changed from IsNumber to IsUUID
   @IsOptional()
-  phaseId?: number;
+  phaseId?: string; // Changed from number to string
 }
 
 export class CommandMessage extends KafkaMessageTemplate<CommandPayload> {

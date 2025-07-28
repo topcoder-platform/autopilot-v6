@@ -4,12 +4,17 @@ import { AutopilotService } from '../../autopilot/services/autopilot.service';
 import { KAFKA_TOPICS, KafkaTopic } from '../constants/topics';
 import { KafkaMessage } from '../interfaces/kafka-message.interface';
 import { TopicPayloadMap } from '../types/topic-payload-map.type';
+import {
+  ChallengeUpdatePayload,
+  CommandPayload,
+  PhaseTransitionPayload,
+} from 'src/autopilot/interfaces/autopilot.interface';
 
 @Injectable()
 export class AutopilotConsumer {
   private readonly logger = new Logger(AutopilotConsumer.name);
 
-  private readonly topicHandlers: {
+  public readonly topicHandlers: {
     [K in keyof TopicPayloadMap]: (
       message: TopicPayloadMap[K],
     ) => Promise<void>;
@@ -23,22 +28,22 @@ export class AutopilotConsumer {
       [KAFKA_TOPICS.PHASE_TRANSITION]:
         this.autopilotService.handlePhaseTransition.bind(
           this.autopilotService,
-        ) as (
-          message: TopicPayloadMap[typeof KAFKA_TOPICS.PHASE_TRANSITION],
-        ) => Promise<void>,
-
+        ) as (message: PhaseTransitionPayload) => Promise<void>,
+      [KAFKA_TOPICS.CHALLENGE_CREATED]:
+        this.autopilotService.handleNewChallenge.bind(
+          this.autopilotService,
+        ) as (message: ChallengeUpdatePayload) => Promise<void>,
       [KAFKA_TOPICS.CHALLENGE_UPDATE]:
         this.autopilotService.handleChallengeUpdate.bind(
           this.autopilotService,
-        ) as (
-          message: TopicPayloadMap[typeof KAFKA_TOPICS.CHALLENGE_UPDATE],
-        ) => Promise<void>,
-
+        ) as (message: ChallengeUpdatePayload) => Promise<void>,
+      [KAFKA_TOPICS.CHALLENGE_UPDATED]:
+        this.autopilotService.handleChallengeUpdate.bind(
+          this.autopilotService,
+        ) as (message: ChallengeUpdatePayload) => Promise<void>,
       [KAFKA_TOPICS.COMMAND]: this.autopilotService.handleCommand.bind(
         this.autopilotService,
-      ) as (
-        message: TopicPayloadMap[typeof KAFKA_TOPICS.COMMAND],
-      ) => Promise<void>,
+      ) as (message: CommandPayload) => Promise<void>,
     };
   }
 
@@ -50,22 +55,26 @@ export class AutopilotConsumer {
       topics,
       async (message: KafkaMessage<KafkaTopic>) => {
         try {
-          switch (message.topic) {
+          const { topic, payload } = message;
+
+          switch (topic) {
             case KAFKA_TOPICS.PHASE_TRANSITION:
-              await this.topicHandlers[KAFKA_TOPICS.PHASE_TRANSITION](
-                message.payload as TopicPayloadMap[typeof KAFKA_TOPICS.PHASE_TRANSITION],
+              this.autopilotService.handlePhaseTransition(
+                payload as PhaseTransitionPayload,
               );
               break;
+            case KAFKA_TOPICS.CHALLENGE_CREATED:
             case KAFKA_TOPICS.CHALLENGE_UPDATE:
-              await this.topicHandlers[KAFKA_TOPICS.CHALLENGE_UPDATE](
-                message.payload as TopicPayloadMap[typeof KAFKA_TOPICS.CHALLENGE_UPDATE],
+            case KAFKA_TOPICS.CHALLENGE_UPDATED:
+              await this.autopilotService.handleChallengeUpdate(
+                payload as ChallengeUpdatePayload,
               );
               break;
             case KAFKA_TOPICS.COMMAND:
-              await this.topicHandlers[KAFKA_TOPICS.COMMAND](
-                message.payload as TopicPayloadMap[typeof KAFKA_TOPICS.COMMAND],
-              );
+              this.autopilotService.handleCommand(payload as CommandPayload);
               break;
+            default:
+              throw new Error(`Unexpected topic: ${topic as string}`);
           }
         } catch (error: unknown) {
           const err = error as Error;

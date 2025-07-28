@@ -8,10 +8,12 @@ import { ChallengeModule } from '../challenge/challenge.module';
 @Module({
   imports: [
     forwardRef(() => KafkaModule),
-    ScheduleModule.forRoot(),
+    // Corrected: Removed .forRoot() as it's already called in the root AppModule.
+    // This makes the providers from ScheduleModule available here without re-registering them.
+    ScheduleModule,
     ChallengeModule,
   ],
   providers: [AutopilotService, SchedulerService],
-  exports: [AutopilotService],
+  exports: [AutopilotService, SchedulerService],
 })
 export class AutopilotModule {}

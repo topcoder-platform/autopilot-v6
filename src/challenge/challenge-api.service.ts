@@ -1,64 +1,249 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { IPhase } from './challenge.service';
+import { HttpService } from '@nestjs/axios';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { firstValueFrom } from 'rxjs';
+import { IPhase, IChallenge } from './interfaces/challenge.interface';
+import { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { Auth0Service } from '../auth/auth0.service';
 
-/**
- * Service to fetch phase details from challenge updates
- * This separates the concerns and avoids modifying the original payload interfaces
- */
+// DTO for filtering challenges
+interface ChallengeFiltersDto {
+  status?: string;
+  isLightweight?: boolean;
+  page?: number;
+  perPage?: number;
+}
+
+// DTO for the response of the advance-phase endpoint
+interface PhaseAdvanceResponseDto {
+  success: boolean;
+  message: string;
+}
+
+// Corrected: Interface to correctly extend AxiosError for type safety
+interface IChallengeApiErrorResponse {
+  data: Record<string, unknown>;
+  status: number;
+  statusText: string;
+  headers: {
+    'retry-after'?: string;
+  };
+  config: InternalAxiosRequestConfig;
+}
+
+interface IChallengeApiError extends AxiosError {
+  response?: IChallengeApiErrorResponse;
+}
+
 @Injectable()
 export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
+  private readonly challengeApiUrl: string;
+  private readonly apiRetryAttempts: number;
+  private readonly apiRetryDelay: number;
 
-  /**
-   * Mock implementation to fetch phase details for a challenge
-   * In a real implementation, this would call the Challenge API
-   */
-  async getPhaseDetails(
-    projectId: number,
-    phaseId: number,
-  ): Promise<IPhase | null> {
-    // This is a mock implementation - in production, this would call the Challenge API
-    this.logger.log(
-      `Fetching phase details for project ${projectId}, phase ${phaseId}`,
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
+    private readonly auth0Service: Auth0Service,
+  ) {
+    this.challengeApiUrl = this.configService.get<string>(
+      'challenge.apiUrl',
+      'http://localhost:3001',
     );
+    this.apiRetryAttempts = this.configService.get<number>(
+      'challenge.retry.attempts',
+      3,
+    );
+    this.apiRetryDelay = this.configService.get<number>(
+      'challenge.retry.initialDelay',
+      1000,
+    );
+  }
 
-    // Mock data - in production this would come from the API
-    const mockPhases: Record<string, IPhase> = {
-      // Key format: `${projectId}:${phaseId}`
-      '100:101': {
-        id: 101,
-        projectId: 100,
-        phaseTypeName: 'Registration',
-        date: new Date(Date.now() + 60000).toISOString(),
-      },
-      '100:102': {
-        id: 102,
-        projectId: 100,
-        phaseTypeName: 'Submission',
-        date: new Date(Date.now() + 120000).toISOString(),
-      },
+  private async getAuthHeader(): Promise<{ [key: string]: string }> {
+    const token = await this.auth0Service.getAccessToken();
+    return {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json, text/plain, */*',
     };
+  }
 
-    const key = `${projectId}:${phaseId}`;
-    const phase = mockPhases[key];
+  async getAllActiveChallenges(
+    filters: ChallengeFiltersDto = {},
+  ): Promise<IChallenge[]> {
+    let allChallenges: IChallenge[] = [];
+    let page = 1;
+    const perPage = 50; // Reasonable page size for API calls
 
-    if (!phase) {
-      this.logger.warn(`Phase details not found for ${key}`);
+    while (true) {
+      const params = {
+        isLightweight: true,
+        page,
+        perPage,
+        ...filters,
+      };
+
+      for (let attempt = 1; attempt <= this.apiRetryAttempts; attempt++) {
+        try {
+          const headers = await this.getAuthHeader();
+          const response = await firstValueFrom(
+            this.httpService.get<IChallenge[]>(
+              `${this.challengeApiUrl}/challenges`,
+              { headers, params, timeout: 15000 },
+            ),
+          );
+
+          const challenges = response.data;
+
+          if (!challenges || challenges.length === 0) {
+            // No more challenges to fetch
+            return allChallenges;
+          }
+
+          allChallenges = [...allChallenges, ...challenges];
+
+          if (challenges.length < perPage) {
+            // Last page reached
+            return allChallenges;
+          }
+
+          // Continue to next page
+          page++;
+          break;
+        } catch (error) {
+          const err = error as IChallengeApiError;
+
+          const status = err.response?.status;
+          const retryAfter = err.response?.headers?.['retry-after'];
+
+          if (status === 429) {
+            const delay = retryAfter
+              ? parseInt(retryAfter, 10) * 1000
+              : this.apiRetryDelay * Math.pow(2, attempt);
+            this.logger.warn(
+              `Rate limit exceeded on page ${page}. Retrying after ${delay / 1000} seconds...`,
+              { attempt, retries: this.apiRetryAttempts },
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+
+          if (attempt === this.apiRetryAttempts || (status && status < 500)) {
+            this.logger.error(
+              `Failed to fetch active challenges on page ${page} after ${attempt} attempts: ${err.message}`,
+              err.stack,
+              {
+                status: err.response?.status,
+                statusText: err.response?.statusText,
+                data: err.response?.data,
+                page,
+                totalFetched: allChallenges.length,
+              },
+            );
+            // Return what we have collected so far instead of empty array
+            return allChallenges;
+          }
+
+          const delay = this.apiRetryDelay * Math.pow(2, attempt - 1);
+          this.logger.warn(
+            `Attempt ${attempt} failed to fetch active challenges on page ${page}. Retrying in ${delay / 1000}s...`,
+            { error: err.message },
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+  }
+
+  async getChallenge(challengeId: string): Promise<IChallenge | null> {
+    try {
+      const headers = await this.getAuthHeader();
+      const response = await firstValueFrom(
+        this.httpService.get<IChallenge>(
+          `${this.challengeApiUrl}/challenges/${challengeId}`,
+          { headers, timeout: 5000 },
+        ),
+      );
+      return response.data;
+    } catch (error) {
+      const err = error as IChallengeApiError;
+      this.logger.error(
+        `Failed to fetch challenge ${challengeId}: ${err.message}`,
+        err.stack,
+        {
+          status: err.response?.status,
+          statusText: err.response?.statusText,
+          data: err.response?.data,
+        },
+      );
       return null;
     }
-
-    // Add an await to satisfy the linter
-    await Promise.resolve();
-
-    return phase;
   }
 
   /**
-   * Get phase type name for a phase
-   * In a real implementation, this would call the Challenge API
+   * Retrieves a specific challenge by its ID.
+   * This method fetches challenge details but does not verify if the challenge is active.
    */
-  async getPhaseTypeName(projectId: number, phaseId: number): Promise<string> {
-    const phase = await this.getPhaseDetails(projectId, phaseId);
-    return phase?.phaseTypeName || 'UNKNOWN';
+  async getChallengeById(challengeId: string): Promise<IChallenge> {
+    const challenge = await this.getChallenge(challengeId);
+    if (!challenge) {
+      throw new NotFoundException(
+        `Challenge with ID ${challengeId} not found.`,
+      );
+    }
+    return challenge;
+  }
+
+  async getChallengePhases(challengeId: string): Promise<IPhase[]> {
+    const challenge = await this.getChallenge(challengeId);
+    return challenge?.phases || [];
+  }
+
+  async getPhaseDetails(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<IPhase | null> {
+    const phases = await this.getChallengePhases(challengeId);
+    return phases.find((p) => p.id === phaseId) || null;
+  }
+
+  async getPhaseTypeName(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<string> {
+    const phase = await this.getPhaseDetails(challengeId, phaseId);
+    return phase?.name || 'Unknown';
+  }
+
+  async advancePhase(
+    challengeId: string,
+    phaseId: string,
+    operation: 'open' | 'close',
+  ): Promise<PhaseAdvanceResponseDto> {
+    const body = { phaseId, operation };
+    try {
+      const headers = await this.getAuthHeader();
+      const response = await firstValueFrom(
+        this.httpService.post<PhaseAdvanceResponseDto>(
+          `${this.challengeApiUrl}/challenges/${challengeId}/advance-phase`,
+          body,
+          { headers, timeout: 10000 },
+        ),
+      );
+      return response.data;
+    } catch (error) {
+      const err = error as IChallengeApiError;
+      this.logger.error(
+        `Failed to advance phase for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+        {
+          status: err.response?.status,
+          statusText: err.response?.statusText,
+          data: err.response?.data,
+        },
+      );
+      return { success: false, message: 'Failed to advance phase' };
+    }
   }
 }

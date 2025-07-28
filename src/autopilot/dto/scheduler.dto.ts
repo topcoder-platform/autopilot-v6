@@ -1,11 +1,11 @@
-import { IsISO8601, IsNotEmpty, IsNumber, IsString } from 'class-validator';
+import { IsISO8601, IsNotEmpty, IsString, IsUUID } from 'class-validator';
 
 export class PhaseTransitionScheduleDto {
-  @IsNumber()
-  challengeId: number;
+  @IsUUID() // Changed from IsNumber to IsUUID
+  challengeId: string; // Changed from number to string
 
-  @IsNumber()
-  phaseId: number;
+  @IsUUID() // Changed from IsNumber to IsUUID
+  phaseId: string; // Changed from number to string
 
   @IsString()
   @IsNotEmpty()

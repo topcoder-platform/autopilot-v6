@@ -5,6 +5,7 @@ import { AutopilotModule } from './autopilot/autopilot.module';
 import { HealthModule } from './health/health.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { RecoveryModule } from './recovery/recovery.module';
+import { SyncModule } from './sync/sync.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { RecoveryModule } from './recovery/recovery.module';
     AutopilotModule,
     HealthModule,
     RecoveryModule,
+    SyncModule,
   ],
 })
 export class AppModule {}

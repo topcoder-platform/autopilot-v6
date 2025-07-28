@@ -44,20 +44,17 @@ export class SchemaUtils {
     }
   }
 
-  async registerSchema(topic: string, schema: any): Promise<{ id: number }> {
+  async registerSchema(topic: string, schema: any): Promise<number> {
     try {
       const subject = `${topic}-value`;
-      const id = await this.registry.register(
+      const { id } = await this.registry.register(
         {
           type: SchemaType.AVRO,
           schema: JSON.stringify(schema),
         },
         { subject },
       );
-      this.logger.info(`Schema registered successfully for topic ${topic}`, {
-        schemaId: id,
-      });
-      return { id: Number(id) };
+      return id;
     } catch (error) {
       const err = error as Error;
       this.logger.error(`Failed to register schema for topic ${topic}`, {
@@ -72,12 +69,11 @@ export class SchemaUtils {
     }
   }
 
-  async getLatestSchemaId(subject: string): Promise<{ id: number }> {
+  async getLatestSchemaId(subject: string): Promise<number> {
     try {
       const id = await this.registry.getLatestSchemaId(subject);
-      return { id: Number(id) };
+      return id;
     } catch (error) {
-      // Check if this is a first-time schema creation scenario
       const topic = subject.replace('-value', '');
       if (KAFKA_SCHEMAS[topic]) {
         this.logger.warn(
@@ -113,44 +109,8 @@ export class SchemaUtils {
   }
 
   async getSchema(topic: string): Promise<Schema> {
-    try {
-      const subject = `${topic}-value`;
-      const id = await this.registry.getLatestSchemaId(subject);
-      const schema = await this.registry.getSchema(id);
-      return schema;
-    } catch (error) {
-      // Check if this is a first-time schema creation scenario
-      if (KAFKA_SCHEMAS[topic]) {
-        this.logger.warn(
-          `Schema not found for ${topic}, creating new schema for first time use`,
-        );
-        try {
-          const { id } = await this.registerSchema(topic, KAFKA_SCHEMAS[topic]);
-          return await this.registry.getSchema(id);
-        } catch (registerError) {
-          const err = registerError as Error;
-          this.logger.error(`Failed to create schema for ${topic}`, {
-            error: err.stack,
-          });
-          throw new SchemaRegistryException(
-            `Failed to create schema for ${topic}`,
-            {
-              error: err.stack || err.message,
-            },
-          );
-        }
-      }
-      const err = error as Error;
-      this.logger.error(
-        `Schema not found and no definition available for ${topic}`,
-        { error: err.stack },
-      );
-      throw new SchemaRegistryException(
-        `Schema not found and no definition available for ${topic}`,
-        {
-          error: err.stack || err.message,
-        },
-      );
-    }
+    const subject = `${topic}-value`;
+    const id = await this.getLatestSchemaId(subject);
+    return await this.registry.getSchema(id);
   }
 }

@@ -7,29 +7,35 @@ export interface BaseMessage {
 
 export interface PhaseTransitionPayload {
   projectId: number;
-  phaseId: number;
+  phaseId: string; // Changed from number to string to support UUIDs from the API
   phaseTypeName: string;
   state: 'START' | 'END';
   operator: string;
   projectStatus: string;
   date?: string;
-  challengeId?: number; // Added to meet requirement #6
+  challengeId: string; // Changed to string to support UUIDs
 }
 
 export interface ChallengeUpdatePayload {
   projectId: number;
-  challengeId: number;
+  challengeId: string; // Changed to string to support UUIDs
   status: string;
   operator: string;
   date?: string;
+  // This nested structure may be present in Kafka messages from the API
+  phases?: {
+    id: string;
+    scheduledEndDate: string;
+  }[];
 }
 
 export interface CommandPayload {
   command: string;
   operator: string;
   projectId?: number;
+  challengeId?: string; // Added challengeId for new command handling
   date?: string;
-  phaseId?: number; // Keep this to support individual phase cancellation
+  phaseId?: string; // Changed from number to string
 }
 
 export interface PhaseTransitionMessage extends BaseMessage {

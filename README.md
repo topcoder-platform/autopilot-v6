@@ -4,13 +4,12 @@ autopilot operations with Kafka integration.
 
 ## Features
 
-- Kafka message production and consumption
-- Schema Registry integration for Avro message serialization
-- Health check endpoints for Kafka and application monitoring
-- Structured logging with Winston
-- Environment-based configuration
-- Graceful shutdown handling
-- Error handling and validation
+- **Event-Driven Scheduling**: Dynamically schedules phase transitions using `@nestjs/schedule`.
+- **Kafka Integration**: Utilizes Kafka and Confluent Schema Registry for robust, schema-validated messaging.
+- **Challenge API Integration**: Fetches live challenge data, with resilient API calls featuring exponential backoff and rate-limiting handling.
+- **Recovery and Synchronization**: Includes a recovery service on startup and a periodic sync service to ensure data consistency.
+- **Health Checks**: Provides endpoints to monitor application and Kafka connection health.
+- **Structured Logging**: Uses Winston for detailed and configurable logging.
 
 ## Prerequisites
 
@@ -32,25 +31,50 @@ Create a `.env` file in the root directory:
 cp .env.example .env
 ```
 
-Configure the following environment variables:
+Open the `.env` file and configure the variables for your environment. It is crucial to set valid Auth0 credentials.
 
-```env
-# App Configuration
-NODE_ENV=development
-PORT=3000
-LOG_LEVEL=info
-LOG_DIR=logs
+   ```plaintext
+   # -------------------------------------
+   # App Configuration
+   # -------------------------------------
+   NODE_ENV=development
+   PORT=3000
+   LOG_LEVEL=debug
+   LOG_DIR=logs
 
-# Kafka Configuration
-KAFKA_BROKERS=localhost:9092
-KAFKA_CLIENT_ID=autopilot-service
-KAFKA_MAX_RETRY_TIME=30000
-KAFKA_INITIAL_RETRY_TIME=300
-KAFKA_RETRIES=5
+   # -------------------------------------
+   # Kafka Configuration
+   # -------------------------------------
+   KAFKA_BROKERS=localhost:9092
+   KAFKA_CLIENT_ID=autopilot-service
 
-# Schema Registry Configuration
-SCHEMA_REGISTRY_URL=http://localhost:8081
-```
+   # -------------------------------------
+   # Schema Registry Configuration
+   # -------------------------------------
+   SCHEMA_REGISTRY_URL=http://localhost:8081
+
+   # -------------------------------------
+   # Challenge API Configuration
+   # -------------------------------------
+   CHALLENGE_API_URL=https://api.topcoder-dev.com/v6
+   CHALLENGE_API_RETRY_ATTEMPTS=3
+   CHALLENGE_API_RETRY_DELAY=1000
+
+   # -------------------------------------
+   # Auth0 Configuration
+   # -------------------------------------
+   AUTH0_URL=<your-auth0-url> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_CLIENT_ID=<your-auth0-client-id> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_CLIENT_SECRET=<your-auth0-client-secret> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_DOMAIN=<your-auth0-domain> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_AUDIENCE=<your-auth0-audience> # <-- IMPORTANT: REPLACE THIS
+   AUTH0_PROXY_SEREVR_URL=
+
+   # -------------------------------------
+   # Sync Service Configuration
+   # -------------------------------------
+   SYNC_CRON_SCHEDULE='*/5 * * * *'
+   ```
 
 ### 3. Install Dependencies
 
@@ -96,22 +120,24 @@ npm run start:dev
 ### 5. Verify Installation
 
 1. Check if the application is running:
-```bash
-curl http://localhost:3000/health
-```
 
-2. Access Kafka UI:
-- Open http://localhost:8080 in your browser
-- Verify Kafka cluster connection
-- Check Schema Registry status
-
-3. Access Schema Registry:
-- Open http://localhost:8081 in your browser
-- Verify schemas are registered
+- **API Documentation (Swagger)**: `http://localhost:3000/api-docs`
+- **Health Check**: `http://localhost:3000/health`
+- **Kafka UI**: `http://localhost:8080`
+- **Schema Registry**: `http://localhost:8081`
 
 # Test coverage
 
 ## Scripts
+
+
+- **Run end-to-end tests**:
+
+   ```bash
+   npm run test:e2e
+   ```
+  
+- **Run lint**:
 
 ```bash
 # Lint
@@ -127,49 +153,19 @@ $ npm run lint
 - `GET /health/kafka` - Kafka-specific health check
 - `GET /health/app` - Application health check
 
-## Kafka Topics
+## Core Components & Kafka Topics
 
-The service interacts with the following Kafka topics:
+The service is composed of several key modules that communicate over specific Kafka topics.
 
-1. `autopilot.command`
-   - Used for sending commands to the autopilot service
-   - Example payload:
-   ```json
-   {
-     "command": "START_PHASE",
-     "operator": "john.doe",
-     "projectId": 123,
-     "date": "2024-03-20T10:00:00Z"
-   }
-   ```
+| Service              | Responsibility                                                                 | Consumes Topics                                    | Produces Topics           |
+|----------------------|-------------------------------------------------------------------------------|----------------------------------------------------|---------------------------|
+| ChallengeApiService  | Handles all communication with the external Topcoder Challenge API.            | -                                                  | -                         |
+| AutopilotService     | Central business logic for scheduling, updating, and canceling phase transitions. | challenge.notification.create, challenge.notification.update, autopilot.command | -                         |
+| SchedulerService     | Low-level job management using setTimeout. Triggers Kafka events when jobs execute. | -                                                  | autopilot.phase.transition |
+| RecoveryService      | Runs on startup to sync all active challenges from the API, scheduling them and processing overdue phases. | -                                                  | autopilot.phase.transition |
+| SyncService          | Runs a periodic cron job to reconcile the scheduler's state with the Challenge API. | -                                                  | -                         |
+| KafkaService         | Manages all Kafka producer/consumer connections and schema registry interactions. | All                                                | All                       |
 
-2. `autopilot.phase.transition`
-   - Used for phase transition events
-   - Example payload:
-   ```json
-   {
-     "projectId": 123,
-     "phaseId": 456,
-     "phaseTypeName": "Development",
-     "state": "START",
-     "operator": "john.doe",
-     "projectStatus": "IN_PROGRESS",
-     "date": "2024-03-20T10:00:00Z"
-   }
-   ```
-
-3. `autopilot.challenge.update`
-   - Used for challenge update events
-   - Example payload:
-   ```json
-   {
-     "projectId": 123,
-     "challengeId": 789,
-     "status": "ACTIVE",
-     "operator": "john.doe",
-     "date": "2024-03-20T10:00:00Z"
-   }
-   ```
 
 ## Project Structure
 
@@ -209,3 +205,26 @@ package.json                 # Dependencies and scripts
 tsconfig.json               # TypeScript config
 README.md                   # Documentation
 ```
+
+## Further Documentation
+
+For more detailed technical information, please see the documents in the `docs/` directory:
+
+- `docs/CHALLENGE_API_INTEGRATION.md`: A deep dive into the integration with the Challenge API, recovery, and sync services.
+- `docs/SCHEDULER.md`: Detailed explanation of the event-based scheduling architecture.
+
+## Troubleshooting
+
+- **Schema Incompatibility Error**: If you encounter this during startup, your local Schema Registry Docker volume may have a stale schema. To fix this, reset the Docker volumes:
+
+   ```bash
+   docker compose down -v
+   ```
+
+  Then restart the services with:
+
+   ```bash
+   docker compose up -d
+   ```
+
+- **API Authentication Errors**: Ensure Auth0 credentials (`AUTH0_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`) in your `.env` file are valid and not expired.

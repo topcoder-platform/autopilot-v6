@@ -5,12 +5,27 @@ import { ValidationPipe } from '@nestjs/common';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggerService } from './common/services/logger.service';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
   const logger = new LoggerService('Bootstrap');
   const app = await NestFactory.create(AppModule, {
     logger: new LoggerService('Bootstrap'),
   });
+
+  // --- Swagger API Documentation Setup ---
+  const config = new DocumentBuilder()
+    .setTitle('Autopilot Service API')
+    .setDescription(
+      'API for managing autopilot and challenge phase transitions.',
+    )
+    .setVersion('1.0')
+    .addTag('autopilot')
+    .build();
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api-docs', app, document);
+  logger.info('Swagger API documentation available at /api-docs');
+  // --- End Swagger Setup ---
 
   // Global pipes
   app.useGlobalPipes(

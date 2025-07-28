@@ -1,6 +1,8 @@
 export const KAFKA_TOPICS = {
   PHASE_TRANSITION: 'autopilot.phase.transition',
   CHALLENGE_UPDATE: 'autopilot.challenge.update',
+  CHALLENGE_CREATED: 'challenge.notification.create',
+  CHALLENGE_UPDATED: 'challenge.notification.update',
   COMMAND: 'autopilot.command',
 } as const;
 

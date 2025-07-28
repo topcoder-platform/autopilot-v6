@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsObject,
   IsDateString,
+  IsUUID,
 } from 'class-validator';
 
 export class PhaseTransitionDto {
@@ -13,8 +14,8 @@ export class PhaseTransitionDto {
   @IsNumber()
   projectId: number;
 
-  @IsNumber()
-  phaseId: number;
+  @IsUUID() // Changed from IsNumber to IsUUID
+  phaseId: string; // Changed from number to string
 
   @IsString()
   phaseTypeName: string;
@@ -33,8 +34,8 @@ export class ChallengeUpdateDto {
   @IsDateString()
   date: string;
 
-  @IsNumber()
-  challengeId: number;
+  @IsUUID() // Changed from IsNumber to IsUUID
+  challengeId: string; // Changed from number to string
 
   @IsString()
   status: string;
