@@ -4,7 +4,7 @@ WORKDIR /usr/src/app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+RUN npm i
 
 # Copy source code
 COPY . .
@@ -21,7 +21,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production
+RUN npm i --only=production
 
 # Copy built application
 COPY --from=builder /usr/src/app/dist ./dist
