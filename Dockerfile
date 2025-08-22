@@ -22,7 +22,6 @@ RUN pnpm build
 # ---- Production Stage ----
 FROM base AS production
 ENV NODE_ENV production
-RUN npm install -g pnpm
 # Copy built application from the build stage
 COPY --from=build /usr/src/app/dist ./dist
 # Copy production dependencies from the deps stage
@@ -32,4 +31,4 @@ COPY --from=deps /usr/src/app/node_modules ./node_modules
 EXPOSE 3000
 
 # Start the application
-CMD ["pnpm", "run", "start:prod"] 
+CMD ["node", "dist/main.js"] 
