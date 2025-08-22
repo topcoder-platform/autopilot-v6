@@ -1,33 +1,34 @@
-FROM node:20-alpine as builder
-
+# ---- Base Stage ----
+FROM node:20-alpine AS base
 WORKDIR /usr/src/app
 
+# ---- Dependencies Stage ----
+FROM base AS deps
+# Install pnpm
+RUN npm install -g pnpm
+# Copy dependency-defining files
+COPY package.json pnpm-lock.yaml ./
 # Install dependencies
-COPY package*.json ./
-RUN npm i
+RUN pnpm install --frozen-lockfile --prod
 
-# Copy source code
+# ---- Build Stage ----
+FROM base AS build
+RUN npm install -g pnpm
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
-
 # Build the application
-RUN npm run build
+RUN pnpm build
 
-# Production stage
-FROM node:20-alpine
+# ---- Production Stage ----
+FROM base AS production
+ENV NODE_ENV production
+# Copy built application from the build stage
+COPY --from=build /usr/src/app/dist ./dist
+# Copy production dependencies from the deps stage
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 
-WORKDIR /usr/src/app
-
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm i --only=production
-
-# Copy built application
-COPY --from=builder /usr/src/app/dist ./dist
-
-# Expose port
+# Expose the application port
 EXPOSE 3000
 
 # Start the application
-CMD ["npm", "run", "start:prod"] 
+CMD ["pnpm", "run", "start:prod"] 
