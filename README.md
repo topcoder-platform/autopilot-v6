@@ -41,6 +41,9 @@ Open the `.env` file and configure the variables for your environment. It is cru
    PORT=3000
    LOG_LEVEL=debug
    LOG_DIR=logs
+   # Enable file logging in production environments (default: false)
+   # In development environments, file logging is enabled by default
+   ENABLE_FILE_LOGGING=false
 
    # -------------------------------------
    # Kafka Configuration
@@ -206,6 +209,31 @@ tsconfig.json               # TypeScript config
 README.md                   # Documentation
 ```
 
+## Logging Configuration
+
+The autopilot service uses a flexible logging strategy that adapts to different deployment environments:
+
+### Development Environment
+- **File Logging**: Enabled by default for debugging purposes
+- **Console Logging**: Always enabled with colorized output
+- **Log Files**: Created in the `logs/` directory (configurable via `LOG_DIR`)
+
+### Production Environment (ECS)
+- **File Logging**: Disabled by default to support read-only filesystems
+- **Console Logging**: Primary logging method, suitable for container log collection
+- **Override**: Set `ENABLE_FILE_LOGGING=true` to enable file logging if the filesystem is writable
+
+### Environment Variables
+- `LOG_LEVEL`: Controls log verbosity (`error`, `warn`, `info`, `debug`, `verbose`)
+- `LOG_DIR`: Directory for log files (default: `logs`)
+- `ENABLE_FILE_LOGGING`: Boolean flag to control file logging in production
+
+### ECS Deployment Notes
+When deploying to ECS, ensure:
+1. `NODE_ENV=production` is set
+2. `ENABLE_FILE_LOGGING` is either unset or set to `false` for read-only filesystems
+3. Container logging is configured to collect stdout/stderr logs
+
 ## Further Documentation
 
 For more detailed technical information, please see the documents in the `docs/` directory:
@@ -228,3 +256,13 @@ For more detailed technical information, please see the documents in the `docs/`
    ```
 
 - **API Authentication Errors**: Ensure Auth0 credentials (`AUTH0_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`) in your `.env` file are valid and not expired.
+
+- **ECS Deployment - Read-only Filesystem Error**: If the application fails to start in ECS with errors about creating a 'logs' directory:
+  - Ensure `NODE_ENV=production` is set in your ECS task definition
+  - Verify `ENABLE_FILE_LOGGING` is not set or is set to `false`
+  - Check that your ECS task definition is configured to collect logs from stdout/stderr
+
+- **Logging Issues**:
+  - **No log files in development**: Check that `ENABLE_FILE_LOGGING` is not set to `false`
+  - **File permission errors**: Ensure the application has write permissions to the `LOG_DIR` directory
+  - **Missing logs in production**: Verify your container logging configuration is collecting stdout/stderr output

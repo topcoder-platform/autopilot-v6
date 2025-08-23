@@ -3,6 +3,7 @@ export interface AppConfig {
   DEFAULT_NODE_ENV: 'development' | 'production' | 'test';
   DEFAULT_LOG_LEVEL: 'error' | 'warn' | 'info' | 'debug' | 'verbose';
   DEFAULT_LOG_DIR: string;
+  DEFAULT_ENABLE_FILE_LOGGING: boolean;
 }
 
 export interface KafkaConfig {
@@ -51,6 +52,7 @@ export const CONFIG: Config = {
     DEFAULT_NODE_ENV: 'development',
     DEFAULT_LOG_LEVEL: 'info',
     DEFAULT_LOG_DIR: 'logs',
+    DEFAULT_ENABLE_FILE_LOGGING: false,
   },
   KAFKA: {
     DEFAULT_CLIENT_ID: 'autopilot-service',

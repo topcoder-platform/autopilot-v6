@@ -6,5 +6,6 @@ export default registerAs('app', () => ({
   logging: {
     level: process.env.LOG_LEVEL || 'info',
     directory: process.env.LOG_DIR || 'logs',
+    enableFileLogging: process.env.ENABLE_FILE_LOGGING === 'true',
   },
 }));
