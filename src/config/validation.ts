@@ -11,6 +11,7 @@ export const validationSchema = Joi.object({
     .valid('error', 'warn', 'info', 'debug', 'verbose')
     .default('info'),
   LOG_DIR: Joi.string().default('logs'),
+  ENABLE_FILE_LOGGING: Joi.boolean().default(false),
 
   // Kafka Configuration
   KAFKA_BROKERS: Joi.string().required(),
