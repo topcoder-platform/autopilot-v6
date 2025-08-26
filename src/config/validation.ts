@@ -20,11 +20,6 @@ export const validationSchema = Joi.object({
   KAFKA_INITIAL_RETRY_TIME: Joi.number().default(300),
   KAFKA_RETRIES: Joi.number().default(5),
 
-  // Schema Registry Configuration
-  SCHEMA_REGISTRY_URL: Joi.string().required(),
-  SCHEMA_REGISTRY_USER: Joi.string().optional().allow(''),
-  SCHEMA_REGISTRY_PASSWORD: Joi.string().optional().allow(''),
-
   // Challenge API Configuration
   CHALLENGE_API_URL: Joi.string().uri().required(),
   // Removed static M2M token validation - now using Auth0
