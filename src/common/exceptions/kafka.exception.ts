@@ -23,15 +23,3 @@ export class KafkaConsumerException extends KafkaException {
     super(`Failed to start consumer ${groupId}`, details);
   }
 }
-
-export class SchemaRegistryException extends KafkaException {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super(`Schema Registry error: ${message}`, details);
-  }
-}
-
-export class SchemaValidationException extends KafkaException {
-  constructor(message: string, details?: Record<string, unknown>) {
-    super(`Schema validation error: ${message}`, details);
-  }
-}

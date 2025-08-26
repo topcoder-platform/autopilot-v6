@@ -46,26 +46,6 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
 
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.4.0
-    ports:
-      - "8081:8081"
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-      SCHEMA_REGISTRY_DEBUG: "true"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    healthcheck:
-      test: curl -f http://localhost:8081 || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    volumes:
-      - schema_registry_data:/etc/schema-registry
-
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     ports:
@@ -73,17 +53,13 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
       KAFKA_CLUSTERS_0_METRICS_PORT: 9997
       DYNAMIC_CONFIG_ENABLED: "true"
     depends_on:
       kafka:
-        condition: service_healthy
-      schema-registry:
         condition: service_healthy
 
 volumes:
   zookeeper_data:
   zookeeper_log:
   kafka_data:
-  schema_registry_data:

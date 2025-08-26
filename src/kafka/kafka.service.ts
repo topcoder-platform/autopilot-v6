@@ -11,34 +11,27 @@ import {
   ProducerRecord,
   Partitioners,
 } from 'kafkajs';
-import { SchemaUtils } from '../common/utils/schema.utils';
 import {
   KafkaConnectionException,
   KafkaProducerException,
   KafkaConsumerException,
-  SchemaRegistryException,
 } from '../common/exceptions/kafka.exception';
 import { LoggerService } from '../common/services/logger.service';
 import { CircuitBreaker } from '../common/utils/circuit-breaker';
 import { v4 as uuidv4 } from 'uuid';
-import { KAFKA_SCHEMAS } from '../common/schemas/kafka.schemas';
 import { CONFIG } from '../common/constants/config.constants';
-import { ISchemaCacheEntry, IKafkaConfig } from '../common/types/kafka.types';
+import { IKafkaConfig } from '../common/types/kafka.types';
 
 @Injectable()
 export class KafkaService implements OnApplicationShutdown, OnModuleInit {
   private readonly kafka: Kafka;
   private readonly producer: Producer;
   private readonly consumers: Map<string, Consumer>;
-  private readonly schemaUtils: SchemaUtils;
   private readonly logger: LoggerService;
   private readonly circuitBreaker: CircuitBreaker;
-  private schemaIds: Map<string, number>;
-  private readonly schemaCache: Map<string, ISchemaCacheEntry>;
 
   constructor(private readonly configService: ConfigService) {
     this.logger = new LoggerService(KafkaService.name);
-    this.schemaCache = new Map();
 
     try {
       const brokers = this.configService.get<string | undefined>(
@@ -81,19 +74,6 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         failureThreshold: CONFIG.CIRCUIT_BREAKER.DEFAULT_FAILURE_THRESHOLD,
         resetTimeout: CONFIG.CIRCUIT_BREAKER.DEFAULT_RESET_TIMEOUT,
       });
-
-      const schemaRegistryUrl = this.configService.get<string | undefined>(
-        'kafka.schemaRegistry.url',
-      );
-      if (!schemaRegistryUrl) {
-        this.logger.error('Schema registry URL is not configured');
-        throw new SchemaRegistryException(
-          'Schema registry URL is not configured',
-        );
-      }
-
-      this.schemaUtils = new SchemaUtils(schemaRegistryUrl);
-      this.schemaIds = new Map();
     } catch (error) {
       const err = error as Error;
       this.logger.error('Failed to initialize Kafka service', {
@@ -107,7 +87,6 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
-      await this.initializeSchemas();
       await this.producer.connect();
       this.logger.info('Kafka service initialized successfully');
     } catch (error) {
@@ -121,82 +100,35 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 
-  private async initializeSchemas(): Promise<void> {
+  private encodeMessage(message: unknown): Buffer {
     try {
-      this.logger.info('Initializing Kafka schemas...');
-
-      for (const [topic, schema] of Object.entries(KAFKA_SCHEMAS)) {
-        try {
-          const schemaId = await this.schemaUtils.registerSchema(topic, schema);
-          this.schemaIds.set(topic, schemaId);
-          this.logger.info(
-            `Schema initialized for topic ${topic} with ID: ${schemaId}`,
-          );
-        } catch (error) {
-          if (
-            error instanceof Error &&
-            (error.message.includes('already exists') ||
-              error.message.includes('incompatible'))
-          ) {
-            this.logger.warn(
-              `Schema for topic ${topic} may already exist. Fetching latest version.`,
-            );
-            const schemaId = await this.schemaUtils.getLatestSchemaId(
-              `${topic}-value`,
-            );
-            this.schemaIds.set(topic, schemaId);
-            this.logger.info(
-              `Using existing schema for topic ${topic} with ID: ${schemaId}`,
-            );
-          } else {
-            throw error;
-          }
-        }
-      }
-
-      this.logger.info('All Kafka schemas initialized successfully');
+      const jsonString = JSON.stringify(message);
+      return Buffer.from(jsonString, 'utf8');
     } catch (error) {
       const err = error as Error;
-      this.logger.error('Failed to initialize Kafka schemas', {
+      this.logger.error('Failed to encode message as JSON', {
         error: err.stack || err.message,
       });
-      throw new SchemaRegistryException(
-        `Failed to initialize Kafka schemas: ${err.message}`,
-        {
-          error: err.stack || err.message,
-        },
-      );
+      throw new Error(`Failed to encode message as JSON: ${err.message}`);
     }
   }
 
-  private async refreshSchemaId(topic: string): Promise<number> {
+  private decodeMessage(buffer: Buffer): unknown {
     try {
-      const subject = `${topic}-value`;
-      this.logger.info(`Refreshing schema for ${topic}`);
-
-      const schemaId = await this.schemaUtils.getLatestSchemaId(subject);
-      this.schemaIds.set(topic, schemaId);
-      this.logger.info(`Schema refreshed for ${topic} with ID: ${schemaId}`);
-      return schemaId;
+      const jsonString = buffer.toString('utf8');
+      return JSON.parse(jsonString);
     } catch (error) {
       const err = error as Error;
-      this.logger.error(`Failed to refresh schema for ${topic}`, {
+      this.logger.error('Failed to decode JSON message', {
         error: err.stack || err.message,
       });
-      throw new SchemaRegistryException(
-        `Failed to refresh schema for ${topic}: ${err.message}`,
-      );
+      throw new Error(`Failed to decode JSON message: ${err.message}`);
     }
   }
 
   async sendMessage(topic: string, message: unknown): Promise<void> {
     try {
-      const schemaId = this.schemaIds.get(topic);
-      if (!schemaId) {
-        throw new Error(`No schema ID found for topic ${topic}`);
-      }
-
-      const encodedMessage = await this.schemaUtils.encode(message, schemaId);
+      const encodedMessage = this.encodeMessage(message);
       await this.producer.send({
         topic,
         messages: [{ value: encodedMessage }],
@@ -232,26 +164,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
           await this.producer.connect();
         }
 
-        let schemaId = this.schemaIds.get(topic);
-        if (!schemaId) {
-          this.logger.warn(
-            `Schema ID not found for topic ${topic}, refreshing...`,
-          );
-          try {
-            schemaId = await this.refreshSchemaId(topic);
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to refresh schema ID for topic ${topic}`,
-              { error: err.stack || err.message },
-            );
-            throw new SchemaRegistryException(
-              `Failed to get schema ID for topic ${topic}: ${err.message}`,
-            );
-          }
-        }
-
-        const encodedValue = await this.schemaUtils.encode(message, schemaId);
+        const encodedValue = this.encodeMessage(message);
         const record: ProducerRecord = {
           topic,
           messages: [
@@ -260,6 +173,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
               headers: {
                 'correlation-id': correlationId,
                 timestamp: Date.now().toString(),
+                'content-type': 'application/json',
               },
             },
           ],
@@ -293,39 +207,19 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
     try {
       await this.circuitBreaker.execute(async () => {
-        let schemaId = this.schemaIds.get(topic);
-        if (!schemaId) {
-          this.logger.warn(
-            `Schema ID not found for topic ${topic}, refreshing...`,
-          );
-          try {
-            schemaId = await this.refreshSchemaId(topic);
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to refresh schema ID for topic ${topic}`,
-              { error: err.stack || err.message },
-            );
-            throw new SchemaRegistryException(
-              `Failed to get schema ID for topic ${topic}: ${err.message}`,
-            );
-          }
-        }
-
         this.logger.info(`Producing batch to ${topic}`, {
           correlationId,
           count: messages.length,
         });
 
-        const encodedMessages = await Promise.all(
-          messages.map(async (message) => ({
-            value: await this.schemaUtils.encode(message, schemaId),
-            headers: {
-              'correlation-id': correlationId,
-              timestamp: Date.now().toString(),
-            },
-          })),
-        );
+        const encodedMessages = messages.map((message) => ({
+          value: this.encodeMessage(message),
+          headers: {
+            'correlation-id': correlationId,
+            timestamp: Date.now().toString(),
+            'content-type': 'application/json',
+          },
+        }));
 
         const record: ProducerRecord = {
           topic,
@@ -398,9 +292,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
                 throw new Error('Message value is null or undefined');
               }
 
-              const decodedMessage = (await this.schemaUtils.decode(
-                message.value,
-              )) as Record<string, unknown>;
+              const decodedMessage = this.decodeMessage(message.value);
 
               if (!decodedMessage) {
                 throw new Error('Decoded message is null or undefined');

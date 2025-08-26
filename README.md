@@ -5,7 +5,7 @@ autopilot operations with Kafka integration.
 ## Features
 
 - **Event-Driven Scheduling**: Dynamically schedules phase transitions using `@nestjs/schedule`.
-- **Kafka Integration**: Utilizes Kafka and Confluent Schema Registry for robust, schema-validated messaging.
+- **Kafka Integration**: Utilizes Kafka with JSON serialization for robust, lightweight messaging.
 - **Challenge API Integration**: Fetches live challenge data, with resilient API calls featuring exponential backoff and rate-limiting handling.
 - **Recovery and Synchronization**: Includes a recovery service on startup and a periodic sync service to ensure data consistency.
 - **Health Checks**: Provides endpoints to monitor application and Kafka connection health.
@@ -52,11 +52,6 @@ Open the `.env` file and configure the variables for your environment. It is cru
    KAFKA_CLIENT_ID=autopilot-service
 
    # -------------------------------------
-   # Schema Registry Configuration
-   # -------------------------------------
-   SCHEMA_REGISTRY_URL=http://localhost:8081
-
-   # -------------------------------------
    # Challenge API Configuration
    # -------------------------------------
    CHALLENGE_API_URL=https://api.topcoder-dev.com/v6
@@ -96,7 +91,6 @@ docker compose up -d
 This will start:
 - Zookeeper (port 2181)
 - Kafka (ports 9092, 29092)
-- Schema Registry (port 8081)
 - Kafka UI (port 8080)
 
 2. Verify Docker containers are healthy:
@@ -127,7 +121,6 @@ npm run start:dev
 - **API Documentation (Swagger)**: `http://localhost:3000/api-docs`
 - **Health Check**: `http://localhost:3000/health`
 - **Kafka UI**: `http://localhost:8080`
-- **Schema Registry**: `http://localhost:8081`
 
 # Test coverage
 
@@ -167,7 +160,7 @@ The service is composed of several key modules that communicate over specific Ka
 | SchedulerService     | Low-level job management using setTimeout. Triggers Kafka events when jobs execute. | -                                                  | autopilot.phase.transition |
 | RecoveryService      | Runs on startup to sync all active challenges from the API, scheduling them and processing overdue phases. | -                                                  | autopilot.phase.transition |
 | SyncService          | Runs a periodic cron job to reconcile the scheduler's state with the Challenge API. | -                                                  | -                         |
-| KafkaService         | Manages all Kafka producer/consumer connections and schema registry interactions. | All                                                | All                       |
+| KafkaService         | Manages all Kafka producer/consumer connections with JSON serialization. | All                                                | All                       |
 
 
 ## Project Structure
@@ -204,6 +197,42 @@ test/                        # Test files
 
 .env                         # Environment variables
 .env.example                 # Example env template
+```
+
+## JSON Messaging Architecture
+
+The service uses a simplified JSON-based messaging approach that aligns with organizational standards and provides several benefits:
+
+### Benefits of JSON Messaging
+
+- **Simplified Infrastructure**: No need for Schema Registry, reducing deployment complexity
+- **AWS Compatibility**: Works seamlessly with AWS-native Kafka solutions like MSK
+- **Standard Format**: Uses widely-adopted JSON format for better interoperability
+- **Reduced Dependencies**: Eliminates Confluent-specific dependencies
+- **Enhanced Performance**: Lower overhead compared to Avro serialization with Schema Registry lookups
+
+### Message Structure
+
+All Kafka messages follow a consistent JSON structure:
+
+```json
+{
+  "topic": "autopilot.phase.transition",
+  "originator": "auto_pilot",
+  "timestamp": "2023-12-01T10:00:00.000Z",
+  "mimeType": "application/json",
+  "payload": {
+    // Topic-specific payload data
+  }
+}
+```
+
+### Message Validation
+
+- **TypeScript Interfaces**: Strong typing maintained through TypeScript interfaces
+- **Class Validators**: Runtime validation using class-validator decorators
+- **JSON Schema**: Implicit schema validation through TypeScript compilation
+- **Error Handling**: Robust error handling for malformed JSON messages with DLQ support
 package.json                 # Dependencies and scripts
 tsconfig.json               # TypeScript config
 README.md                   # Documentation

@@ -22,11 +22,6 @@ export interface KafkaConfig {
   DEFAULT_MAX_IN_FLIGHT_REQUESTS: number;
 }
 
-export interface SchemaConfig {
-  DEFAULT_CACHE_TTL: number;
-  DEFAULT_SUBJECT_SUFFIX: string;
-}
-
 export interface CircuitBreakerConfig {
   DEFAULT_FAILURE_THRESHOLD: number;
   DEFAULT_RESET_TIMEOUT: number;
@@ -41,7 +36,6 @@ export interface HealthConfig {
 export interface Config {
   APP: AppConfig;
   KAFKA: KafkaConfig;
-  SCHEMA: SchemaConfig;
   CIRCUIT_BREAKER: CircuitBreakerConfig;
   HEALTH: HealthConfig;
 }
@@ -68,10 +62,6 @@ export const CONFIG: Config = {
     DEFAULT_CONCURRENCY_LIMIT: 5,
     DEFAULT_TRANSACTION_TIMEOUT: 30000,
     DEFAULT_MAX_IN_FLIGHT_REQUESTS: 5,
-  },
-  SCHEMA: {
-    DEFAULT_CACHE_TTL: 3600000, // 1 hour in milliseconds
-    DEFAULT_SUBJECT_SUFFIX: '-value',
   },
   CIRCUIT_BREAKER: {
     DEFAULT_FAILURE_THRESHOLD: 5,
