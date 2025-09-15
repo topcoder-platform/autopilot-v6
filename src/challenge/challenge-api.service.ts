@@ -18,6 +18,12 @@ interface ChallengeFiltersDto {
 interface PhaseAdvanceResponseDto {
   success: boolean;
   message: string;
+  hasWinningSubmission?: boolean;
+  updatedPhases?: IPhase[];
+  next?: {
+    operation?: 'open' | 'close';
+    phases?: IPhase[];
+  };
 }
 
 // Corrected: Interface to correctly extend AxiosError for type safety
@@ -221,7 +227,19 @@ export class ChallengeApiService {
     phaseId: string,
     operation: 'open' | 'close',
   ): Promise<PhaseAdvanceResponseDto> {
-    const body = { phaseId, operation };
+    // Get the phase name from the phase ID - the API expects phase name, not phase ID
+    const phaseName = await this.getPhaseTypeName(challengeId, phaseId);
+    if (!phaseName || phaseName === 'Unknown') {
+      this.logger.error(
+        `Cannot advance phase: Phase with ID ${phaseId} not found in challenge ${challengeId}`,
+      );
+      return {
+        success: false,
+        message: `Phase with ID ${phaseId} not found in challenge ${challengeId}`,
+      };
+    }
+
+    const body = { phase: phaseName, operation };
     try {
       const headers = await this.getAuthHeader();
       const response = await firstValueFrom(
@@ -241,6 +259,14 @@ export class ChallengeApiService {
           status: err.response?.status,
           statusText: err.response?.statusText,
           data: err.response?.data,
+          request: {
+            method: 'POST',
+            url: `${this.challengeApiUrl}/challenges/${challengeId}/advance-phase`,
+            body,
+            headers: await this.getAuthHeader().catch(() => ({
+              error: 'Failed to get auth header',
+            })),
+          },
         },
       );
       return { success: false, message: 'Failed to advance phase' };

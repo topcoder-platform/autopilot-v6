@@ -15,4 +15,6 @@ export LOG_LEVEL=${LOG_LEVEL:-debug}
 
 # Start the application using ts-node-dev
 echo "Starting application in development mode..."
-npm run start:dev
+mkdir -p logs
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+npm run start:dev 2>&1 | tee logs/app_${TIMESTAMP}.log

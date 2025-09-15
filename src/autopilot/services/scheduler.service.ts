@@ -5,6 +5,7 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
+  AutopilotOperator,
 } from '../interfaces/autopilot.interface';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 
@@ -12,12 +13,31 @@ import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name);
   private scheduledJobs = new Map<string, PhaseTransitionPayload>();
+  private phaseChainCallback:
+    | ((
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        nextPhases: any[],
+      ) => Promise<void> | void)
+    | null = null;
 
   constructor(
     private schedulerRegistry: SchedulerRegistry,
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
   ) {}
+
+  setPhaseChainCallback(
+    callback: (
+      challengeId: string,
+      projectId: number,
+      projectStatus: string,
+      nextPhases: any[],
+    ) => Promise<void> | void,
+  ): void {
+    this.phaseChainCallback = callback;
+  }
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
     const { challengeId, phaseId, date: endTime } = phaseData;
@@ -41,6 +61,35 @@ export class SchedulerService {
         () => {
           void (async () => {
             try {
+              // Before triggering the event, check if the phase still needs the transition
+              const phaseDetails =
+                await this.challengeApiService.getPhaseDetails(
+                  phaseData.challengeId,
+                  phaseData.phaseId,
+                );
+
+              if (!phaseDetails) {
+                this.logger.warn(
+                  `Phase ${phaseData.phaseId} not found in challenge ${phaseData.challengeId}, skipping scheduled transition`,
+                );
+                return;
+              }
+
+              // Check if the phase is in the expected state for the transition
+              if (phaseData.state === 'END' && !phaseDetails.isOpen) {
+                this.logger.warn(
+                  `Scheduled END transition for phase ${phaseData.phaseId} but it's already closed, skipping`,
+                );
+                return;
+              }
+
+              if (phaseData.state === 'START' && phaseDetails.isOpen) {
+                this.logger.warn(
+                  `Scheduled START transition for phase ${phaseData.phaseId} but it's already open, skipping`,
+                );
+                return;
+              }
+
               await this.triggerKafkaEvent(phaseData);
 
               // Call advancePhase method when phase transition is triggered
@@ -111,10 +160,38 @@ export class SchedulerService {
   }
 
   public async triggerKafkaEvent(data: PhaseTransitionPayload) {
+    // Validate phase state before sending the event
+    const phaseDetails = await this.challengeApiService.getPhaseDetails(
+      data.challengeId,
+      data.phaseId,
+    );
+
+    if (!phaseDetails) {
+      this.logger.error(
+        `Cannot trigger event: Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
+      );
+      return;
+    }
+
+    // Check if the phase is in the expected state
+    if (data.state === 'END' && !phaseDetails.isOpen) {
+      this.logger.warn(
+        `Skipping END event for phase ${data.phaseId} - it's already closed`,
+      );
+      return;
+    }
+
+    if (data.state === 'START' && phaseDetails.isOpen) {
+      this.logger.warn(
+        `Skipping START event for phase ${data.phaseId} - it's already open`,
+      );
+      return;
+    }
+
     const payload: PhaseTransitionPayload = {
       ...data,
-      state: 'END',
-      operator: 'system-scheduler',
+      state: data.state || 'END', // Default to END if not specified
+      operator: AutopilotOperator.SYSTEM_SCHEDULER,
       date: new Date().toISOString(),
     };
 
@@ -128,7 +205,7 @@ export class SchedulerService {
       };
       await this.kafkaService.produce(KAFKA_TOPICS.PHASE_TRANSITION, message);
       this.logger.log(
-        `Successfully sent transition event for challenge ${data.challengeId}, phase ${data.phaseId}`,
+        `Successfully sent ${payload.state} transition event for challenge ${data.challengeId}, phase ${data.phaseId}`,
       );
     } catch (error: unknown) {
       const err = error as Error;
@@ -145,16 +222,100 @@ export class SchedulerService {
         `Advancing phase ${data.phaseId} for challenge ${data.challengeId}`,
       );
 
+      // Check current phase state to determine the correct operation
+      const phaseDetails = await this.challengeApiService.getPhaseDetails(
+        data.challengeId,
+        data.phaseId,
+      );
+
+      if (!phaseDetails) {
+        this.logger.error(
+          `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
+        );
+        return;
+      }
+
+      // Determine operation based on transition state and current phase state
+      let operation: 'open' | 'close';
+
+      if (data.state === 'START') {
+        operation = 'open';
+      } else if (data.state === 'END') {
+        operation = 'close';
+      } else {
+        // Fallback: determine based on current phase state
+        operation = phaseDetails.isOpen ? 'close' : 'open';
+      }
+
+      // Validate that the operation makes sense
+      if (operation === 'open' && phaseDetails.isOpen) {
+        this.logger.warn(
+          `Phase ${data.phaseId} is already open, skipping open operation`,
+        );
+        return;
+      }
+
+      if (operation === 'close' && !phaseDetails.isOpen) {
+        this.logger.warn(
+          `Phase ${data.phaseId} is already closed, skipping close operation`,
+        );
+        return;
+      }
+
+      this.logger.log(
+        `Phase ${data.phaseId} is currently ${phaseDetails.isOpen ? 'open' : 'closed'}, will ${operation} it`,
+      );
+
       const result = await this.challengeApiService.advancePhase(
         data.challengeId,
         data.phaseId,
-        'close', // Assuming 'close' operation when phase ends
+        operation,
       );
 
       if (result.success) {
         this.logger.log(
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
+
+        // Handle phase transition chain - open and schedule next phases if they exist
+        if (
+          result.next?.operation === 'open' &&
+          result.next.phases &&
+          result.next.phases.length > 0
+        ) {
+          try {
+            if (this.phaseChainCallback) {
+              this.logger.log(
+                `[PHASE CHAIN] Triggering phase chain callback for challenge ${data.challengeId} with ${result.next.phases.length} next phases`,
+              );
+              const callbackResult = this.phaseChainCallback(
+                data.challengeId,
+                data.projectId,
+                data.projectStatus,
+                result.next.phases,
+              );
+
+              // Handle both sync and async callbacks
+              if (callbackResult instanceof Promise) {
+                await callbackResult;
+              }
+            } else {
+              this.logger.warn(
+                `[PHASE CHAIN] Phase chain callback not set, cannot open and schedule next phases for challenge ${data.challengeId}`,
+              );
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[PHASE CHAIN] Error in phase chain callback for challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        } else {
+          this.logger.log(
+            `[PHASE CHAIN] No next phases to open and schedule for challenge ${data.challengeId}`,
+          );
+        }
       } else {
         this.logger.error(
           `Failed to advance phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,

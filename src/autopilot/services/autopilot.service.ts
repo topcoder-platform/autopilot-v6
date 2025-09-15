@@ -4,8 +4,10 @@ import {
   PhaseTransitionPayload,
   ChallengeUpdatePayload,
   CommandPayload,
+  AutopilotOperator,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 
 @Injectable()
@@ -17,7 +19,24 @@ export class AutopilotService {
   constructor(
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
-  ) {}
+  ) {
+    // Set up the phase chain callback to handle next phase opening and scheduling
+    this.schedulerService.setPhaseChainCallback(
+      (
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        nextPhases: IPhase[],
+      ) => {
+        void this.openAndScheduleNextPhases(
+          challengeId,
+          projectId,
+          projectStatus,
+          nextPhases,
+        );
+      },
+    );
+  }
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
     try {
@@ -117,16 +136,49 @@ export class AutopilotService {
       `Consumed phase transition event: ${JSON.stringify(message)}`,
     );
 
-    if (message.state === 'END') {
-      const canceled = this.cancelPhaseTransition(
-        message.challengeId,
-        message.phaseId,
-      );
-      if (canceled) {
-        this.logger.log(
-          `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
-        );
-      }
+    if (message.state === 'START') {
+      // Advance the phase (open it) using the scheduler service
+      void (async () => {
+        try {
+          await this.schedulerService.advancePhase(message);
+          this.logger.log(
+            `Successfully processed START event for phase ${message.phaseId} (challenge ${message.challengeId})`,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to advance phase ${message.phaseId} for challenge ${message.challengeId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      })();
+    } else if (message.state === 'END') {
+      // Advance the phase (close it) using the scheduler service
+      void (async () => {
+        try {
+          await this.schedulerService.advancePhase(message);
+          this.logger.log(
+            `Successfully processed END event for phase ${message.phaseId} (challenge ${message.challengeId})`,
+          );
+
+          // Clean up the scheduled job after closing the phase
+          const canceled = this.cancelPhaseTransition(
+            message.challengeId,
+            message.phaseId,
+          );
+          if (canceled) {
+            this.logger.log(
+              `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
+            );
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to advance phase ${message.phaseId} for challenge ${message.challengeId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      })();
     }
   }
 
@@ -147,25 +199,50 @@ export class AutopilotService {
         return;
       }
 
-      for (const phase of challengeDetails.phases) {
-        if (!phase.scheduledEndDate) {
-          this.logger.warn(
-            `Phase ${phase.id} for new challenge ${challenge.challengeId} has no scheduled end date. Skipping.`,
-          );
-          continue;
-        }
-        const phaseData: PhaseTransitionPayload = {
-          projectId: challengeDetails.projectId,
-          challengeId: challengeDetails.id,
-          phaseId: phase.id,
-          phaseTypeName: phase.name,
-          state: 'END',
-          operator: 'system-new-challenge',
-          projectStatus: challengeDetails.status,
-          date: phase.scheduledEndDate,
-        };
-        this.schedulePhaseTransition(phaseData);
+      // Find the next phase that should be scheduled (similar to PhaseAdvancer logic)
+      const nextPhase = this.findNextPhaseToSchedule(challengeDetails.phases);
+
+      if (!nextPhase) {
+        this.logger.log(
+          `No phase needs to be scheduled for new challenge ${challenge.challengeId}`,
+        );
+        return;
       }
+
+      // Determine if we should schedule for start or end based on phase state
+      const now = new Date();
+      const shouldOpen =
+        !nextPhase.isOpen &&
+        !nextPhase.actualEndDate &&
+        new Date(nextPhase.scheduledStartDate) <= now;
+
+      const scheduleDate = shouldOpen
+        ? nextPhase.scheduledStartDate
+        : nextPhase.scheduledEndDate;
+      const state = shouldOpen ? 'START' : 'END';
+
+      if (!scheduleDate) {
+        this.logger.warn(
+          `Next phase ${nextPhase.id} for new challenge ${challenge.challengeId} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
+        );
+        return;
+      }
+
+      const phaseData: PhaseTransitionPayload = {
+        projectId: challengeDetails.projectId,
+        challengeId: challengeDetails.id,
+        phaseId: nextPhase.id,
+        phaseTypeName: nextPhase.name,
+        state,
+        operator: AutopilotOperator.SYSTEM_NEW_CHALLENGE,
+        projectStatus: challengeDetails.status,
+        date: scheduleDate,
+      };
+
+      this.schedulePhaseTransition(phaseData);
+      this.logger.log(
+        `Scheduled next phase ${nextPhase.name} (${nextPhase.id}) for new challenge ${challenge.challengeId}`,
+      );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -191,25 +268,50 @@ export class AutopilotService {
         return;
       }
 
-      for (const phase of challengeDetails.phases) {
-        if (!phase.scheduledEndDate) continue;
+      // Find the next phase that should be scheduled (similar to PhaseAdvancer logic)
+      const nextPhase = this.findNextPhaseToSchedule(challengeDetails.phases);
 
-        const payload: PhaseTransitionPayload = {
-          projectId: challengeDetails.projectId,
-          challengeId: challengeDetails.id,
-          phaseId: phase.id,
-          phaseTypeName: phase.name,
-          operator: message.operator,
-          projectStatus: challengeDetails.status,
-          date: phase.scheduledEndDate,
-          state: 'END',
-        };
-
+      if (!nextPhase) {
         this.logger.log(
-          `Rescheduling updated phase from notification: ${challengeDetails.id}:${phase.id}`,
+          `No phase needs to be rescheduled for updated challenge ${message.challengeId}`,
         );
-        this.reschedulePhaseTransition(challengeDetails.id, payload);
+        return;
       }
+
+      // Determine if we should schedule for start or end based on phase state
+      const now = new Date();
+      const shouldOpen =
+        !nextPhase.isOpen &&
+        !nextPhase.actualEndDate &&
+        new Date(nextPhase.scheduledStartDate) <= now;
+
+      const scheduleDate = shouldOpen
+        ? nextPhase.scheduledStartDate
+        : nextPhase.scheduledEndDate;
+      const state = shouldOpen ? 'START' : 'END';
+
+      if (!scheduleDate) {
+        this.logger.warn(
+          `Next phase ${nextPhase.id} for updated challenge ${message.challengeId} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
+        );
+        return;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: challengeDetails.projectId,
+        challengeId: challengeDetails.id,
+        phaseId: nextPhase.id,
+        phaseTypeName: nextPhase.name,
+        operator: message.operator,
+        projectStatus: challengeDetails.status,
+        date: scheduleDate,
+        state,
+      };
+
+      this.logger.log(
+        `Rescheduling next phase ${nextPhase.name} (${nextPhase.id}) for updated challenge ${message.challengeId}`,
+      );
+      this.reschedulePhaseTransition(challengeDetails.id, payload);
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -328,6 +430,208 @@ export class AutopilotService {
     }
   }
 
+  /**
+   * Find the next phase that should be scheduled based on current phase state.
+   * Similar logic to PhaseAdvancer.js - only schedule the next phase that should advance.
+   */
+  private findNextPhaseToSchedule(phases: IPhase[]): IPhase | null {
+    const now = new Date();
+
+    // First, check for phases that should be open but aren't
+    const phasesToOpen = phases.filter((phase) => {
+      if (phase.isOpen || phase.actualEndDate) {
+        return false; // Already open or already ended
+      }
+
+      const startTime = new Date(phase.scheduledStartDate);
+      if (startTime > now) {
+        return false; // Not time to start yet
+      }
+
+      // Check if predecessor requirements are met
+      if (!phase.predecessor) {
+        return true; // No predecessor, ready to start
+      }
+
+      const predecessor = phases.find((p) => p.phaseId === phase.predecessor);
+      return predecessor && predecessor.actualEndDate; // Predecessor has ended
+    });
+
+    if (phasesToOpen.length > 0) {
+      // Return the earliest phase that should be opened
+      return phasesToOpen.sort(
+        (a, b) =>
+          new Date(a.scheduledStartDate).getTime() -
+          new Date(b.scheduledStartDate).getTime(),
+      )[0];
+    }
+
+    // Next, check for open phases that should be closed
+    const openPhases = phases.filter((phase) => phase.isOpen);
+
+    if (openPhases.length > 0) {
+      // Return the earliest phase that should end
+      return openPhases.sort(
+        (a, b) =>
+          new Date(a.scheduledEndDate).getTime() -
+          new Date(b.scheduledEndDate).getTime(),
+      )[0];
+    }
+
+    // Finally, look for future phases that need to be scheduled
+    const futurePhases = phases.filter(
+      (phase) =>
+        !phase.actualStartDate && // hasn't started yet
+        !phase.actualEndDate && // hasn't ended yet
+        phase.scheduledStartDate && // has a scheduled start date
+        new Date(phase.scheduledStartDate) > now, // starts in the future
+    );
+
+    if (futurePhases.length === 0) {
+      return null;
+    }
+
+    // Find phases that are ready to start (no predecessor or predecessor is closed)
+    const readyPhases = futurePhases.filter((phase) => {
+      if (!phase.predecessor) {
+        return true; // No predecessor, ready to start
+      }
+
+      // Check if predecessor has ended
+      const predecessor = phases.find((p) => p.phaseId === phase.predecessor);
+      return predecessor && predecessor.actualEndDate;
+    });
+
+    if (readyPhases.length === 0) {
+      return null;
+    }
+
+    // Return the earliest scheduled phase
+    return readyPhases.sort(
+      (a, b) =>
+        new Date(a.scheduledStartDate).getTime() -
+        new Date(b.scheduledStartDate).getTime(),
+    )[0];
+  }
+
+  /**
+   * Open and schedule next phases in the transition chain
+   */
+  async openAndScheduleNextPhases(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    nextPhases: IPhase[],
+  ): Promise<void> {
+    if (!nextPhases || nextPhases.length === 0) {
+      this.logger.log(
+        `[PHASE CHAIN] No next phases to open for challenge ${challengeId}`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Opening and scheduling ${nextPhases.length} next phases for challenge ${challengeId}`,
+    );
+
+    let processedCount = 0;
+    for (const nextPhase of nextPhases) {
+      try {
+        // Step 1: Open the phase first
+        this.logger.log(
+          `[PHASE CHAIN] Opening phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}`,
+        );
+
+        const openResult = await this.challengeApiService.advancePhase(
+          challengeId,
+          nextPhase.id,
+          'open',
+        );
+
+        if (!openResult.success) {
+          this.logger.error(
+            `[PHASE CHAIN] Failed to open phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}: ${openResult.message}`,
+          );
+          continue;
+        }
+
+        this.logger.log(
+          `[PHASE CHAIN] Successfully opened phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}`,
+        );
+
+        // Step 2: Schedule the phase for closure (use updated phase data from API response)
+        const updatedPhase =
+          openResult.updatedPhases?.find((p) => p.id === nextPhase.id) ||
+          nextPhase;
+
+        if (!updatedPhase.scheduledEndDate) {
+          this.logger.warn(
+            `[PHASE CHAIN] Opened phase ${nextPhase.name} (${nextPhase.id}) has no scheduled end date, skipping scheduling`,
+          );
+          continue;
+        }
+
+        // Check if this phase is already scheduled to avoid duplicates
+        const phaseKey = `${challengeId}:${nextPhase.id}`;
+        if (this.activeSchedules.has(phaseKey)) {
+          this.logger.log(
+            `[PHASE CHAIN] Phase ${nextPhase.name} (${nextPhase.id}) is already scheduled, skipping`,
+          );
+          continue;
+        }
+
+        const nextPhaseData: PhaseTransitionPayload = {
+          projectId,
+          challengeId,
+          phaseId: updatedPhase.id,
+          phaseTypeName: updatedPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+          projectStatus,
+          date: updatedPhase.scheduledEndDate,
+        };
+
+        const jobId = this.schedulePhaseTransition(nextPhaseData);
+        processedCount++;
+        this.logger.log(
+          `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${jobId}`,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to open and schedule phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Successfully opened and scheduled ${processedCount} out of ${nextPhases.length} next phases for challenge ${challengeId}`,
+    );
+  }
+
+  /**
+   * @deprecated Use openAndScheduleNextPhases instead
+   * Schedule next phases in the transition chain
+   */
+  scheduleNextPhases(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    nextPhases: IPhase[],
+  ): void {
+    this.logger.warn(
+      `[PHASE CHAIN] scheduleNextPhases is deprecated, use openAndScheduleNextPhases instead`,
+    );
+    // Convert to async call
+    void this.openAndScheduleNextPhases(
+      challengeId,
+      projectId,
+      projectStatus,
+      nextPhases,
+    );
+  }
+
   getActiveSchedules(): Map<string, string> {
     return new Map(this.activeSchedules);
   }
@@ -339,6 +643,34 @@ export class AutopilotService {
     return {
       jobIds: this.schedulerService.getAllScheduledTransitions(),
       activeSchedules: this.getActiveSchedules(),
+    };
+  }
+
+  /**
+   * Get detailed information about scheduled transitions for debugging
+   */
+  getScheduledTransitionsDetails(): {
+    totalScheduled: number;
+    byChallenge: Record<string, string[]>;
+    scheduledJobs: Map<string, PhaseTransitionPayload>;
+  } {
+    const activeSchedules = this.getActiveSchedules();
+    const scheduledJobs =
+      this.schedulerService.getAllScheduledTransitionsWithData();
+    const byChallenge: Record<string, string[]> = {};
+
+    for (const [phaseKey] of activeSchedules) {
+      const [challengeId] = phaseKey.split(':');
+      if (!byChallenge[challengeId]) {
+        byChallenge[challengeId] = [];
+      }
+      byChallenge[challengeId].push(phaseKey);
+    }
+
+    return {
+      totalScheduled: activeSchedules.size,
+      byChallenge,
+      scheduledJobs,
     };
   }
 }
