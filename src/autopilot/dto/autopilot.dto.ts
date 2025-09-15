@@ -6,6 +6,7 @@ import {
   IsDateString,
   IsUUID,
 } from 'class-validator';
+import { AutopilotOperator } from '../interfaces/autopilot.interface';
 
 export class PhaseTransitionDto {
   @IsDateString()
@@ -23,8 +24,8 @@ export class PhaseTransitionDto {
   @IsEnum(['START', 'END'])
   state: 'START' | 'END';
 
-  @IsString()
-  operator: string;
+  @IsEnum(AutopilotOperator)
+  operator: AutopilotOperator | string;
 
   @IsString()
   projectStatus: string;
@@ -40,8 +41,8 @@ export class ChallengeUpdateDto {
   @IsString()
   status: string;
 
-  @IsString()
-  operator: string;
+  @IsEnum(AutopilotOperator)
+  operator: AutopilotOperator | string;
 }
 
 export class CommandDto {
@@ -57,6 +58,6 @@ export class CommandDto {
   @IsObject()
   parameters: Record<string, any>;
 
-  @IsString()
-  operator: string;
+  @IsEnum(AutopilotOperator)
+  operator: AutopilotOperator | string;
 }

@@ -9,6 +9,7 @@ import {
 } from 'class-validator';
 import { KafkaMessageTemplate } from './kafka.template';
 import { KAFKA_TOPICS } from '../constants/topics';
+import { AutopilotOperator } from '../../autopilot/interfaces/autopilot.interface';
 
 // Phase Transition Template
 export class PhaseTransitionPayload {
@@ -27,9 +28,9 @@ export class PhaseTransitionPayload {
   @IsEnum(['START', 'END'])
   state: 'START' | 'END';
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsString()
   @IsNotEmpty()
@@ -64,9 +65,9 @@ export class ChallengeUpdatePayload {
   @IsNotEmpty()
   status: string;
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsDateString()
   @IsOptional()
@@ -85,9 +86,9 @@ export class CommandPayload {
   @IsNotEmpty()
   command: string;
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsNumber()
   @IsOptional()

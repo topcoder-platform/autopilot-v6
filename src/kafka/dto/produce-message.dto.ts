@@ -9,6 +9,7 @@ import {
   IsDateString,
   IsUUID,
 } from 'class-validator';
+import { AutopilotOperator } from '../../autopilot/interfaces/autopilot.interface';
 
 export enum PhaseState {
   START = 'START',
@@ -31,9 +32,9 @@ export class PhaseTransitionPayloadDto {
   @IsEnum(PhaseState)
   state: PhaseState;
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsString()
   @IsNotEmpty()
@@ -61,9 +62,9 @@ export class ChallengeUpdatePayloadDto {
   @IsNotEmpty()
   status: string;
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsDateString()
   @IsOptional()
@@ -75,9 +76,9 @@ export class CommandPayloadDto {
   @IsNotEmpty()
   command: string;
 
-  @IsString()
+  @IsEnum(AutopilotOperator)
   @IsNotEmpty()
-  operator: string;
+  operator: AutopilotOperator | string;
 
   @IsNumber()
   @IsOptional()

@@ -3,7 +3,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AutopilotService } from '../autopilot/services/autopilot.service';
 import { ChallengeApiService } from '../challenge/challenge-api.service';
 import { SchedulerService } from '../autopilot/services/scheduler.service';
-import { PhaseTransitionPayload } from '../autopilot/interfaces/autopilot.interface';
+import {
+  PhaseTransitionPayload,
+  AutopilotOperator,
+} from '../autopilot/interfaces/autopilot.interface';
 
 @Injectable()
 export class SyncService {
@@ -32,19 +35,61 @@ export class SyncService {
         await this.challengeApiService.getAllActiveChallenges({
           status: 'ACTIVE',
         });
+
       const scheduledJobs =
         this.schedulerService.getAllScheduledTransitionsWithData();
       const scheduledPhaseKeys = new Set(scheduledJobs.keys());
 
       const activePhaseKeys = new Set<string>();
+      const now = new Date();
 
       // 1. Add/update schedules for active challenges
       for (const challenge of activeChallenges) {
         if (!challenge.phases) continue;
 
         for (const phase of challenge.phases) {
-          const phaseEndDate = phase.scheduledEndDate;
-          if (!phaseEndDate) continue;
+          // Skip phases that have already ended
+          if (phase.actualEndDate) {
+            continue;
+          }
+
+          // Determine what to schedule based on phase state
+          let scheduleDate: string | undefined;
+          let state: 'START' | 'END';
+
+          if (!phase.isOpen && !phase.actualStartDate) {
+            // Phase hasn't started yet
+            const startTime = new Date(phase.scheduledStartDate);
+
+            // Check if it's time to start or should be scheduled for future start
+            if (startTime <= now) {
+              // Check predecessor requirements
+              if (phase.predecessor) {
+                const predecessor = challenge.phases.find(
+                  (p) => p.phaseId === phase.predecessor,
+                );
+                if (!predecessor || !predecessor.actualEndDate) {
+                  // Predecessor hasn't ended yet, skip this phase
+                  continue;
+                }
+              }
+              // Should start now or soon
+              scheduleDate = phase.scheduledStartDate;
+              state = 'START';
+            } else {
+              // Future phase - don't schedule yet, will be handled when predecessor ends
+              continue;
+            }
+          } else if (phase.isOpen) {
+            // Phase is currently open, schedule for end
+            scheduleDate = phase.scheduledEndDate;
+            state = 'END';
+          } else {
+            // Phase is closed but not ended (shouldn't happen in normal flow)
+            continue;
+          }
+
+          if (!scheduleDate) continue;
 
           const phaseKey = `${challenge.id}:${phase.id}`;
           activePhaseKeys.add(phaseKey);
@@ -56,25 +101,26 @@ export class SyncService {
             challengeId: challenge.id,
             phaseId: phase.id,
             phaseTypeName: phase.name,
-            state: 'END',
-            operator: 'system-sync',
+            state,
+            operator: AutopilotOperator.SYSTEM_SYNC,
             projectStatus: challenge.status,
-            date: phaseEndDate,
+            date: scheduleDate,
           };
 
           if (!scheduledJob) {
             this.logger.log(
-              `New active phase found: ${phaseKey}. Scheduling...`,
+              `New active phase found: ${phaseKey} (${state}). Scheduling for ${scheduleDate}...`,
             );
             this.autopilotService.schedulePhaseTransition(phaseData);
             added++;
           } else if (
             scheduledJob.date &&
-            new Date(scheduledJob.date).getTime() !==
-              new Date(phaseEndDate).getTime()
+            (new Date(scheduledJob.date).getTime() !==
+              new Date(scheduleDate).getTime() ||
+              scheduledJob.state !== state)
           ) {
             this.logger.log(
-              `Phase ${phaseKey} has updated timing. Rescheduling...`,
+              `Phase ${phaseKey} has updated timing or state. Rescheduling from ${scheduledJob.state} at ${scheduledJob.date} to ${state} at ${scheduleDate}...`,
             );
             void this.autopilotService.reschedulePhaseTransition(
               challenge.id,
