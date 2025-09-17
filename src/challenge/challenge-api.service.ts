@@ -47,6 +47,8 @@ export class ChallengeApiService {
   private readonly challengeApiUrl: string;
   private readonly apiRetryAttempts: number;
   private readonly apiRetryDelay: number;
+  private readonly challengeFetchTimeoutMs = 5000;
+  private readonly challengeFetchRetryDelayMs = 5000;
 
   constructor(
     private readonly httpService: HttpService,
@@ -163,28 +165,84 @@ export class ChallengeApiService {
   }
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
-    try {
-      const headers = await this.getAuthHeader();
-      const response = await firstValueFrom(
-        this.httpService.get<IChallenge>(
-          `${this.challengeApiUrl}/challenges/${challengeId}`,
-          { headers, timeout: 5000 },
-        ),
-      );
-      return response.data;
-    } catch (error) {
-      const err = error as IChallengeApiError;
-      this.logger.error(
-        `Failed to fetch challenge ${challengeId}: ${err.message}`,
-        err.stack,
-        {
-          status: err.response?.status,
-          statusText: err.response?.statusText,
-          data: err.response?.data,
-        },
-      );
-      return null;
+    const url = `${this.challengeApiUrl}/challenges/${challengeId}`;
+    console.log('Fetching challenge from URL:', url);
+    
+    // Ensure at least one attempt
+    const maxAttempts = Math.max(this.apiRetryAttempts, 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const start = Date.now();
+
+      try {
+        const headers = await this.getAuthHeader();
+        const response = await firstValueFrom(
+          this.httpService.get<IChallenge>(url, {
+            headers,
+            timeout: this.challengeFetchTimeoutMs,
+          }),
+        );
+
+        const duration = Date.now() - start;
+        if (duration >= this.challengeFetchTimeoutMs) {
+          this.logger.warn(`Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`, {
+            challengeId,
+            timeoutMs: this.challengeFetchTimeoutMs,
+          });
+        }
+
+        return response.data;
+      } catch (error) {
+        const err = error as IChallengeApiError;
+        const duration = Date.now() - start;
+
+        if (duration >= this.challengeFetchTimeoutMs) {
+          this.logger.warn(`Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`, {
+            challengeId,
+            timeoutMs: this.challengeFetchTimeoutMs,
+            status: err.response?.status,
+            error: err.message,
+          });
+        }
+
+        if (attempt === maxAttempts) {
+          this.logger.error(
+            `Failed to fetch challenge ${challengeId}: ${err.message}`,
+            err.stack,
+            {
+              status: err.response?.status,
+              statusText: err.response?.statusText,
+              data: err.response?.data,
+              url,
+              attempts: maxAttempts,
+              timeoutMs: this.challengeFetchTimeoutMs,
+              code: err.code,
+            },
+          );
+          return null;
+        }
+
+        this.logger.warn(
+          `Attempt ${attempt} failed to fetch challenge ${challengeId}. Retrying in ${this.challengeFetchRetryDelayMs / 1000}s...`,
+          {
+            status: err.response?.status,
+            statusText: err.response?.statusText,
+            data: err.response?.data,
+            url,
+            attempt,
+            remainingAttempts: maxAttempts - attempt,
+            error: err.message,
+            code: err.code,
+          },
+        );
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.challengeFetchRetryDelayMs),
+        );
+      }
     }
+
+    return null;
   }
 
   /**
