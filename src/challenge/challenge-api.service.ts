@@ -47,7 +47,7 @@ export class ChallengeApiService {
   private readonly challengeApiUrl: string;
   private readonly apiRetryAttempts: number;
   private readonly apiRetryDelay: number;
-  private readonly challengeFetchTimeoutMs = 5000;
+  private readonly challengeFetchTimeoutMs = 8000;
   private readonly challengeFetchRetryDelayMs = 5000;
 
   constructor(
@@ -167,7 +167,7 @@ export class ChallengeApiService {
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
     const url = `${this.challengeApiUrl}/challenges/${challengeId}`;
     console.log('Fetching challenge from URL:', url);
-    
+
     // Ensure at least one attempt
     const maxAttempts = Math.max(this.apiRetryAttempts, 1);
 
@@ -185,10 +185,13 @@ export class ChallengeApiService {
 
         const duration = Date.now() - start;
         if (duration >= this.challengeFetchTimeoutMs) {
-          this.logger.warn(`Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`, {
-            challengeId,
-            timeoutMs: this.challengeFetchTimeoutMs,
-          });
+          this.logger.warn(
+            `Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`,
+            {
+              challengeId,
+              timeoutMs: this.challengeFetchTimeoutMs,
+            },
+          );
         }
 
         return response.data;
@@ -197,12 +200,15 @@ export class ChallengeApiService {
         const duration = Date.now() - start;
 
         if (duration >= this.challengeFetchTimeoutMs) {
-          this.logger.warn(`Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`, {
-            challengeId,
-            timeoutMs: this.challengeFetchTimeoutMs,
-            status: err.response?.status,
-            error: err.message,
-          });
+          this.logger.warn(
+            `Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`,
+            {
+              challengeId,
+              timeoutMs: this.challengeFetchTimeoutMs,
+              status: err.response?.status,
+              error: err.message,
+            },
+          );
         }
 
         if (attempt === maxAttempts) {
@@ -310,6 +316,22 @@ export class ChallengeApiService {
       return response.data;
     } catch (error) {
       const err = error as IChallengeApiError;
+      if (err.response?.status === 400) {
+        this.logger.warn(
+          `Challenge API returned 400 when advancing phase for challenge ${challengeId}`,
+          {
+            phaseId,
+            phaseName,
+            operation,
+            response: {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              data: err.response.data,
+              headers: err.response.headers,
+            },
+          },
+        );
+      }
       this.logger.error(
         `Failed to advance phase for challenge ${challengeId}: ${err.message}`,
         err.stack,
