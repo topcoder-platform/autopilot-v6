@@ -29,6 +29,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
   private readonly consumers: Map<string, Consumer>;
   private readonly logger: LoggerService;
   private readonly circuitBreaker: CircuitBreaker;
+  private readonly retryDelayAfterReconnectMs = 5000;
 
   constructor(private readonly configService: ConfigService) {
     this.logger = new LoggerService(KafkaService.name);
@@ -126,13 +127,65 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 
+  private async delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async sendWithReconnect(
+    record: ProducerRecord,
+    metadata: { topic: string; correlationId?: string; messageCount?: number },
+  ): Promise<void> {
+    try {
+      await this.producer.send(record);
+      return;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.warn('Kafka producer send failed, attempting reconnect', {
+        ...metadata,
+        error: err.stack || err.message,
+      });
+
+      try {
+        await this.producer.connect();
+        this.logger.info('Kafka producer reconnected after failure', metadata);
+      } catch (reconnectError) {
+        const reconnectErr = reconnectError as Error;
+        this.logger.error('Kafka producer reconnect attempt failed', {
+          ...metadata,
+          error: reconnectErr.stack || reconnectErr.message,
+        });
+        throw reconnectErr;
+      }
+
+      this.logger.info('Retrying Kafka send after reconnect delay', {
+        ...metadata,
+        delayMs: this.retryDelayAfterReconnectMs,
+      });
+      await this.delay(this.retryDelayAfterReconnectMs);
+
+      try {
+        await this.producer.send(record);
+      } catch (retryError) {
+        const retryErr = retryError as Error;
+        this.logger.error('Kafka producer retry failed after reconnect', {
+          ...metadata,
+          error: retryErr.stack || retryErr.message,
+        });
+        throw retryErr;
+      }
+    }
+  }
+
   async sendMessage(topic: string, message: unknown): Promise<void> {
     try {
       const encodedMessage = this.encodeMessage(message);
-      await this.producer.send({
-        topic,
-        messages: [{ value: encodedMessage }],
-      });
+      await this.sendWithReconnect(
+        {
+          topic,
+          messages: [{ value: encodedMessage }],
+        },
+        { topic },
+      );
       this.logger.log(`Message sent to topic ${topic}`);
     } catch (error) {
       const err = error as Error;
@@ -181,7 +234,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
           timeout: 30000,
         };
 
-        await this.producer.send(record);
+        await this.sendWithReconnect(record, { topic, correlationId });
 
         this.logger.info(`[KAFKA-PRODUCER] Message produced to ${topic}`, {
           correlationId,
@@ -228,7 +281,11 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
           timeout: 30000,
         };
 
-        await this.producer.send(record);
+        await this.sendWithReconnect(record, {
+          topic,
+          correlationId,
+          messageCount: messages.length,
+        });
         this.logger.info(`Batch produced to ${topic}`, {
           correlationId,
           count: messages.length,
