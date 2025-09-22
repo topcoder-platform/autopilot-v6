@@ -7,7 +7,8 @@ FROM base AS deps
 # Install pnpm
 RUN npm install -g pnpm
 # Copy dependency-defining files
-COPY package.json pnpm-lock.yaml prisma ./
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
 # Install dependencies
 RUN pnpm install --frozen-lockfile --prod
 
@@ -17,6 +18,7 @@ RUN npm install -g pnpm
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
 # Build the application
+RUN pnpm prisma:generate
 RUN pnpm build
 
 # ---- Production Stage ----

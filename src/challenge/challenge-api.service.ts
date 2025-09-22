@@ -23,35 +23,30 @@ interface PhaseAdvanceResponseDto {
   };
 }
 
-type ChallengePhaseWithConstraints = Prisma.ChallengePhaseGetPayload<{
-  include: { constraints: true };
-}>;
+const challengeWithRelationsArgs =
+  Prisma.validator<Prisma.ChallengeDefaultArgs>()({
+    include: {
+      phases: {
+        include: { constraints: true },
+        orderBy: { scheduledStartDate: 'asc' as const },
+      },
+      winners: true,
+      track: true,
+      type: true,
+      legacyRecord: true,
+    },
+  });
 
-type ChallengeWithRelations = Prisma.ChallengeGetPayload<{
-  include: {
-    phases: { include: { constraints: true } };
-    winners: true;
-    track: true;
-    type: true;
-    legacyRecord: true;
-  };
-}>;
+type ChallengeWithRelations = Prisma.ChallengeGetPayload<
+  typeof challengeWithRelationsArgs
+>;
+
+type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
 
 @Injectable()
 export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
   private readonly defaultPageSize = 50;
-
-  private readonly challengeInclude: Prisma.ChallengeInclude = {
-    phases: {
-      include: { constraints: true },
-      orderBy: { scheduledStartDate: 'asc' },
-    },
-    winners: true,
-    track: true,
-    type: true,
-    legacyRecord: true,
-  };
 
   constructor(private readonly prisma: ChallengePrismaService) {}
 
@@ -72,6 +67,7 @@ export class ChallengeApiService {
     const page = filters.page ?? 1;
 
     const challenges = await this.prisma.challenge.findMany({
+      ...challengeWithRelationsArgs,
       where,
       ...(shouldPaginate
         ? {
@@ -80,7 +76,6 @@ export class ChallengeApiService {
           }
         : {}),
       orderBy: { updatedAt: 'desc' },
-      include: this.challengeInclude,
     });
 
     return challenges.map((challenge) => this.mapChallenge(challenge));
@@ -88,8 +83,8 @@ export class ChallengeApiService {
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
     const challenge = await this.prisma.challenge.findUnique({
+      ...challengeWithRelationsArgs,
       where: { id: challengeId },
-      include: this.challengeInclude,
     });
 
     if (!challenge) {
@@ -140,8 +135,8 @@ export class ChallengeApiService {
     operation: 'open' | 'close',
   ): Promise<PhaseAdvanceResponseDto> {
     const challenge = await this.prisma.challenge.findUnique({
+      ...challengeWithRelationsArgs,
       where: { id: challengeId },
-      include: this.challengeInclude,
     });
 
     if (!challenge) {
@@ -233,8 +228,8 @@ export class ChallengeApiService {
     }
 
     const updatedChallenge = await this.prisma.challenge.findUnique({
+      ...challengeWithRelationsArgs,
       where: { id: challengeId },
-      include: this.challengeInclude,
     });
 
     if (!updatedChallenge) {
