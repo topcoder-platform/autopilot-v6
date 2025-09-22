@@ -12,7 +12,6 @@ RUN apt-get update \
     pkg-config \
     librdkafka-dev \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g yarn
 COPY package.json ./
 COPY prisma ./prisma
 RUN yarn install 
