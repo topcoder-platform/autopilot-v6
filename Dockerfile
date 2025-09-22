@@ -1,36 +1,36 @@
 # ---- Base Stage ----
-FROM node:20-alpine AS base
+FROM node:20-bookworm AS base
 WORKDIR /usr/src/app
 
 # ---- Dependencies Stage ----
 FROM base AS deps
-# Install pnpm
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    pkg-config \
+    librdkafka-dev \
+  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm
-# Copy dependency-defining files
 COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma
-# Install dependencies
 RUN pnpm install --frozen-lockfile --prod
 
 # ---- Build Stage ----
-FROM base AS build
-RUN npm install -g pnpm
-COPY --from=deps /usr/src/app/node_modules ./node_modules
+FROM deps AS build
 COPY . .
-# Build the application
 RUN pnpm prisma:generate
 RUN pnpm build
 
 # ---- Production Stage ----
 FROM base AS production
 ENV NODE_ENV production
-# Copy built application from the build stage
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    librdkafka1 \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/src/app/dist ./dist
-# Copy production dependencies from the deps stage
 COPY --from=deps /usr/src/app/node_modules ./node_modules
-
-# Expose the application port
 EXPOSE 3000
-
-# Start the application
-CMD ["node", "dist/main.js"] 
+CMD ["node", "dist/main.js"]
