@@ -82,6 +82,7 @@ export class ChallengeApiService {
   }
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
+    this.logger.debug(`Fetching challenge with ID: ${challengeId}`);
     const challenge = await this.prisma.challenge.findUnique({
       ...challengeWithRelationsArgs,
       where: { id: challengeId },
