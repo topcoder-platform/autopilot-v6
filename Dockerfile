@@ -12,16 +12,16 @@ RUN apt-get update \
     pkg-config \
     librdkafka-dev \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm
-COPY package.json pnpm-lock.yaml ./
+RUN npm install -g yarn
+COPY package.json ./
 COPY prisma ./prisma
-RUN pnpm install --frozen-lockfile --prod
+RUN yarn install 
 
 # ---- Build Stage ----
 FROM deps AS build
 COPY . .
-RUN pnpm prisma:generate
-RUN pnpm build
+RUN yarn prisma:generate
+RUN yarn build
 
 # ---- Production Stage ----
 FROM base AS production
