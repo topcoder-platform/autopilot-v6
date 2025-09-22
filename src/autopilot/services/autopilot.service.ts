@@ -189,12 +189,12 @@ export class AutopilotService {
     try {
       // Refactored: Use getChallengeById as required
       const challengeDetails = await this.challengeApiService.getChallengeById(
-        challenge.challengeId,
+        challenge.id,
       );
 
       if (!challengeDetails.phases) {
         this.logger.warn(
-          `Challenge ${challenge.challengeId} has no phases to schedule.`,
+          `Challenge ${challenge.id} has no phases to schedule.`,
         );
         return;
       }
@@ -204,7 +204,7 @@ export class AutopilotService {
 
       if (!nextPhase) {
         this.logger.log(
-          `No phase needs to be scheduled for new challenge ${challenge.challengeId}`,
+          `No phase needs to be scheduled for new challenge ${challenge.id}`,
         );
         return;
       }
@@ -223,7 +223,7 @@ export class AutopilotService {
 
       if (!scheduleDate) {
         this.logger.warn(
-          `Next phase ${nextPhase.id} for new challenge ${challenge.challengeId} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
+          `Next phase ${nextPhase.id} for new challenge ${challenge.id} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
         );
         return;
       }
@@ -241,12 +241,12 @@ export class AutopilotService {
 
       this.schedulePhaseTransition(phaseData);
       this.logger.log(
-        `Scheduled next phase ${nextPhase.name} (${nextPhase.id}) for new challenge ${challenge.challengeId}`,
+        `Scheduled next phase ${nextPhase.name} (${nextPhase.id}) for new challenge ${challenge.id}`,
       );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
-        `Error handling new challenge creation for id ${challenge.challengeId}: ${err.message}`,
+        `Error handling new challenge creation for id ${challenge.id}: ${err.message}`,
         err.stack,
       );
     }
@@ -258,12 +258,12 @@ export class AutopilotService {
     try {
       // Refactored: Use getChallengeById as required
       const challengeDetails = await this.challengeApiService.getChallengeById(
-        message.challengeId,
+        message.id,
       );
 
       if (!challengeDetails.phases) {
         this.logger.warn(
-          `Updated challenge ${message.challengeId} has no phases to process.`,
+          `Updated challenge ${message.id} has no phases to process.`,
         );
         return;
       }
@@ -273,7 +273,7 @@ export class AutopilotService {
 
       if (!nextPhase) {
         this.logger.log(
-          `No phase needs to be rescheduled for updated challenge ${message.challengeId}`,
+          `No phase needs to be rescheduled for updated challenge ${message.id}`,
         );
         return;
       }
@@ -292,7 +292,7 @@ export class AutopilotService {
 
       if (!scheduleDate) {
         this.logger.warn(
-          `Next phase ${nextPhase.id} for updated challenge ${message.challengeId} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
+          `Next phase ${nextPhase.id} for updated challenge ${message.id} has no scheduled ${shouldOpen ? 'start' : 'end'} date. Skipping.`,
         );
         return;
       }
@@ -309,7 +309,7 @@ export class AutopilotService {
       };
 
       this.logger.log(
-        `Rescheduling next phase ${nextPhase.name} (${nextPhase.id}) for updated challenge ${message.challengeId}`,
+        `Rescheduling next phase ${nextPhase.name} (${nextPhase.id}) for updated challenge ${message.id}`,
       );
       this.reschedulePhaseTransition(challengeDetails.id, payload);
     } catch (error) {

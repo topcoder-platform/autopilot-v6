@@ -34,7 +34,7 @@ export interface PhaseTransitionPayload {
 
 export interface ChallengeUpdatePayload {
   projectId: number;
-  challengeId: string; // Changed to string to support UUIDs
+  id: string; // Changed to string to support UUIDs
   status: string;
   operator: AutopilotOperator | string; // Allow both enum and string for flexibility
   date?: string;
