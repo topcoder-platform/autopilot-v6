@@ -79,7 +79,7 @@ Open the `.env` file and configure the variables for your environment. It is cru
 pnpm install
 
 # Generate the Prisma client for the Challenge database schema
-pnpm prisma generate --schema prisma/challenge.schema.prisma
+npm run prisma:generate
 ```
 
 ### 4. Development Setup

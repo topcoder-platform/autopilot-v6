@@ -145,7 +145,9 @@ export class ChallengeApiService {
     });
 
     if (!challenge) {
-      this.logger.warn(`Challenge ${challengeId} not found when advancing phase.`);
+      this.logger.warn(
+        `Challenge ${challengeId} not found when advancing phase.`,
+      );
       return {
         success: false,
         message: `Challenge ${challengeId} not found`,
@@ -187,7 +189,9 @@ export class ChallengeApiService {
 
     const now = new Date();
 
-    const currentPhaseNames = new Set<string>(challenge.currentPhaseNames || []);
+    const currentPhaseNames = new Set<string>(
+      challenge.currentPhaseNames || [],
+    );
 
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -240,8 +244,7 @@ export class ChallengeApiService {
       };
     }
 
-    const hasWinningSubmission =
-      (updatedChallenge.winners || []).length > 0;
+    const hasWinningSubmission = (updatedChallenge.winners || []).length > 0;
 
     const updatedPhases = updatedChallenge.phases.map((phase) =>
       this.mapPhase(phase),
@@ -289,16 +292,12 @@ export class ChallengeApiService {
       currentPhaseNames: challenge.currentPhaseNames ?? [],
       tags: challenge.tags ?? [],
       groups: challenge.groups ?? [],
-      submissionStartDate: this.ensureTimestamp(
-        challenge.submissionStartDate,
-      ),
+      submissionStartDate: this.ensureTimestamp(challenge.submissionStartDate),
       submissionEndDate: this.ensureTimestamp(challenge.submissionEndDate),
       registrationStartDate: this.ensureTimestamp(
         challenge.registrationStartDate,
       ),
-      registrationEndDate: this.ensureTimestamp(
-        challenge.registrationEndDate,
-      ),
+      registrationEndDate: this.ensureTimestamp(challenge.registrationEndDate),
       startDate: this.ensureTimestamp(challenge.startDate),
       endDate: this.optionalTimestamp(challenge.endDate),
       legacyId: challenge.legacyId ?? null,
@@ -363,11 +362,12 @@ export class ChallengeApiService {
       actualStartDate: this.optionalTimestamp(phase.actualStartDate),
       actualEndDate: this.optionalTimestamp(phase.actualEndDate),
       predecessor: phase.predecessor ?? null,
-      constraints: phase.constraints?.map((constraint) => ({
-        id: constraint.id,
-        name: constraint.name,
-        value: constraint.value,
-      })) ?? [],
+      constraints:
+        phase.constraints?.map((constraint) => ({
+          id: constraint.id,
+          name: constraint.name,
+          value: constraint.value,
+        })) ?? [],
     };
   }
 

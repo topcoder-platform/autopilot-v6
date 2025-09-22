@@ -63,7 +63,7 @@ Autopilot now queries the Challenge database directly through Prisma. This appro
 ## 4. Environment & Configuration
 
 - **Database URL**: `CHALLENGE_DB_URL` must point to the Challenge database. A test default is provided to ease local testing, but production deployments must supply a real connection string.
-- **Prisma Schema**: The full Challenge schema lives in `prisma/challenge.schema.prisma`. Run `npx prisma generate --schema prisma/challenge.schema.prisma` after updating dependencies to materialise the client.
+- **Prisma Schema**: The full Challenge schema lives in `prisma/challenge.schema.prisma`. Run `npm run prisma:generate` after updating dependencies to materialise the client.
 
 ## 5. Operational Notes
 
