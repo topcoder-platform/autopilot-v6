@@ -1,64 +1,72 @@
-# Challenge API Integration Documentation
+# Challenge Data Integration Documentation
 
-This document outlines the integration strategy between the Autopilot service and the Topcoder Challenge API.
+This document outlines how the Autopilot service interacts with the Topcoder Challenge database after removing the external Challenge API dependency.
 
 ## 1. Overview
 
-The integration enables the Autopilot service to dynamically schedule and manage challenge phase transitions based on real-time data from the Challenge API. This is achieved through a combination of listening to Kafka events for immediate updates and a periodic synchronization process for ensuring data consistency.
+Autopilot now queries the Challenge database directly through Prisma. This approach eliminates HTTP latency, removes the need for Auth0 tokens and retry logic, and gives the service an authoritative view of challenge and phase data. The database is accessed through a dedicated Prisma schema (`prisma/challenge.schema.prisma`) and runtime client (`ChallengePrismaService`).
 
 ## 2. Core Components
 
 ### ChallengeApiService
 
 - **File**: `src/challenge/challenge-api.service.ts`
-- **Responsibility**: Acts as the primary client for all interactions with the external Challenge API.
-- **Key Features**:
-  - **Robust Retries**: Implements an exponential backoff strategy for retrying failed API requests, making the service resilient to transient network issues. Retry logic is configurable via `.env` variables.
-  - **Rate Limiting Handling**: Specifically detects HTTP 429 (Too Many Requests) responses and respects the `Retry-After` header if provided.
-  - **Endpoint Integration**: Provides methods to interact with key Challenge API endpoints:
-    - `GET /challenges`: Fetches challenges with filtering capabilities (e.g., `status=ACTIVE`).
-    - `GET /challenges/:challengeId`: Fetches detailed information for a single challenge.
+- **Responsibility**: Provides challenge lookups and phase mutations backed by direct database access.
+- **Key Behaviors**:
+  - **Direct Queries**: Uses Prisma to fetch challenges, phases, and related metadata without making HTTP calls.
+  - **Phase Mapping**: Normalises Prisma models into the existing `IChallenge`/`IPhase` interfaces used across Autopilot.
+  - **Phase Advancement**: Updates phase state (`isOpen`, `actualStartDate`, `actualEndDate`) and maintains `Challenge.currentPhaseNames` inside a transaction. Returns successor phases for scheduling chains and flags whether the challenge already has winners.
 
 ### RecoveryService
 
 - **File**: `src/recovery/recovery.service.ts`
-- **Responsibility**: On application startup, it queries the `ChallengeApiService` to get all ACTIVE challenges and establish the initial scheduler state.
+- **Responsibility**: On application startup it queries `ChallengeApiService` for all ACTIVE challenges to rebuild the scheduler state.
 - **Logic**:
-  1. Fetches all active challenges from the API.
+  1. Fetch all active challenges from the database.
   2. For each phase of each challenge:
-     - If the phase's `scheduledEndDate` is in the past, it immediately triggers an `autopilot.phase.transition` Kafka event via the `SchedulerService` to ensure overdue actions are processed.
-     - If the `scheduledEndDate` is in the future, it schedules a new transition job with the `AutopilotService`.
+     - If the `scheduledEndDate` is in the past, immediately trigger an `autopilot.phase.transition` Kafka event via `SchedulerService` so overdue transitions are handled.
+     - If the phase is upcoming, schedule a new transition job with `AutopilotService`.
 
 ### SyncService
 
 - **File**: `src/sync/sync.service.ts`
-- **Responsibility**: Runs a cron job on a configurable schedule (defined by `SYNC_CRON_SCHEDULE` in `.env`) to ensure the scheduler's state is consistent with the Challenge API.
+- **Responsibility**: Runs a cron job (configured through `SYNC_CRON_SCHEDULE`) to keep the in-memory scheduler aligned with the latest challenge data.
 - **Logic**:
-  1. Fetches all ACTIVE challenges from the `ChallengeApiService`.
-  2. Fetches all currently scheduled jobs from the `SchedulerService`.
-  3. Reconciles Data:
-     - **New/Updated Phases**: If an active phase from the API doesn't have a corresponding scheduled job, or if its end time has changed, a new job is scheduled (or the existing one is rescheduled).
-     - **Obsolete Jobs**: If a scheduled job exists for a challenge or phase that is no longer active (or has been removed), it is cancelled and removed from the scheduler.
-  4. **Auditing**: A summary of actions (added, updated, removed) is logged at the end of each run.
+  1. Fetch all ACTIVE challenges from the database through `ChallengeApiService`.
+  2. Compare active phases with the currently scheduled jobs.
+  3. Reconcile differences:
+     - **New/Updated Phases**: Schedule or reschedule jobs when timing or state changes.
+     - **Obsolete Jobs**: Cancel jobs that no longer have corresponding active phases.
+  4. Log a summary of the changes (added, updated, removed).
 
 ## 3. Kafka Event Handling
 
-The `AutopilotConsumer` listens to the following Kafka topics to react to real-time changes.
+`AutopilotConsumer` listens to Kafka topics and reacts to challenge mutations.
 
 - **File**: `src/kafka/consumers/autopilot.consumer.ts`
 
 ### challenge.notification.create
 
-- **Trigger**: A new challenge is created in the Topcoder platform.
+- **Trigger**: A new challenge is created in Topcoder.
 - **Action**:
-  1. The `handleNewChallenge` method in `AutopilotService` is invoked.
-  2. It uses the `challengeId` from the message to fetch the full challenge details from the `ChallengeApiService`.
-  3. It iterates through all phases of the new challenge and schedules a transition job for each one based on its `scheduledEndDate`.
+  1. `AutopilotService.handleNewChallenge` is invoked.
+  2. It queries `ChallengeApiService` for the new challenge data.
+  3. Each phase is scheduled based on its `scheduledEndDate`.
 
 ### challenge.notification.update
 
-- **Trigger**: An existing challenge is updated (e.g., phase times are changed, status is modified).
+- **Trigger**: An existing challenge is updated (phase timing, status, etc.).
 - **Action**:
-  1. The `handleChallengeUpdate` method in `AutopilotService` is invoked.
-  2. It fetches the latest challenge details from the `ChallengeApiService`.
-  3. It iterates through the phases and calls `reschedulePhaseTransition` for each one. This method intelligently cancels the old job and creates a new one if the end time has changed.
+  1. `AutopilotService.handleChallengeUpdate` loads the latest challenge state via `ChallengeApiService`.
+  2. Phases are iterated and `reschedulePhaseTransition` is called when timing or state changes.
+
+## 4. Environment & Configuration
+
+- **Database URL**: `CHALLENGE_DB_URL` must point to the Challenge database. A test default is provided to ease local testing, but production deployments must supply a real connection string.
+- **Prisma Schema**: The full Challenge schema lives in `prisma/challenge.schema.prisma`. Run `npx prisma generate --schema prisma/challenge.schema.prisma` after updating dependencies to materialise the client.
+
+## 5. Operational Notes
+
+- With the API removed, Auth0 configuration is no longer required for challenge operations. Existing Auth0 settings remain available for other parts of the service if needed.
+- Retry and backoff logic was deleted because Prisma handles connectivity, and failures now surface immediately to the caller.
+- Phase advancement is intentionally conservative: it only updates the targeted phase and returns successor phases whose predecessor matches the closed phase and are not already open or completed. Downstream scheduling logic remains unchanged.

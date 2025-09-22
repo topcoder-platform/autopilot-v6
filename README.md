@@ -6,7 +6,7 @@ autopilot operations with Kafka integration.
 
 - **Event-Driven Scheduling**: Dynamically schedules phase transitions using `@nestjs/schedule`.
 - **Kafka Integration**: Utilizes Kafka with JSON serialization for robust, lightweight messaging.
-- **Challenge API Integration**: Fetches live challenge data, with resilient API calls featuring exponential backoff and rate-limiting handling.
+- **Challenge Data Integration**: Fetches live challenge data directly from the Challenge database using Prisma for resilient, low-latency access.
 - **Recovery and Synchronization**: Includes a recovery service on startup and a periodic sync service to ensure data consistency.
 - **Health Checks**: Provides endpoints to monitor application and Kafka connection health.
 - **Structured Logging**: Uses Winston for detailed and configurable logging.
@@ -51,12 +51,10 @@ Open the `.env` file and configure the variables for your environment. It is cru
    KAFKA_BROKERS=localhost:9092
    KAFKA_CLIENT_ID=autopilot-service
 
-   # -------------------------------------
-   # Challenge API Configuration
-   # -------------------------------------
-   CHALLENGE_API_URL=https://api.topcoder-dev.com/v6
-   CHALLENGE_API_RETRY_ATTEMPTS=3
-   CHALLENGE_API_RETRY_DELAY=1000
+  # -------------------------------------
+  # Challenge Database Configuration
+  # -------------------------------------
+  CHALLENGE_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
 
    # -------------------------------------
    # Auth0 Configuration
@@ -79,6 +77,9 @@ Open the `.env` file and configure the variables for your environment. It is cru
 ```bash
 # Using pnpm
 pnpm install
+
+# Generate the Prisma client for the Challenge database schema
+pnpm prisma generate --schema prisma/challenge.schema.prisma
 ```
 
 ### 4. Development Setup
@@ -155,11 +156,11 @@ The service is composed of several key modules that communicate over specific Ka
 
 | Service              | Responsibility                                                                 | Consumes Topics                                    | Produces Topics           |
 |----------------------|-------------------------------------------------------------------------------|----------------------------------------------------|---------------------------|
-| ChallengeApiService  | Handles all communication with the external Topcoder Challenge API.            | -                                                  | -                         |
+| ChallengeApiService  | Provides challenge lookups and phase mutations against the Challenge database via Prisma. | -                                                  | -                         |
 | AutopilotService     | Central business logic for scheduling, updating, and canceling phase transitions. | challenge.notification.create, challenge.notification.update, autopilot.command | -                         |
 | SchedulerService     | Low-level job management using setTimeout. Triggers Kafka events when jobs execute. | -                                                  | autopilot.phase.transition |
-| RecoveryService      | Runs on startup to sync all active challenges from the API, scheduling them and processing overdue phases. | -                                                  | autopilot.phase.transition |
-| SyncService          | Runs a periodic cron job to reconcile the scheduler's state with the Challenge API. | -                                                  | -                         |
+| RecoveryService      | Runs on startup to sync all active challenges from the database, scheduling them and processing overdue phases. | -                                                  | autopilot.phase.transition |
+| SyncService          | Runs a periodic cron job to reconcile the scheduler's state with the Challenge database. | -                                                  | -                         |
 | KafkaService         | Manages all Kafka producer/consumer connections with JSON serialization. | All                                                | All                       |
 
 
@@ -267,7 +268,7 @@ When deploying to ECS, ensure:
 
 For more detailed technical information, please see the documents in the `docs/` directory:
 
-- `docs/CHALLENGE_API_INTEGRATION.md`: A deep dive into the integration with the Challenge API, recovery, and sync services.
+- `docs/CHALLENGE_API_INTEGRATION.md`: A deep dive into the integration with the Challenge database, recovery, and sync services.
 - `docs/SCHEDULER.md`: Detailed explanation of the event-based scheduling architecture.
 
 ## Troubleshooting

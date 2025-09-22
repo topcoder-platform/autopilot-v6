@@ -1,10 +1,7 @@
-import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
+import { Prisma, ChallengeStatusEnum } from '@prisma/client';
+import { ChallengePrismaService } from './challenge-prisma.service';
 import { IPhase, IChallenge } from './interfaces/challenge.interface';
-import { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { Auth0Service } from '../auth/auth0.service';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -14,7 +11,7 @@ interface ChallengeFiltersDto {
   perPage?: number;
 }
 
-// DTO for the response of the advance-phase endpoint
+// DTO for the response of the advance-phase operation
 interface PhaseAdvanceResponseDto {
   success: boolean;
   message: string;
@@ -26,229 +23,80 @@ interface PhaseAdvanceResponseDto {
   };
 }
 
-// Corrected: Interface to correctly extend AxiosError for type safety
-interface IChallengeApiErrorResponse {
-  data: Record<string, unknown>;
-  status: number;
-  statusText: string;
-  headers: {
-    'retry-after'?: string;
-  };
-  config: InternalAxiosRequestConfig;
-}
+type ChallengePhaseWithConstraints = Prisma.ChallengePhaseGetPayload<{
+  include: { constraints: true };
+}>;
 
-interface IChallengeApiError extends AxiosError {
-  response?: IChallengeApiErrorResponse;
-}
+type ChallengeWithRelations = Prisma.ChallengeGetPayload<{
+  include: {
+    phases: { include: { constraints: true } };
+    winners: true;
+    track: true;
+    type: true;
+    legacyRecord: true;
+  };
+}>;
 
 @Injectable()
 export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
-  private readonly challengeApiUrl: string;
-  private readonly apiRetryAttempts: number;
-  private readonly apiRetryDelay: number;
-  private readonly challengeFetchTimeoutMs = 8000;
-  private readonly challengeFetchRetryDelayMs = 5000;
+  private readonly defaultPageSize = 50;
 
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
-    private readonly auth0Service: Auth0Service,
-  ) {
-    this.challengeApiUrl = this.configService.get<string>(
-      'challenge.apiUrl',
-      'http://localhost:3001',
-    );
-    this.apiRetryAttempts = this.configService.get<number>(
-      'challenge.retry.attempts',
-      3,
-    );
-    this.apiRetryDelay = this.configService.get<number>(
-      'challenge.retry.initialDelay',
-      1000,
-    );
-  }
+  private readonly challengeInclude: Prisma.ChallengeInclude = {
+    phases: {
+      include: { constraints: true },
+      orderBy: { scheduledStartDate: 'asc' },
+    },
+    winners: true,
+    track: true,
+    type: true,
+    legacyRecord: true,
+  };
 
-  private async getAuthHeader(): Promise<{ [key: string]: string }> {
-    const token = await this.auth0Service.getAccessToken();
-    return {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json, text/plain, */*',
-    };
-  }
+  constructor(private readonly prisma: ChallengePrismaService) {}
 
   async getAllActiveChallenges(
     filters: ChallengeFiltersDto = {},
   ): Promise<IChallenge[]> {
-    let allChallenges: IChallenge[] = [];
-    let page = 1;
-    const perPage = 50; // Reasonable page size for API calls
+    const where: Prisma.ChallengeWhereInput = {
+      status: ChallengeStatusEnum.ACTIVE,
+    };
 
-    while (true) {
-      const params = {
-        isLightweight: true,
-        page,
-        perPage,
-        ...filters,
-      };
-
-      for (let attempt = 1; attempt <= this.apiRetryAttempts; attempt++) {
-        try {
-          const headers = await this.getAuthHeader();
-          const response = await firstValueFrom(
-            this.httpService.get<IChallenge[]>(
-              `${this.challengeApiUrl}/challenges`,
-              { headers, params, timeout: 15000 },
-            ),
-          );
-
-          const challenges = response.data;
-
-          if (!challenges || challenges.length === 0) {
-            // No more challenges to fetch
-            return allChallenges;
-          }
-
-          allChallenges = [...allChallenges, ...challenges];
-
-          if (challenges.length < perPage) {
-            // Last page reached
-            return allChallenges;
-          }
-
-          // Continue to next page
-          page++;
-          break;
-        } catch (error) {
-          const err = error as IChallengeApiError;
-
-          const status = err.response?.status;
-          const retryAfter = err.response?.headers?.['retry-after'];
-
-          if (status === 429) {
-            const delay = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
-              : this.apiRetryDelay * Math.pow(2, attempt);
-            this.logger.warn(
-              `Rate limit exceeded on page ${page}. Retrying after ${delay / 1000} seconds...`,
-              { attempt, retries: this.apiRetryAttempts },
-            );
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            continue;
-          }
-
-          if (attempt === this.apiRetryAttempts || (status && status < 500)) {
-            this.logger.error(
-              `Failed to fetch active challenges on page ${page} after ${attempt} attempts: ${err.message}`,
-              err.stack,
-              {
-                status: err.response?.status,
-                statusText: err.response?.statusText,
-                data: err.response?.data,
-                page,
-                totalFetched: allChallenges.length,
-              },
-            );
-            // Return what we have collected so far instead of empty array
-            return allChallenges;
-          }
-
-          const delay = this.apiRetryDelay * Math.pow(2, attempt - 1);
-          this.logger.warn(
-            `Attempt ${attempt} failed to fetch active challenges on page ${page}. Retrying in ${delay / 1000}s...`,
-            { error: err.message },
-          );
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-      }
+    if (filters.status) {
+      where.status = filters.status as ChallengeStatusEnum;
     }
+
+    const shouldPaginate =
+      typeof filters.page === 'number' || typeof filters.perPage === 'number';
+    const perPage = filters.perPage ?? this.defaultPageSize;
+    const page = filters.page ?? 1;
+
+    const challenges = await this.prisma.challenge.findMany({
+      where,
+      ...(shouldPaginate
+        ? {
+            skip: Math.max(page - 1, 0) * perPage,
+            take: perPage,
+          }
+        : {}),
+      orderBy: { updatedAt: 'desc' },
+      include: this.challengeInclude,
+    });
+
+    return challenges.map((challenge) => this.mapChallenge(challenge));
   }
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
-    const url = `${this.challengeApiUrl}/challenges/${challengeId}`;
-    console.log('Fetching challenge from URL:', url);
+    const challenge = await this.prisma.challenge.findUnique({
+      where: { id: challengeId },
+      include: this.challengeInclude,
+    });
 
-    // Ensure at least one attempt
-    const maxAttempts = Math.max(this.apiRetryAttempts, 1);
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const start = Date.now();
-
-      try {
-        const headers = await this.getAuthHeader();
-        const response = await firstValueFrom(
-          this.httpService.get<IChallenge>(url, {
-            headers,
-            timeout: this.challengeFetchTimeoutMs,
-          }),
-        );
-
-        const duration = Date.now() - start;
-        if (duration >= this.challengeFetchTimeoutMs) {
-          this.logger.warn(
-            `Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`,
-            {
-              challengeId,
-              timeoutMs: this.challengeFetchTimeoutMs,
-            },
-          );
-        }
-
-        return response.data;
-      } catch (error) {
-        const err = error as IChallengeApiError;
-        const duration = Date.now() - start;
-
-        if (duration >= this.challengeFetchTimeoutMs) {
-          this.logger.warn(
-            `Challenge API request to ${url} took ${duration}ms (attempt ${attempt})`,
-            {
-              challengeId,
-              timeoutMs: this.challengeFetchTimeoutMs,
-              status: err.response?.status,
-              error: err.message,
-            },
-          );
-        }
-
-        if (attempt === maxAttempts) {
-          this.logger.error(
-            `Failed to fetch challenge ${challengeId}: ${err.message}`,
-            err.stack,
-            {
-              status: err.response?.status,
-              statusText: err.response?.statusText,
-              data: err.response?.data,
-              url,
-              attempts: maxAttempts,
-              timeoutMs: this.challengeFetchTimeoutMs,
-              code: err.code,
-            },
-          );
-          return null;
-        }
-
-        this.logger.warn(
-          `Attempt ${attempt} failed to fetch challenge ${challengeId}. Retrying in ${this.challengeFetchRetryDelayMs / 1000}s...`,
-          {
-            status: err.response?.status,
-            statusText: err.response?.statusText,
-            data: err.response?.data,
-            url,
-            attempt,
-            remainingAttempts: maxAttempts - attempt,
-            error: err.message,
-            code: err.code,
-          },
-        );
-
-        await new Promise((resolve) =>
-          setTimeout(resolve, this.challengeFetchRetryDelayMs),
-        );
-      }
+    if (!challenge) {
+      return null;
     }
 
-    return null;
+    return this.mapChallenge(challenge);
   }
 
   /**
@@ -291,65 +139,243 @@ export class ChallengeApiService {
     phaseId: string,
     operation: 'open' | 'close',
   ): Promise<PhaseAdvanceResponseDto> {
-    // Get the phase name from the phase ID - the API expects phase name, not phase ID
-    const phaseName = await this.getPhaseTypeName(challengeId, phaseId);
-    if (!phaseName || phaseName === 'Unknown') {
-      this.logger.error(
-        `Cannot advance phase: Phase with ID ${phaseId} not found in challenge ${challengeId}`,
-      );
+    const challenge = await this.prisma.challenge.findUnique({
+      where: { id: challengeId },
+      include: this.challengeInclude,
+    });
+
+    if (!challenge) {
+      this.logger.warn(`Challenge ${challengeId} not found when advancing phase.`);
       return {
         success: false,
-        message: `Phase with ID ${phaseId} not found in challenge ${challengeId}`,
+        message: `Challenge ${challengeId} not found`,
       };
     }
 
-    const body = { phase: phaseName, operation };
-    try {
-      const headers = await this.getAuthHeader();
-      const response = await firstValueFrom(
-        this.httpService.post<PhaseAdvanceResponseDto>(
-          `${this.challengeApiUrl}/challenges/${challengeId}/advance-phase`,
-          body,
-          { headers, timeout: 10000 },
-        ),
-      );
-      return response.data;
-    } catch (error) {
-      const err = error as IChallengeApiError;
-      if (err.response?.status === 400) {
-        this.logger.warn(
-          `Challenge API returned 400 when advancing phase for challenge ${challengeId}`,
-          {
-            phaseId,
-            phaseName,
-            operation,
-            response: {
-              status: err.response.status,
-              statusText: err.response.statusText,
-              data: err.response.data,
-              headers: err.response.headers,
-            },
-          },
-        );
-      }
-      this.logger.error(
-        `Failed to advance phase for challenge ${challengeId}: ${err.message}`,
-        err.stack,
-        {
-          status: err.response?.status,
-          statusText: err.response?.statusText,
-          data: err.response?.data,
-          request: {
-            method: 'POST',
-            url: `${this.challengeApiUrl}/challenges/${challengeId}/advance-phase`,
-            body,
-            headers: await this.getAuthHeader().catch(() => ({
-              error: 'Failed to get auth header',
-            })),
-          },
-        },
-      );
-      return { success: false, message: 'Failed to advance phase' };
+    if (challenge.status !== ChallengeStatusEnum.ACTIVE) {
+      return {
+        success: false,
+        message: `Challenge ${challengeId} is not active (status: ${challenge.status}).`,
+      };
     }
+
+    const targetPhase = challenge.phases.find((phase) => phase.id === phaseId);
+
+    if (!targetPhase) {
+      this.logger.warn(
+        `Phase ${phaseId} not found in challenge ${challengeId} while attempting to ${operation}.`,
+      );
+      return {
+        success: false,
+        message: `Phase ${phaseId} not found in challenge ${challengeId}`,
+      };
+    }
+
+    if (operation === 'open' && targetPhase.isOpen) {
+      return {
+        success: false,
+        message: `Phase ${targetPhase.name} is already open`,
+      };
+    }
+
+    if (operation === 'close' && !targetPhase.isOpen) {
+      return {
+        success: false,
+        message: `Phase ${targetPhase.name} is already closed`,
+      };
+    }
+
+    const now = new Date();
+
+    const currentPhaseNames = new Set<string>(challenge.currentPhaseNames || []);
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (operation === 'open') {
+          currentPhaseNames.add(targetPhase.name);
+          await tx.challengePhase.update({
+            where: { id: targetPhase.id },
+            data: {
+              isOpen: true,
+              actualStartDate: targetPhase.actualStartDate ?? now,
+              actualEndDate: null,
+            },
+          });
+        } else {
+          currentPhaseNames.delete(targetPhase.name);
+          await tx.challengePhase.update({
+            where: { id: targetPhase.id },
+            data: {
+              isOpen: false,
+              actualEndDate: targetPhase.actualEndDate ?? now,
+            },
+          });
+        }
+
+        await tx.challenge.update({
+          where: { id: challengeId },
+          data: {
+            currentPhaseNames: Array.from(currentPhaseNames),
+          },
+        });
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to ${operation} phase ${phaseId} for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+      return { success: false, message: `Failed to ${operation} phase` };
+    }
+
+    const updatedChallenge = await this.prisma.challenge.findUnique({
+      where: { id: challengeId },
+      include: this.challengeInclude,
+    });
+
+    if (!updatedChallenge) {
+      return {
+        success: true,
+        message: `Phase ${targetPhase.name} ${operation}d but failed to reload challenge`,
+      };
+    }
+
+    const hasWinningSubmission =
+      (updatedChallenge.winners || []).length > 0;
+
+    const updatedPhases = updatedChallenge.phases.map((phase) =>
+      this.mapPhase(phase),
+    );
+
+    let nextPhases: IPhase[] | undefined;
+
+    if (operation === 'close') {
+      const successors = updatedChallenge.phases.filter(
+        (phase) =>
+          phase.predecessor === targetPhase.phaseId &&
+          !phase.actualEndDate &&
+          !phase.isOpen,
+      );
+
+      if (successors.length > 0) {
+        nextPhases = successors.map((phase) => this.mapPhase(phase));
+      }
+    }
+
+    return {
+      success: true,
+      hasWinningSubmission,
+      message: `Successfully ${operation}d phase ${targetPhase.name} for challenge ${challengeId}`,
+      updatedPhases,
+      next: nextPhases
+        ? {
+            operation: 'open',
+            phases: nextPhases,
+          }
+        : undefined,
+    };
+  }
+
+  private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
+    return {
+      id: challenge.id,
+      name: challenge.name,
+      description: challenge.description ?? null,
+      descriptionFormat: challenge.descriptionFormat ?? 'markdown',
+      projectId: challenge.projectId ?? 0,
+      typeId: challenge.typeId,
+      trackId: challenge.trackId,
+      timelineTemplateId: challenge.timelineTemplateId ?? '',
+      currentPhaseNames: challenge.currentPhaseNames ?? [],
+      tags: challenge.tags ?? [],
+      groups: challenge.groups ?? [],
+      submissionStartDate: this.ensureTimestamp(
+        challenge.submissionStartDate,
+      ),
+      submissionEndDate: this.ensureTimestamp(challenge.submissionEndDate),
+      registrationStartDate: this.ensureTimestamp(
+        challenge.registrationStartDate,
+      ),
+      registrationEndDate: this.ensureTimestamp(
+        challenge.registrationEndDate,
+      ),
+      startDate: this.ensureTimestamp(challenge.startDate),
+      endDate: this.optionalTimestamp(challenge.endDate),
+      legacyId: challenge.legacyId ?? null,
+      status: challenge.status,
+      createdBy: challenge.createdBy,
+      updatedBy: challenge.updatedBy,
+      metadata: [],
+      phases: challenge.phases.map((phase) => this.mapPhase(phase)),
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: challenge.track?.name ?? '',
+      type: challenge.type?.name ?? '',
+      legacy: challenge.legacyRecord
+        ? {
+            reviewType: challenge.legacyRecord.reviewType,
+            confidentialityType: challenge.legacyRecord.confidentialityType,
+            forumId: challenge.legacyRecord.forumId,
+            directProjectId: challenge.legacyRecord.directProjectId,
+            screeningScorecardId: challenge.legacyRecord.screeningScorecardId,
+            reviewScorecardId: challenge.legacyRecord.reviewScorecardId,
+            isTask: challenge.legacyRecord.isTask,
+            useSchedulingAPI: challenge.legacyRecord.useSchedulingAPI,
+            pureV5Task: challenge.legacyRecord.pureV5Task,
+            pureV5: challenge.legacyRecord.pureV5,
+            selfService: challenge.legacyRecord.selfService,
+            selfServiceCopilot: challenge.legacyRecord.selfServiceCopilot,
+            track: challenge.legacyRecord.track,
+            subTrack: challenge.legacyRecord.subTrack,
+            legacySystemId: challenge.legacyRecord.legacySystemId,
+          }
+        : {},
+      task: {
+        isTask: challenge.taskIsTask,
+        isAssigned: challenge.taskIsAssigned,
+        memberId: challenge.taskMemberId,
+      },
+      created: challenge.createdAt.toISOString(),
+      updated: challenge.updatedAt.toISOString(),
+      overview: {
+        totalPrizes: challenge.overviewTotalPrizes ?? 0,
+      },
+      numOfSubmissions: challenge.numOfSubmissions,
+      numOfCheckpointSubmissions: challenge.numOfCheckpointSubmissions,
+      numOfRegistrants: challenge.numOfRegistrants,
+    };
+  }
+
+  private mapPhase(phase: ChallengePhaseWithConstraints): IPhase {
+    return {
+      id: phase.id,
+      phaseId: phase.phaseId,
+      name: phase.name,
+      description: phase.description ?? null,
+      isOpen: phase.isOpen ?? false,
+      duration: phase.duration ?? 0,
+      scheduledStartDate: this.ensureTimestamp(phase.scheduledStartDate),
+      scheduledEndDate: this.ensureTimestamp(phase.scheduledEndDate),
+      actualStartDate: this.optionalTimestamp(phase.actualStartDate),
+      actualEndDate: this.optionalTimestamp(phase.actualEndDate),
+      predecessor: phase.predecessor ?? null,
+      constraints: phase.constraints?.map((constraint) => ({
+        id: constraint.id,
+        name: constraint.name,
+        value: constraint.value,
+      })) ?? [],
+    };
+  }
+
+  private ensureTimestamp(date?: Date | null): string {
+    return date ? date.toISOString() : new Date(0).toISOString();
+  }
+
+  private optionalTimestamp(date?: Date | null): string | null {
+    return date ? date.toISOString() : null;
   }
 }

@@ -20,11 +20,14 @@ export const validationSchema = Joi.object({
   KAFKA_INITIAL_RETRY_TIME: Joi.number().default(300),
   KAFKA_RETRIES: Joi.number().default(5),
 
-  // Challenge API Configuration
-  CHALLENGE_API_URL: Joi.string().uri().required(),
-  // Removed static M2M token validation - now using Auth0
-  CHALLENGE_API_RETRY_ATTEMPTS: Joi.number().default(3),
-  CHALLENGE_API_RETRY_DELAY: Joi.number().default(1000),
+  // Challenge DB Configuration
+  CHALLENGE_DB_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('postgresql://localhost:5432/challenge'),
+      otherwise: Joi.required(),
+    }),
 
   // Auth0 Configuration (optional in test environment)
   AUTH0_URL: Joi.string()

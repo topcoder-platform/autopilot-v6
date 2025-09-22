@@ -1,17 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ChallengeApiService } from './challenge-api.service';
-import { HttpModule } from '@nestjs/axios';
-import { Auth0Module } from '../auth/auth0.module';
+import { ChallengePrismaService } from './challenge-prisma.service';
 
 @Module({
-  imports: [
-    HttpModule.register({
-      timeout: 10000, // Default timeout for HTTP requests
-      maxRedirects: 5,
-    }),
-    Auth0Module,
-  ],
-  providers: [ChallengeApiService],
+  providers: [ChallengeApiService, ChallengePrismaService],
   exports: [ChallengeApiService],
 })
 export class ChallengeModule {}
