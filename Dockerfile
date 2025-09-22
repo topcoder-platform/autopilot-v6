@@ -7,7 +7,7 @@ FROM base AS deps
 # Install pnpm
 RUN npm install -g pnpm
 # Copy dependency-defining files
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml prisma ./
 # Install dependencies
 RUN pnpm install --frozen-lockfile --prod
 
