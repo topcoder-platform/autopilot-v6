@@ -123,53 +123,56 @@ export class ReviewAssignmentService {
 
     const context: PollerContext = {
       processing: false,
-      interval: setInterval(async () => {
-        if (context.processing) {
+      interval: null as unknown as NodeJS.Timeout,
+    };
+
+    const executePoll = async () => {
+      if (context.processing) {
+        return;
+      }
+
+      context.processing = true;
+      try {
+        const status = await this.evaluateAssignmentStatus(challengeId, phase);
+
+        if (status.phaseMissing) {
+          this.logger.warn(
+            `Review phase ${phase.id} no longer exists on challenge ${challengeId}. Stopping assignment polling.`,
+          );
+          this.clearPolling(challengeId, phase.id);
           return;
         }
 
-        context.processing = true;
-        try {
-          const status = await this.evaluateAssignmentStatus(
-            challengeId,
-            phase,
-          );
-
-          if (status.phaseMissing) {
-            this.logger.warn(
-              `Review phase ${phase.id} no longer exists on challenge ${challengeId}. Stopping assignment polling.`,
-            );
-            this.clearPolling(challengeId, phase.id);
-            return;
-          }
-
-          if (status.phaseOpen) {
-            this.logger.log(
-              `Review phase ${phase.id} for challenge ${challengeId} is already open. Stopping assignment polling.`,
-            );
-            this.clearPolling(challengeId, phase.id);
-            return;
-          }
-
-          if (!status.ready) {
-            return;
-          }
-
+        if (status.phaseOpen) {
           this.logger.log(
-            `Required reviewers detected for challenge ${challengeId}, phase ${phase.id}. Opening review phase automatically.`,
+            `Review phase ${phase.id} for challenge ${challengeId} is already open. Stopping assignment polling.`,
           );
-          await openPhaseCallback();
-        } catch (error) {
-          const err = error as Error;
-          this.logger.error(
-            `Error while polling reviewer assignments for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
-            err.stack,
-          );
-        } finally {
-          context.processing = false;
+          this.clearPolling(challengeId, phase.id);
+          return;
         }
-      }, this.pollIntervalMs),
+
+        if (!status.ready) {
+          return;
+        }
+
+        this.logger.log(
+          `Required reviewers detected for challenge ${challengeId}, phase ${phase.id}. Opening review phase automatically.`,
+        );
+        await openPhaseCallback();
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Error while polling reviewer assignments for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+          err.stack,
+        );
+      } finally {
+        context.processing = false;
+      }
     };
+
+    context.interval = setInterval(() => {
+      void executePoll();
+    }, this.pollIntervalMs);
 
     this.schedulerRegistry.addInterval(key, context.interval);
     this.pollers.set(key, context);

@@ -1,7 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, ChallengeStatusEnum } from '@prisma/client';
+import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { ChallengePrismaService } from './challenge-prisma.service';
-import { IPhase, IChallenge } from './interfaces/challenge.interface';
+import {
+  IPhase,
+  IChallenge,
+  IChallengeWinner,
+} from './interfaces/challenge.interface';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -315,6 +319,7 @@ export class ChallengeApiService {
       reviewers:
         challenge.reviewers?.map((reviewer) => this.mapReviewer(reviewer)) ||
         [],
+      winners: challenge.winners?.map((winner) => this.mapWinner(winner)) || [],
       discussions: [],
       events: [],
       prizeSets: [],
@@ -392,6 +397,45 @@ export class ChallengeApiService {
       type: reviewer.type ?? null,
       aiWorkflowId: reviewer.aiWorkflowId ?? null,
     };
+  }
+
+  private mapWinner(
+    winner: ChallengeWithRelations['winners'][number],
+  ): IChallengeWinner {
+    return {
+      userId: winner.userId,
+      handle: winner.handle,
+      placement: winner.placement,
+      type: winner.type,
+    };
+  }
+
+  async completeChallenge(
+    challengeId: string,
+    winners: IChallengeWinner[],
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.challenge.update({
+        where: { id: challengeId },
+        data: { status: ChallengeStatusEnum.COMPLETED },
+      });
+
+      await tx.challengeWinner.deleteMany({ where: { challengeId } });
+
+      if (winners.length) {
+        await tx.challengeWinner.createMany({
+          data: winners.map((winner) => ({
+            challengeId,
+            userId: winner.userId,
+            handle: winner.handle,
+            placement: winner.placement,
+            type: PrizeSetTypeEnum.PLACEMENT,
+            createdBy: 'Autopilot',
+            updatedBy: 'Autopilot',
+          })),
+        });
+      }
+    });
   }
 
   private ensureTimestamp(date?: Date | null): string {

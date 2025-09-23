@@ -3,6 +3,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
+import { ChallengeCompletionService } from './challenge-completion.service';
 import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
@@ -28,6 +29,7 @@ export class SchedulerService {
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
+    private readonly challengeCompletionService: ChallengeCompletionService,
   ) {}
 
   setPhaseChainCallback(
@@ -289,6 +291,32 @@ export class SchedulerService {
             const err = error as Error;
             this.logger.error(
               `Failed to create pending reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
+        if (operation === 'close') {
+          try {
+            let phases = result.updatedPhases;
+            if (!phases || !phases.length) {
+              phases = await this.challengeApiService.getChallengePhases(
+                data.challengeId,
+              );
+            }
+
+            const hasOpenPhases = phases?.some((phase) => phase.isOpen) ?? true;
+            const hasNextPhases = Boolean(result.next?.phases?.length);
+
+            if (!hasOpenPhases && !hasNextPhases) {
+              await this.challengeCompletionService.finalizeChallenge(
+                data.challengeId,
+              );
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to finalize challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
               err.stack,
             );
           }
