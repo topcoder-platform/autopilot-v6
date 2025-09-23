@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import { PhaseReviewService } from './phase-review.service';
 import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
@@ -26,6 +27,7 @@ export class SchedulerService {
     private schedulerRegistry: SchedulerRegistry,
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
+    private readonly phaseReviewService: PhaseReviewService,
   ) {}
 
   setPhaseChainCallback(
@@ -276,6 +278,21 @@ export class SchedulerService {
         this.logger.log(
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
+
+        if (operation === 'open') {
+          try {
+            await this.phaseReviewService.handlePhaseOpened(
+              data.challengeId,
+              data.phaseId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to create pending reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
 
         // Handle phase transition chain - open and schedule next phases if they exist
         if (

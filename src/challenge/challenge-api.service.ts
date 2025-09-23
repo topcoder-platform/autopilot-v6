@@ -34,6 +34,7 @@ const challengeWithRelationsArgs =
       track: true,
       type: true,
       legacyRecord: true,
+      reviewers: true,
     },
   });
 
@@ -311,6 +312,9 @@ export class ChallengeApiService {
       updatedBy: challenge.updatedBy,
       metadata: [],
       phases: challenge.phases.map((phase) => this.mapPhase(phase)),
+      reviewers: challenge.reviewers?.map((reviewer) =>
+        this.mapReviewer(reviewer),
+      ) || [],
       discussions: [],
       events: [],
       prizeSets: [],
@@ -373,6 +377,20 @@ export class ChallengeApiService {
           name: constraint.name,
           value: constraint.value,
         })) ?? [],
+    };
+  }
+
+  private mapReviewer(reviewer: ChallengeWithRelations['reviewers'][number]) {
+    return {
+      id: reviewer.id,
+      scorecardId: reviewer.scorecardId,
+      isMemberReview: reviewer.isMemberReview,
+      memberReviewerCount: reviewer.memberReviewerCount ?? null,
+      phaseId: reviewer.phaseId,
+      basePayment: reviewer.basePayment ?? null,
+      incrementalPayment: reviewer.incrementalPayment ?? null,
+      type: reviewer.type ?? null,
+      aiWorkflowId: reviewer.aiWorkflowId ?? null,
     };
   }
 

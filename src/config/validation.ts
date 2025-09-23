@@ -28,6 +28,20 @@ export const validationSchema = Joi.object({
       then: Joi.optional().default('postgresql://localhost:5432/challenge'),
       otherwise: Joi.required(),
     }),
+  REVIEW_DB_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('postgresql://localhost:5432/review'),
+      otherwise: Joi.required(),
+    }),
+  RESOURCES_DB_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('postgresql://localhost:5432/resources'),
+      otherwise: Joi.required(),
+    }),
 
   // Auth0 Configuration (optional in test environment)
   AUTH0_URL: Joi.string()

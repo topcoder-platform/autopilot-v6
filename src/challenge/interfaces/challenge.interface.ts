@@ -21,6 +21,18 @@ export interface IPhase {
   constraints: any[];
 }
 
+export interface IChallengeReviewer {
+  id: string;
+  scorecardId: string;
+  isMemberReview: boolean;
+  memberReviewerCount: number | null;
+  phaseId: string;
+  basePayment: number | null;
+  incrementalPayment: number | null;
+  type: string | null;
+  aiWorkflowId: string | null;
+}
+
 /**
  * Represents a full challenge object from the Challenge API.
  */
@@ -48,6 +60,7 @@ export interface IChallenge {
   updatedBy: string;
   metadata: any[];
   phases: IPhase[];
+  reviewers: IChallengeReviewer[];
   discussions: any[];
   events: any[];
   prizeSets: any[];
