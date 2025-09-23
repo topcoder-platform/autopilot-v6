@@ -249,12 +249,19 @@ export class ChallengeApiService {
     let nextPhases: IPhase[] | undefined;
 
     if (operation === 'close') {
-      const successors = updatedChallenge.phases.filter(
-        (phase) =>
-          phase.predecessor === targetPhase.phaseId &&
-          !phase.actualEndDate &&
-          !phase.isOpen,
-      );
+      const successors = updatedChallenge.phases.filter((phase) => {
+        if (!phase.predecessor) {
+          return false;
+        }
+
+        const predecessorMatches =
+          phase.predecessor === targetPhase.phaseId ||
+          phase.predecessor === targetPhase.id;
+
+        return (
+          predecessorMatches && !phase.actualEndDate && !phase.isOpen
+        );
+      });
 
       if (successors.length > 0) {
         nextPhases = successors.map((phase) => this.mapPhase(phase));

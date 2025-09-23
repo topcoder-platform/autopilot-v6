@@ -66,7 +66,9 @@ export class SyncService {
               // Check predecessor requirements
               if (phase.predecessor) {
                 const predecessor = challenge.phases.find(
-                  (p) => p.phaseId === phase.predecessor,
+                  (p) =>
+                    p.phaseId === phase.predecessor ||
+                    p.id === phase.predecessor,
                 );
                 if (!predecessor || !predecessor.actualEndDate) {
                   // Predecessor hasn't ended yet, skip this phase

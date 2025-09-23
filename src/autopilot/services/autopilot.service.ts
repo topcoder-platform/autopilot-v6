@@ -453,8 +453,12 @@ export class AutopilotService {
         return true; // No predecessor, ready to start
       }
 
-      const predecessor = phases.find((p) => p.phaseId === phase.predecessor);
-      return predecessor && predecessor.actualEndDate; // Predecessor has ended
+      const predecessor = phases.find(
+        (p) =>
+          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+      );
+
+      return Boolean(predecessor?.actualEndDate); // Predecessor has ended
     });
 
     if (phasesToOpen.length > 0) {
@@ -497,9 +501,12 @@ export class AutopilotService {
         return true; // No predecessor, ready to start
       }
 
-      // Check if predecessor has ended
-      const predecessor = phases.find((p) => p.phaseId === phase.predecessor);
-      return predecessor && predecessor.actualEndDate;
+      const predecessor = phases.find(
+        (p) =>
+          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+      );
+
+      return Boolean(predecessor?.actualEndDate);
     });
 
     if (readyPhases.length === 0) {
