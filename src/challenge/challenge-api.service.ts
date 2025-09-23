@@ -143,8 +143,8 @@ export class ChallengeApiService {
 
     this.logger.debug(
       `Attempting to ${operation} phase ${phaseId} for challenge ${challengeId}`,
-    );  
-    
+    );
+
     if (!challenge) {
       this.logger.warn(
         `Challenge ${challengeId} not found when advancing phase.`,
@@ -312,9 +312,9 @@ export class ChallengeApiService {
       updatedBy: challenge.updatedBy,
       metadata: [],
       phases: challenge.phases.map((phase) => this.mapPhase(phase)),
-      reviewers: challenge.reviewers?.map((reviewer) =>
-        this.mapReviewer(reviewer),
-      ) || [],
+      reviewers:
+        challenge.reviewers?.map((reviewer) => this.mapReviewer(reviewer)) ||
+        [],
       discussions: [],
       events: [],
       prizeSets: [],

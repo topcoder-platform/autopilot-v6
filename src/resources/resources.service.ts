@@ -34,7 +34,8 @@ export class ResourcesService {
         AND rr."name" IN (${roleList})
     `;
 
-    const reviewers = await this.prisma.$queryRaw<ReviewerResourceRecord[]>(query);
+    const reviewers =
+      await this.prisma.$queryRaw<ReviewerResourceRecord[]>(query);
     return reviewers;
   }
 }

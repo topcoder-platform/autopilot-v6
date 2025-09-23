@@ -49,9 +49,10 @@ export class ReviewAssignmentService {
     );
 
     const defaultInterval = 5 * 60 * 1000; // 5 minutes
-    this.pollIntervalMs = configuredInterval && configuredInterval > 0
-      ? configuredInterval
-      : defaultInterval;
+    this.pollIntervalMs =
+      configuredInterval && configuredInterval > 0
+        ? configuredInterval
+        : defaultInterval;
   }
 
   async ensureAssignmentsOrSchedule(
@@ -129,7 +130,10 @@ export class ReviewAssignmentService {
 
         context.processing = true;
         try {
-          const status = await this.evaluateAssignmentStatus(challengeId, phase);
+          const status = await this.evaluateAssignmentStatus(
+            challengeId,
+            phase,
+          );
 
           if (status.phaseMissing) {
             this.logger.warn(

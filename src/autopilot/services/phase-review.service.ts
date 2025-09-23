@@ -18,11 +18,9 @@ export class PhaseReviewService {
     private readonly resourcesService: ResourcesService,
   ) {}
 
-  async handlePhaseOpened(
-    challengeId: string,
-    phaseId: string,
-  ): Promise<void> {
-    const challenge = await this.challengeApiService.getChallengeById(challengeId);
+  async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
+    const challenge =
+      await this.challengeApiService.getChallengeById(challengeId);
     const phase = challenge.phases.find((p) => p.id === phaseId);
 
     if (!phase) {
@@ -48,7 +46,11 @@ export class PhaseReviewService {
       return;
     }
 
-    const scorecardId = this.pickScorecardId(reviewerConfigs, challengeId, phase.id);
+    const scorecardId = this.pickScorecardId(
+      reviewerConfigs,
+      challengeId,
+      phase.id,
+    );
     if (!scorecardId) {
       return;
     }
@@ -66,7 +68,8 @@ export class PhaseReviewService {
       return;
     }
 
-    const submissionIds = await this.reviewService.getActiveSubmissionIds(challengeId);
+    const submissionIds =
+      await this.reviewService.getActiveSubmissionIds(challengeId);
     if (!submissionIds.length) {
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,
@@ -74,7 +77,9 @@ export class PhaseReviewService {
       return;
     }
 
-    const existingPairs = await this.reviewService.getExistingReviewPairs(phase.id);
+    const existingPairs = await this.reviewService.getExistingReviewPairs(
+      phase.id,
+    );
 
     let createdCount = 0;
     for (const resource of reviewerResources) {
