@@ -1,0 +1,25 @@
+datasource autopilot {
+  provider = "postgresql"
+  url      = env("AUTOPILOT_DB_URL")
+  schemas  = ["autopilot"]
+}
+
+generator autopilotClient {
+  provider = "prisma-client-js"
+  output   = "../src/autopilot/generated/autopilot-client"
+}
+
+/// Records detailed database interactions performed by the autopilot service.
+model AutopilotAction {
+  id          String   @id @default(uuid())
+  challengeId String?
+  action      String
+  status      String   @default("SUCCESS")
+  source      String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([challengeId])
+  @@map("actions")
+  @@schema("autopilot")
+}

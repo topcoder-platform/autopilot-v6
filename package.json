@@ -18,8 +18,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "prisma:generate": "prisma generate",
-    "postinstall": "prisma generate"
+    "prisma:generate": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma",
+    "postinstall": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma",
+    "prisma:pushautopilot": "prisma db push --schema prisma/autopilot.schema.prisma"
   },
   "prisma": {
     "schema": "prisma/challenge.schema.prisma"

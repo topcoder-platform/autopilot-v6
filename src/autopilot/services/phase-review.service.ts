@@ -79,6 +79,7 @@ export class PhaseReviewService {
 
     const existingPairs = await this.reviewService.getExistingReviewPairs(
       phase.id,
+      challengeId,
     );
 
     let createdCount = 0;
@@ -95,6 +96,7 @@ export class PhaseReviewService {
             resource.id,
             phase.id,
             scorecardId,
+            challengeId,
           );
           existingPairs.add(key);
           createdCount++;

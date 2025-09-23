@@ -4,6 +4,7 @@ import challengeConfig from './sections/challenge.config';
 import reviewConfig from './sections/review.config';
 import resourcesConfig from './sections/resources.config';
 import auth0Config from './sections/auth0.config';
+import autopilotConfig from './sections/autopilot.config';
 
 export default () => ({
   app: appConfig(),
@@ -12,4 +13,5 @@ export default () => ({
   review: reviewConfig(),
   resources: resourcesConfig(),
   auth0: auth0Config(),
+  autopilot: autopilotConfig(),
 });
