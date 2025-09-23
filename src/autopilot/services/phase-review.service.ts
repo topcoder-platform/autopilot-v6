@@ -3,12 +3,10 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
-
-const REVIEW_PHASE_NAMES = new Set(['Review', 'Iterative Review']);
-const PHASE_ROLE_MAP: Record<string, string[]> = {
-  Review: ['Reviewer'],
-  'Iterative Review': ['Iterative Reviewer'],
-};
+import {
+  getRoleNamesForPhase,
+  REVIEW_PHASE_NAMES,
+} from '../constants/review.constants';
 
 @Injectable()
 export class PhaseReviewService {
@@ -55,7 +53,7 @@ export class PhaseReviewService {
       return;
     }
 
-    const roleNames = PHASE_ROLE_MAP[phase.name] ?? ['Reviewer', 'Iterative Reviewer'];
+    const roleNames = getRoleNamesForPhase(phase.name);
     const reviewerResources = await this.resourcesService.getReviewerResources(
       challengeId,
       roleNames,

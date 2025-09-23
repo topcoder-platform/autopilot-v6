@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
+import { PhaseReviewService } from './phase-review.service';
+import { ReviewAssignmentService } from './review-assignment.service';
 import {
   PhaseTransitionPayload,
   ChallengeUpdatePayload,
@@ -9,6 +11,7 @@ import {
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
+import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
 
 @Injectable()
 export class AutopilotService {
@@ -19,6 +22,8 @@ export class AutopilotService {
   constructor(
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
+    private readonly phaseReviewService: PhaseReviewService,
+    private readonly reviewAssignmentService: ReviewAssignmentService,
   ) {
     // Set up the phase chain callback to handle next phase opening and scheduling
     this.schedulerService.setPhaseChainCallback(
@@ -540,67 +545,33 @@ export class AutopilotService {
     );
 
     let processedCount = 0;
+    let deferredCount = 0;
+
     for (const nextPhase of nextPhases) {
-      try {
-        // Step 1: Open the phase first
-        this.logger.log(
-          `[PHASE CHAIN] Opening phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}`,
-        );
-
-        const openResult = await this.challengeApiService.advancePhase(
+      const openPhaseCallback = async () =>
+        await this.openPhaseAndSchedule(
           challengeId,
-          nextPhase.id,
-          'open',
-        );
-
-        if (!openResult.success) {
-          this.logger.error(
-            `[PHASE CHAIN] Failed to open phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}: ${openResult.message}`,
-          );
-          continue;
-        }
-
-        this.logger.log(
-          `[PHASE CHAIN] Successfully opened phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}`,
-        );
-
-        // Step 2: Schedule the phase for closure (use updated phase data from API response)
-        const updatedPhase =
-          openResult.updatedPhases?.find((p) => p.id === nextPhase.id) ||
-          nextPhase;
-
-        if (!updatedPhase.scheduledEndDate) {
-          this.logger.warn(
-            `[PHASE CHAIN] Opened phase ${nextPhase.name} (${nextPhase.id}) has no scheduled end date, skipping scheduling`,
-          );
-          continue;
-        }
-
-        // Check if this phase is already scheduled to avoid duplicates
-        const phaseKey = `${challengeId}:${nextPhase.id}`;
-        if (this.activeSchedules.has(phaseKey)) {
-          this.logger.log(
-            `[PHASE CHAIN] Phase ${nextPhase.name} (${nextPhase.id}) is already scheduled, skipping`,
-          );
-          continue;
-        }
-
-        const nextPhaseData: PhaseTransitionPayload = {
           projectId,
-          challengeId,
-          phaseId: updatedPhase.id,
-          phaseTypeName: updatedPhase.name,
-          state: 'END',
-          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
           projectStatus,
-          date: updatedPhase.scheduledEndDate,
-        };
-
-        const jobId = this.schedulePhaseTransition(nextPhaseData);
-        processedCount++;
-        this.logger.log(
-          `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${jobId}`,
+          nextPhase,
         );
+
+      try {
+        const canOpenNow = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+          challengeId,
+          nextPhase,
+          openPhaseCallback,
+        );
+
+        if (!canOpenNow) {
+          deferredCount++;
+          continue;
+        }
+
+        const opened = await openPhaseCallback();
+        if (opened) {
+          processedCount++;
+        }
       } catch (error) {
         const err = error as Error;
         this.logger.error(
@@ -610,9 +581,91 @@ export class AutopilotService {
       }
     }
 
+    const summaryParts = [`opened and scheduled ${processedCount} out of ${nextPhases.length}`];
+    if (deferredCount > 0) {
+      summaryParts.push(`deferred ${deferredCount} awaiting reviewer assignments`);
+    }
+
     this.logger.log(
-      `[PHASE CHAIN] Successfully opened and scheduled ${processedCount} out of ${nextPhases.length} next phases for challenge ${challengeId}`,
+      `[PHASE CHAIN] ${summaryParts.join(', ')} for challenge ${challengeId}`,
     );
+  }
+
+  private async openPhaseAndSchedule(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    phase: IPhase,
+  ): Promise<boolean> {
+    this.logger.log(
+      `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+    );
+
+    const openResult = await this.challengeApiService.advancePhase(
+      challengeId,
+      phase.id,
+      'open',
+    );
+
+    if (!openResult.success) {
+      this.logger.error(
+        `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${openResult.message}`,
+      );
+      return false;
+    }
+
+    this.reviewAssignmentService.clearPolling(challengeId, phase.id);
+
+    this.logger.log(
+      `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+    );
+
+    if (REVIEW_PHASE_NAMES.has(phase.name)) {
+      try {
+        await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    const updatedPhase =
+      openResult.updatedPhases?.find((p) => p.id === phase.id) || phase;
+
+    if (!updatedPhase.scheduledEndDate) {
+      this.logger.warn(
+        `[PHASE CHAIN] Opened phase ${phase.name} (${phase.id}) has no scheduled end date, skipping scheduling`,
+      );
+      return false;
+    }
+
+    const phaseKey = `${challengeId}:${phase.id}`;
+    if (this.activeSchedules.has(phaseKey)) {
+      this.logger.log(
+        `[PHASE CHAIN] Phase ${phase.name} (${phase.id}) is already scheduled, skipping`,
+      );
+      return false;
+    }
+
+    const nextPhaseData: PhaseTransitionPayload = {
+      projectId,
+      challengeId,
+      phaseId: updatedPhase.id,
+      phaseTypeName: updatedPhase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus,
+      date: updatedPhase.scheduledEndDate,
+    };
+
+    const jobId = this.schedulePhaseTransition(nextPhaseData);
+    this.logger.log(
+      `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${jobId}`,
+    );
+    return true;
   }
 
   /**

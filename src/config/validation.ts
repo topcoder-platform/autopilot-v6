@@ -42,6 +42,10 @@ export const validationSchema = Joi.object({
       then: Joi.optional().default('postgresql://localhost:5432/resources'),
       otherwise: Joi.required(),
     }),
+  REVIEWER_POLL_INTERVAL_MS: Joi.number()
+    .integer()
+    .positive()
+    .default(5 * 60 * 1000),
 
   // Auth0 Configuration (optional in test environment)
   AUTH0_URL: Joi.string()
