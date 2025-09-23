@@ -140,6 +140,10 @@ export class ChallengeApiService {
       where: { id: challengeId },
     });
 
+    this.logger.debug(
+      `Attempting to ${operation} phase ${phaseId} for challenge ${challengeId}`,
+    );  
+    
     if (!challenge) {
       this.logger.warn(
         `Challenge ${challengeId} not found when advancing phase.`,
@@ -258,9 +262,7 @@ export class ChallengeApiService {
           phase.predecessor === targetPhase.phaseId ||
           phase.predecessor === targetPhase.id;
 
-        return (
-          predecessorMatches && !phase.actualEndDate && !phase.isOpen
-        );
+        return predecessorMatches && !phase.actualEndDate && !phase.isOpen;
       });
 
       if (successors.length > 0) {

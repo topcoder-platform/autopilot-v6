@@ -150,8 +150,7 @@ export class RecoveryService implements OnApplicationBootstrap {
           if (phase.predecessor) {
             const predecessor = phases.find(
               (p) =>
-                p.phaseId === phase.predecessor ||
-                p.id === phase.predecessor,
+                p.phaseId === phase.predecessor || p.id === phase.predecessor,
             );
             if (!predecessor || !predecessor.actualEndDate) {
               // Predecessor hasn't ended yet, skip this phase
@@ -222,8 +221,7 @@ export class RecoveryService implements OnApplicationBootstrap {
       }
 
       const predecessor = phases.find(
-        (p) =>
-          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+        (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
       );
       return Boolean(predecessor?.actualEndDate); // Predecessor has ended
     });
@@ -275,8 +273,7 @@ export class RecoveryService implements OnApplicationBootstrap {
 
       // Check if predecessor has ended
       const predecessor = phases.find(
-        (p) =>
-          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+        (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
       );
       return Boolean(predecessor?.actualEndDate);
     });

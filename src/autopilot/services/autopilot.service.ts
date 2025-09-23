@@ -454,8 +454,7 @@ export class AutopilotService {
       }
 
       const predecessor = phases.find(
-        (p) =>
-          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+        (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
       );
 
       return Boolean(predecessor?.actualEndDate); // Predecessor has ended
@@ -502,8 +501,7 @@ export class AutopilotService {
       }
 
       const predecessor = phases.find(
-        (p) =>
-          p.phaseId === phase.predecessor || p.id === phase.predecessor,
+        (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
       );
 
       return Boolean(predecessor?.actualEndDate);
