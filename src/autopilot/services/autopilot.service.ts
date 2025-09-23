@@ -43,6 +43,10 @@ export class AutopilotService {
     );
   }
 
+  private isChallengeActive(status?: string): boolean {
+    return (status ?? '').toUpperCase() === 'ACTIVE';
+  }
+
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
     try {
       const phaseKey = `${phaseData.challengeId}:${phaseData.phaseId}`;
@@ -141,6 +145,13 @@ export class AutopilotService {
       `Consumed phase transition event: ${JSON.stringify(message)}`,
     );
 
+    if (!this.isChallengeActive(message.projectStatus)) {
+      this.logger.log(
+        `Ignoring phase transition for challenge ${message.challengeId} with status ${message.projectStatus}; only ACTIVE challenges are processed.`,
+      );
+      return;
+    }
+
     if (message.state === 'START') {
       // Advance the phase (open it) using the scheduler service
       void (async () => {
@@ -196,6 +207,13 @@ export class AutopilotService {
       const challengeDetails = await this.challengeApiService.getChallengeById(
         challenge.id,
       );
+
+      if (!this.isChallengeActive(challengeDetails.status)) {
+        this.logger.log(
+          `Skipping challenge ${challenge.id} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
+        );
+        return;
+      }
 
       if (!challengeDetails.phases) {
         this.logger.warn(
@@ -265,6 +283,13 @@ export class AutopilotService {
       const challengeDetails = await this.challengeApiService.getChallengeById(
         message.id,
       );
+
+      if (!this.isChallengeActive(challengeDetails.status)) {
+        this.logger.log(
+          `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
+        );
+        return;
+      }
 
       if (!challengeDetails.phases) {
         this.logger.warn(
@@ -393,6 +418,13 @@ export class AutopilotService {
               if (!challengeDetails) {
                 this.logger.error(
                   `Could not find challenge with ID ${challengeId} to reschedule.`,
+                );
+                return;
+              }
+
+              if (!this.isChallengeActive(challengeDetails.status)) {
+                this.logger.log(
+                  `${AUTOPILOT_COMMANDS.RESCHEDULE_PHASE}: ignoring challenge ${challengeId} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
                 );
                 return;
               }
@@ -533,6 +565,13 @@ export class AutopilotService {
     projectStatus: string,
     nextPhases: IPhase[],
   ): Promise<void> {
+    if (!this.isChallengeActive(projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}), skipping phase chain processing.`,
+      );
+      return;
+    }
+
     if (!nextPhases || nextPhases.length === 0) {
       this.logger.log(
         `[PHASE CHAIN] No next phases to open for challenge ${challengeId}`,
@@ -597,6 +636,13 @@ export class AutopilotService {
     projectStatus: string,
     phase: IPhase,
   ): Promise<boolean> {
+    if (!this.isChallengeActive(projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}); skipping phase ${phase.name} (${phase.id}).`,
+      );
+      return false;
+    }
+
     this.logger.log(
       `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
