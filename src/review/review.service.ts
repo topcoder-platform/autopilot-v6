@@ -59,7 +59,10 @@ export class ReviewService {
           AND rs."isFinal" = true
           AND rs."aggregateScore" IS NOT NULL
           AND s."memberId" IS NOT NULL
-          AND s."type" = 'CONTEST_SUBMISSION'
+          AND (
+            s."type" IS NULL
+            OR upper(s."type") = 'CONTEST_SUBMISSION'
+          )
         ORDER BY rs."aggregateScore" DESC, s."submittedDate" ASC, s."id" ASC
         ${limitClause}
       `);
