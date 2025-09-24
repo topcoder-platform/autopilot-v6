@@ -23,6 +23,11 @@ export class SchedulerService {
         nextPhases: any[],
       ) => Promise<void> | void)
     | null = null;
+  private finalizationRetryJobs = new Map<string, string>();
+  private finalizationAttempts = new Map<string, number>();
+  private readonly finalizationRetryBaseDelayMs = 60_000;
+  private readonly finalizationRetryMaxAttempts = 10;
+  private readonly finalizationRetryMaxDelayMs = 10 * 60 * 1000;
 
   constructor(
     private schedulerRegistry: SchedulerRegistry,
@@ -311,9 +316,7 @@ export class SchedulerService {
             const hasNextPhases = Boolean(result.next?.phases?.length);
 
             if (!hasOpenPhases && !hasNextPhases && !hasIncompletePhases) {
-              await this.challengeCompletionService.finalizeChallenge(
-                data.challengeId,
-              );
+              await this.attemptChallengeFinalization(data.challengeId);
             } else {
               const pendingCount = phases?.reduce((pending, phase) => {
                 return pending + (phase.isOpen || !phase.actualEndDate ? 1 : 0);
@@ -384,5 +387,111 @@ export class SchedulerService {
         },
       );
     }
+  }
+
+  private async attemptChallengeFinalization(
+    challengeId: string,
+  ): Promise<void> {
+    const attempt = (this.finalizationAttempts.get(challengeId) ?? 0) + 1;
+    this.finalizationAttempts.set(challengeId, attempt);
+
+    try {
+      const completed =
+        await this.challengeCompletionService.finalizeChallenge(challengeId);
+
+      if (completed) {
+        this.logger.log(
+          `Successfully finalized challenge ${challengeId} after ${attempt} attempt(s).`,
+        );
+        this.clearFinalizationRetry(challengeId);
+        this.finalizationAttempts.delete(challengeId);
+        return;
+      }
+
+      this.logger.log(
+        `Final review scores not yet available for challenge ${challengeId}; scheduling retry attempt ${attempt + 1}.`,
+      );
+      this.scheduleFinalizationRetry(challengeId, attempt);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Attempt ${attempt} to finalize challenge ${challengeId} failed: ${err.message}`,
+        err.stack,
+      );
+      this.scheduleFinalizationRetry(challengeId, attempt);
+    }
+  }
+
+  private scheduleFinalizationRetry(
+    challengeId: string,
+    attempt: number,
+  ): void {
+    const existingJobId = this.finalizationRetryJobs.get(challengeId);
+    if (
+      existingJobId &&
+      this.schedulerRegistry.doesExist('timeout', existingJobId)
+    ) {
+      this.logger.debug?.(
+        `Finalization retry already scheduled for challenge ${challengeId}; skipping duplicate schedule.`,
+      );
+      return;
+    }
+
+    if (attempt >= this.finalizationRetryMaxAttempts) {
+      this.logger.error(
+        `Reached maximum finalization attempts (${this.finalizationRetryMaxAttempts}) for challenge ${challengeId}. Manual intervention required to resolve winners.`,
+      );
+      this.clearFinalizationRetry(challengeId);
+      this.finalizationAttempts.delete(challengeId);
+      return;
+    }
+
+    const delay = this.computeFinalizationDelay(attempt);
+    const jobId = `challenge-finalize:${challengeId}:${attempt + 1}`;
+
+    const timeout = setTimeout(() => {
+      try {
+        if (this.schedulerRegistry.doesExist('timeout', jobId)) {
+          this.schedulerRegistry.deleteTimeout(jobId);
+        }
+      } catch (cleanupError) {
+        this.logger.error(
+          `Failed to clean up finalization retry job ${jobId}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        );
+      } finally {
+        this.finalizationRetryJobs.delete(challengeId);
+      }
+
+      void this.attemptChallengeFinalization(challengeId);
+    }, delay);
+
+    try {
+      this.schedulerRegistry.addTimeout(jobId, timeout);
+      this.finalizationRetryJobs.set(challengeId, jobId);
+      this.logger.log(
+        `Scheduled finalization retry ${attempt + 1} for challenge ${challengeId} in ${Math.round(delay / 1000)} second(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to schedule finalization retry for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+      clearTimeout(timeout);
+    }
+  }
+
+  private computeFinalizationDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.finalizationRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.finalizationRetryMaxDelayMs);
+  }
+
+  private clearFinalizationRetry(challengeId: string): void {
+    const jobId = this.finalizationRetryJobs.get(challengeId);
+    if (jobId && this.schedulerRegistry.doesExist('timeout', jobId)) {
+      this.schedulerRegistry.deleteTimeout(jobId);
+    }
+    this.finalizationRetryJobs.delete(challengeId);
   }
 }

@@ -14,7 +14,7 @@ export class ChallengeCompletionService {
     private readonly resourcesService: ResourcesService,
   ) {}
 
-  async finalizeChallenge(challengeId: string): Promise<void> {
+  async finalizeChallenge(challengeId: string): Promise<boolean> {
     const challenge =
       await this.challengeApiService.getChallengeById(challengeId);
 
@@ -26,7 +26,7 @@ export class ChallengeCompletionService {
       this.logger.log(
         `Challenge ${challengeId} is already completed with winners; skipping finalization.`,
       );
-      return;
+      return true;
     }
 
     const scoreRows = await this.reviewService.getTopFinalReviewScores(
@@ -35,11 +35,18 @@ export class ChallengeCompletionService {
     );
 
     if (!scoreRows.length) {
+      if ((challenge.numOfSubmissions ?? 0) > 0) {
+        this.logger.warn(
+          `Final review scores are not yet available for challenge ${challengeId}. Will retry finalization later.`,
+        );
+        return false;
+      }
+
       this.logger.warn(
-        `No final review scores found for challenge ${challengeId}; marking completed without winners.`,
+        `No submissions found for challenge ${challengeId}; marking completed without winners.`,
       );
       await this.challengeApiService.completeChallenge(challengeId, []);
-      return;
+      return true;
     }
 
     const memberIds = scoreRows.map((row) => row.memberId);
@@ -74,12 +81,13 @@ export class ChallengeCompletionService {
         `Unable to derive any numeric winners for challenge ${challengeId}; marking completed without winners.`,
       );
       await this.challengeApiService.completeChallenge(challengeId, []);
-      return;
+      return true;
     }
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s).`,
     );
+    return true;
   }
 }
