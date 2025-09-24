@@ -53,8 +53,10 @@ export class AutopilotDbLoggerService {
     }
 
     const { challengeId = null, source, status = 'SUCCESS', details } = payload;
-    const serializedDetails =
-      details === undefined || details === null ? null : JSON.stringify(details);
+    const detailsFragment =
+      details === undefined || details === null
+        ? Prisma.sql`NULL`
+        : Prisma.sql`${JSON.stringify(details)}::jsonb`;
 
     try {
       await this.prisma.$executeRaw(
@@ -73,7 +75,7 @@ export class AutopilotDbLoggerService {
             ${action},
             ${status},
             ${source ?? null},
-            ${serializedDetails},
+            ${detailsFragment},
             NOW()
           )
         `,
