@@ -306,11 +306,20 @@ export class SchedulerService {
             }
 
             const hasOpenPhases = phases?.some((phase) => phase.isOpen) ?? true;
+            const hasIncompletePhases =
+              phases?.some((phase) => !phase.actualEndDate) ?? true;
             const hasNextPhases = Boolean(result.next?.phases?.length);
 
-            if (!hasOpenPhases && !hasNextPhases) {
+            if (!hasOpenPhases && !hasNextPhases && !hasIncompletePhases) {
               await this.challengeCompletionService.finalizeChallenge(
                 data.challengeId,
+              );
+            } else {
+              const pendingCount = phases?.reduce((pending, phase) => {
+                return pending + (phase.isOpen || !phase.actualEndDate ? 1 : 0);
+              }, 0);
+              this.logger.debug?.(
+                `Challenge ${data.challengeId} not ready for completion after closing phase ${data.phaseId}. Pending phases: ${pendingCount ?? 'unknown'}, next phases: ${result.next?.phases?.length ?? 0}.`,
               );
             }
           } catch (error) {
