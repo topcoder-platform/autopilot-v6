@@ -13,6 +13,9 @@ export const validationSchema = Joi.object({
   LOG_DIR: Joi.string().default('logs'),
   ENABLE_FILE_LOGGING: Joi.boolean().default(false),
   DB_DEBUG: Joi.boolean().default(false),
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .default('redis://127.0.0.1:6379'),
 
   // Kafka Configuration
   KAFKA_BROKERS: Joi.string().required(),
@@ -43,13 +46,11 @@ export const validationSchema = Joi.object({
       then: Joi.optional().default('postgresql://localhost:5432/resources'),
       otherwise: Joi.required(),
     }),
-  AUTOPILOT_DB_URL: Joi.string()
-    .uri()
-    .when('DB_DEBUG', {
-      is: true,
-      then: Joi.required(),
-      otherwise: Joi.optional(),
-    }),
+  AUTOPILOT_DB_URL: Joi.string().uri().when('DB_DEBUG', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
   REVIEWER_POLL_INTERVAL_MS: Joi.number()
     .integer()
     .positive()

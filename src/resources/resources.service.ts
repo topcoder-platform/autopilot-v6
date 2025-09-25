@@ -103,7 +103,10 @@ export class ResourcesService {
         challengeId,
         status: 'SUCCESS',
         source: ResourcesService.name,
-        details: { roleCount: roleNames.length, reviewerCount: reviewers.length },
+        details: {
+          roleCount: roleNames.length,
+          reviewerCount: reviewers.length,
+        },
       });
 
       return reviewers;

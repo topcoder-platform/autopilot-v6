@@ -109,7 +109,7 @@ export class RecoveryService implements OnApplicationBootstrap {
             this.logger.log(
               `Scheduling phase ${phase.name} (${phase.id}) for challenge ${challenge.id} to ${state} at ${scheduleDate}`,
             );
-            this.autopilotService.schedulePhaseTransition(phaseData);
+            await this.autopilotService.schedulePhaseTransition(phaseData);
           }
         }
       }

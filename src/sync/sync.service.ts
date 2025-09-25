@@ -113,7 +113,7 @@ export class SyncService {
             this.logger.log(
               `New active phase found: ${phaseKey} (${state}). Scheduling for ${scheduleDate}...`,
             );
-            this.autopilotService.schedulePhaseTransition(phaseData);
+            await this.autopilotService.schedulePhaseTransition(phaseData);
             added++;
           } else if (
             scheduledJob.date &&
@@ -124,7 +124,7 @@ export class SyncService {
             this.logger.log(
               `Phase ${phaseKey} has updated timing or state. Rescheduling from ${scheduledJob.state} at ${scheduledJob.date} to ${state} at ${scheduleDate}...`,
             );
-            void this.autopilotService.reschedulePhaseTransition(
+            await this.autopilotService.reschedulePhaseTransition(
               challenge.id,
               phaseData,
             );
@@ -140,7 +140,10 @@ export class SyncService {
             `Obsolete schedule found: ${scheduledPhaseKey}. Cancelling...`,
           );
           const [challengeId, phaseId] = scheduledPhaseKey.split(':');
-          this.autopilotService.cancelPhaseTransition(challengeId, phaseId);
+          await this.autopilotService.cancelPhaseTransition(
+            challengeId,
+            phaseId,
+          );
           removed++;
         }
       }

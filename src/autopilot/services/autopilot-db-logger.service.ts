@@ -103,7 +103,7 @@ export class AutopilotDbLoggerService {
   private async initializeSchema(): Promise<void> {
     try {
       await this.prisma.$executeRaw(
-        Prisma.sql`CREATE SCHEMA IF NOT EXISTS "autopilot"`
+        Prisma.sql`CREATE SCHEMA IF NOT EXISTS "autopilot"`,
       );
 
       await this.prisma.$executeRaw(

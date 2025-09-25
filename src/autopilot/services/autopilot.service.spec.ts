@@ -4,7 +4,10 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
 import { SubmissionAggregatePayload } from '../interfaces/autopilot.interface';
-import { IChallenge, IPhase } from '../../challenge/interfaces/challenge.interface';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 
 describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   const isoNow = new Date().toISOString();
@@ -25,7 +28,9 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     ...overrides,
   });
 
-  const createChallenge = (overrides: Partial<IChallenge> = {}): IChallenge => ({
+  const createChallenge = (
+    overrides: Partial<IChallenge> = {},
+  ): IChallenge => ({
     id: 'challenge-123',
     name: 'Test Challenge',
     description: null,
@@ -90,8 +95,8 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   beforeEach(() => {
     schedulerService = {
       setPhaseChainCallback: jest.fn(),
-      schedulePhaseTransition: jest.fn(),
-      cancelScheduledTransition: jest.fn(),
+      schedulePhaseTransition: jest.fn().mockResolvedValue('job-id'),
+      cancelScheduledTransition: jest.fn().mockResolvedValue(true),
       getScheduledTransition: jest.fn(),
     };
 
@@ -156,7 +161,9 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createChallenge({ type: 'Design Challenge' }),
     );
 
-    await autopilotService.handleSubmissionNotificationAggregate(createPayload());
+    await autopilotService.handleSubmissionNotificationAggregate(
+      createPayload(),
+    );
 
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });
@@ -167,7 +174,9 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createChallenge({ phases: [iterativeReviewPhase] }),
     );
 
-    await autopilotService.handleSubmissionNotificationAggregate(createPayload());
+    await autopilotService.handleSubmissionNotificationAggregate(
+      createPayload(),
+    );
 
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });
@@ -179,7 +188,9 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       }),
     );
 
-    await autopilotService.handleSubmissionNotificationAggregate(createPayload());
+    await autopilotService.handleSubmissionNotificationAggregate(
+      createPayload(),
+    );
 
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });

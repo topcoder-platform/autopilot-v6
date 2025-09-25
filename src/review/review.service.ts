@@ -144,8 +144,11 @@ export class ReviewService {
     `;
 
     try {
-      const submissions = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
-      const submissionIds = submissions.map((record) => record.id).filter(Boolean);
+      const submissions =
+        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = submissions
+        .map((record) => record.id)
+        .filter(Boolean);
 
       void this.dbLogger.logAction('review.getActiveSubmissionIds', {
         challengeId,

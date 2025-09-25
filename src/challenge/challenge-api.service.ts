@@ -87,7 +87,9 @@ export class ChallengeApiService {
         orderBy: { updatedAt: 'desc' },
       });
 
-      const mapped = challenges.map((challenge) => this.mapChallenge(challenge));
+      const mapped = challenges.map((challenge) =>
+        this.mapChallenge(challenge),
+      );
 
       void this.dbLogger.logAction('challenge.getAllActiveChallenges', {
         status: 'SUCCESS',
@@ -281,7 +283,9 @@ export class ChallengeApiService {
         return result;
       }
 
-      const targetPhase = challenge.phases.find((phase) => phase.id === phaseId);
+      const targetPhase = challenge.phases.find(
+        (phase) => phase.id === phaseId,
+      );
 
       if (!targetPhase) {
         this.logger.warn(

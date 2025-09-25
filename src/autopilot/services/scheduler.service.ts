@@ -1,5 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { SchedulerRegistry } from '@nestjs/schedule';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
@@ -10,9 +14,12 @@ import {
   AutopilotOperator,
 } from '../interfaces/autopilot.interface';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
+import { Job, Queue, RedisOptions, Worker } from 'bullmq';
+
+const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 
 @Injectable()
-export class SchedulerService {
+export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
   private scheduledJobs = new Map<string, PhaseTransitionPayload>();
   private phaseChainCallback:
@@ -23,19 +30,117 @@ export class SchedulerService {
         nextPhases: any[],
       ) => Promise<void> | void)
     | null = null;
-  private finalizationRetryJobs = new Map<string, string>();
+  private finalizationRetryTimers = new Map<string, NodeJS.Timeout>();
   private finalizationAttempts = new Map<string, number>();
   private readonly finalizationRetryBaseDelayMs = 60_000;
   private readonly finalizationRetryMaxAttempts = 10;
   private readonly finalizationRetryMaxDelayMs = 10 * 60 * 1000;
 
+  private redisConnection?: RedisOptions;
+  private phaseQueue?: Queue<PhaseTransitionPayload>;
+  private phaseQueueWorker?: Worker<PhaseTransitionPayload>;
+  private initializationPromise?: Promise<void>;
+
   constructor(
-    private schedulerRegistry: SchedulerRegistry,
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
   ) {}
+
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.initializeBullQueue();
+    }
+    await this.initializationPromise;
+  }
+
+  private async initializeBullQueue(): Promise<void> {
+    const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    this.redisConnection = { url: redisUrl };
+
+    this.phaseQueue = new Queue<PhaseTransitionPayload>(PHASE_QUEUE_NAME, {
+      connection: this.redisConnection,
+    });
+
+    this.phaseQueueWorker = new Worker<PhaseTransitionPayload>(
+      PHASE_QUEUE_NAME,
+      async (job) => await this.handlePhaseTransitionJob(job),
+      {
+        connection: this.redisConnection,
+        concurrency: 1,
+      },
+    );
+
+    this.phaseQueueWorker.on('failed', (job, error) => {
+      if (!job) {
+        return;
+      }
+      this.logger.error(
+        `BullMQ job ${job.id} failed for challenge ${job.data.challengeId}, phase ${job.data.phaseId}: ${error.message}`,
+        error.stack,
+      );
+    });
+
+    this.phaseQueueWorker.on('error', (error) => {
+      this.logger.error(`BullMQ worker error: ${error.message}`, error.stack);
+    });
+
+    await this.phaseQueueWorker.waitUntilReady();
+    this.logger.log(
+      `BullMQ scheduler initialized using ${redisUrl} for queue ${PHASE_QUEUE_NAME}`,
+    );
+  }
+
+  private async handlePhaseTransitionJob(
+    job: Job<PhaseTransitionPayload>,
+  ): Promise<void> {
+    await this.runScheduledTransition(String(job.id), job.data);
+  }
+
+  async onModuleInit(): Promise<void> {
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.initializeBullQueue();
+    }
+
+    try {
+      await this.initializationPromise;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to initialize BullMQ scheduler: ${err.message}`,
+        err.stack,
+      );
+      throw error;
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    const disposables: Promise<void>[] = [];
+
+    if (this.phaseQueueWorker) {
+      disposables.push(this.phaseQueueWorker.close());
+    }
+
+    if (this.phaseQueue) {
+      disposables.push(this.phaseQueue.close());
+    }
+
+    try {
+      await Promise.all(disposables);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Error while shutting down BullMQ resources: ${err.message}`,
+        err.stack,
+      );
+    }
+
+    for (const timeout of this.finalizationRetryTimers.values()) {
+      clearTimeout(timeout);
+    }
+    this.finalizationRetryTimers.clear();
+  }
 
   setPhaseChainCallback(
     callback: (
@@ -48,7 +153,9 @@ export class SchedulerService {
     this.phaseChainCallback = callback;
   }
 
-  schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
+  async schedulePhaseTransition(
+    phaseData: PhaseTransitionPayload,
+  ): Promise<string> {
     const { challengeId, phaseId, date: endTime } = phaseData;
     const jobId = `${challengeId}:${phaseId}`;
 
@@ -62,69 +169,24 @@ export class SchedulerService {
     }
 
     try {
-      const timeoutDuration = new Date(endTime).getTime() - Date.now();
+      await this.ensureInitialized();
 
-      // Corrected: Ensure the timeout is never negative to prevent the TimeoutNegativeWarning.
-      // If the time is in the past, it will execute on the next tick (timeout of 0).
-      const timeout = setTimeout(
-        () => {
-          void (async () => {
-            try {
-              // Before triggering the event, check if the phase still needs the transition
-              const phaseDetails =
-                await this.challengeApiService.getPhaseDetails(
-                  phaseData.challengeId,
-                  phaseData.phaseId,
-                );
+      const delayMs = Math.max(0, new Date(endTime).getTime() - Date.now());
+      if (!this.phaseQueue) {
+        throw new Error('Phase queue not initialized');
+      }
 
-              if (!phaseDetails) {
-                this.logger.warn(
-                  `Phase ${phaseData.phaseId} not found in challenge ${phaseData.challengeId}, skipping scheduled transition`,
-                );
-                return;
-              }
+      await this.phaseQueue.add('phase-transition', phaseData, {
+        jobId,
+        delay: delayMs,
+        removeOnComplete: true,
+        attempts: 1,
+      });
 
-              // Check if the phase is in the expected state for the transition
-              if (phaseData.state === 'END' && !phaseDetails.isOpen) {
-                this.logger.warn(
-                  `Scheduled END transition for phase ${phaseData.phaseId} but it's already closed, skipping`,
-                );
-                return;
-              }
-
-              if (phaseData.state === 'START' && phaseDetails.isOpen) {
-                this.logger.warn(
-                  `Scheduled START transition for phase ${phaseData.phaseId} but it's already open, skipping`,
-                );
-                return;
-              }
-
-              await this.triggerKafkaEvent(phaseData);
-
-              // Call advancePhase method when phase transition is triggered
-              await this.advancePhase(phaseData);
-            } catch (e) {
-              this.logger.error(
-                `Failed to trigger Kafka event for job ${jobId}`,
-                e,
-              );
-            } finally {
-              if (this.schedulerRegistry.doesExist('timeout', jobId)) {
-                this.schedulerRegistry.deleteTimeout(jobId);
-                this.logger.log(
-                  `Removed job for phase ${jobId} from registry after execution`,
-                );
-              }
-              this.scheduledJobs.delete(jobId);
-            }
-          })();
-        },
-        Math.max(0, timeoutDuration),
-      );
-
-      this.schedulerRegistry.addTimeout(jobId, timeout);
       this.scheduledJobs.set(jobId, phaseData);
-      this.logger.log(`Successfully scheduled job ${jobId} for ${endTime}`);
+      this.logger.log(
+        `Successfully scheduled job ${jobId} for ${endTime} with delay ${delayMs} ms`,
+      );
       return jobId;
     } catch (error) {
       this.logger.error(
@@ -135,22 +197,77 @@ export class SchedulerService {
     }
   }
 
-  cancelScheduledTransition(jobId: string): boolean {
+  private async runScheduledTransition(
+    jobId: string,
+    phaseData: PhaseTransitionPayload,
+  ): Promise<void> {
     try {
-      if (this.schedulerRegistry.doesExist('timeout', jobId)) {
-        this.schedulerRegistry.deleteTimeout(jobId);
-        this.scheduledJobs.delete(jobId);
-        this.logger.log(`Canceled scheduled transition for phase ${jobId}`);
-        return true;
-      } else {
+      // Before triggering the event, check if the phase still needs the transition
+      const phaseDetails = await this.challengeApiService.getPhaseDetails(
+        phaseData.challengeId,
+        phaseData.phaseId,
+      );
+
+      if (!phaseDetails) {
         this.logger.warn(
-          `No timeout found for phase ${jobId}, skipping cancellation`,
+          `Phase ${phaseData.phaseId} not found in challenge ${phaseData.challengeId}, skipping scheduled transition`,
+        );
+        return;
+      }
+
+      // Check if the phase is in the expected state for the transition
+      if (phaseData.state === 'END' && !phaseDetails.isOpen) {
+        this.logger.warn(
+          `Scheduled END transition for phase ${phaseData.phaseId} but it's already closed, skipping`,
+        );
+        return;
+      }
+
+      if (phaseData.state === 'START' && phaseDetails.isOpen) {
+        this.logger.warn(
+          `Scheduled START transition for phase ${phaseData.phaseId} but it's already open, skipping`,
+        );
+        return;
+      }
+
+      await this.triggerKafkaEvent(phaseData);
+
+      // Call advancePhase method when phase transition is triggered
+      await this.advancePhase(phaseData);
+    } catch (error) {
+      this.logger.error(
+        `Failed to trigger Kafka event for job ${jobId}`,
+        error,
+      );
+    } finally {
+      this.scheduledJobs.delete(jobId);
+    }
+  }
+
+  async cancelScheduledTransition(jobId: string): Promise<boolean> {
+    try {
+      await this.ensureInitialized();
+
+      if (!this.phaseQueue) {
+        throw new Error('Phase queue not initialized');
+      }
+
+      const job = await this.phaseQueue.getJob(jobId);
+      if (!job) {
+        this.logger.warn(
+          `No BullMQ job found for phase ${jobId}, skipping cancellation`,
         );
         return false;
       }
+
+      await job.remove();
+      this.scheduledJobs.delete(jobId);
+      this.logger.log(`Canceled scheduled transition for phase ${jobId}`);
+      return true;
     } catch (error) {
       this.logger.error(
-        `Error canceling scheduled transition: ${error instanceof Error ? error.message : String(error)}`,
+        `Error canceling scheduled transition ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
       return false;
     }
@@ -426,11 +543,8 @@ export class SchedulerService {
     challengeId: string,
     attempt: number,
   ): void {
-    const existingJobId = this.finalizationRetryJobs.get(challengeId);
-    if (
-      existingJobId &&
-      this.schedulerRegistry.doesExist('timeout', existingJobId)
-    ) {
+    const existingTimer = this.finalizationRetryTimers.get(challengeId);
+    if (existingTimer) {
       this.logger.debug?.(
         `Finalization retry already scheduled for challenge ${challengeId}; skipping duplicate schedule.`,
       );
@@ -447,38 +561,15 @@ export class SchedulerService {
     }
 
     const delay = this.computeFinalizationDelay(attempt);
-    const jobId = `challenge-finalize:${challengeId}:${attempt + 1}`;
-
-    const timeout = setTimeout(() => {
-      try {
-        if (this.schedulerRegistry.doesExist('timeout', jobId)) {
-          this.schedulerRegistry.deleteTimeout(jobId);
-        }
-      } catch (cleanupError) {
-        this.logger.error(
-          `Failed to clean up finalization retry job ${jobId}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        );
-      } finally {
-        this.finalizationRetryJobs.delete(challengeId);
-      }
-
+    const timer = setTimeout(() => {
+      this.finalizationRetryTimers.delete(challengeId);
       void this.attemptChallengeFinalization(challengeId);
     }, delay);
 
-    try {
-      this.schedulerRegistry.addTimeout(jobId, timeout);
-      this.finalizationRetryJobs.set(challengeId, jobId);
-      this.logger.log(
-        `Scheduled finalization retry ${attempt + 1} for challenge ${challengeId} in ${Math.round(delay / 1000)} second(s).`,
-      );
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `Failed to schedule finalization retry for challenge ${challengeId}: ${err.message}`,
-        err.stack,
-      );
-      clearTimeout(timeout);
-    }
+    this.finalizationRetryTimers.set(challengeId, timer);
+    this.logger.log(
+      `Scheduled finalization retry ${attempt + 1} for challenge ${challengeId} in ${Math.round(delay / 1000)} second(s).`,
+    );
   }
 
   private computeFinalizationDelay(attempt: number): number {
@@ -488,10 +579,10 @@ export class SchedulerService {
   }
 
   private clearFinalizationRetry(challengeId: string): void {
-    const jobId = this.finalizationRetryJobs.get(challengeId);
-    if (jobId && this.schedulerRegistry.doesExist('timeout', jobId)) {
-      this.schedulerRegistry.deleteTimeout(jobId);
+    const timer = this.finalizationRetryTimers.get(challengeId);
+    if (timer) {
+      clearTimeout(timer);
     }
-    this.finalizationRetryJobs.delete(challengeId);
+    this.finalizationRetryTimers.delete(challengeId);
   }
 }

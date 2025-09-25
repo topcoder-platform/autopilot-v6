@@ -76,7 +76,9 @@ export class AutopilotConsumer {
               );
               break;
             case KAFKA_TOPICS.COMMAND:
-              this.autopilotService.handleCommand(payload as CommandPayload);
+              await this.autopilotService.handleCommand(
+                payload as CommandPayload,
+              );
               break;
             case KAFKA_TOPICS.SUBMISSION_NOTIFICATION_AGGREGATE:
               await this.autopilotService.handleSubmissionNotificationAggregate(

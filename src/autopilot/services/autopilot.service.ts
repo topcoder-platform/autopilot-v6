@@ -56,7 +56,9 @@ export class AutopilotService {
     return (type ?? '').toLowerCase() === FIRST2FINISH_TYPE;
   }
 
-  schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
+  async schedulePhaseTransition(
+    phaseData: PhaseTransitionPayload,
+  ): Promise<string> {
     try {
       const phaseKey = `${phaseData.challengeId}:${phaseData.phaseId}`;
 
@@ -65,11 +67,18 @@ export class AutopilotService {
         this.logger.log(
           `Canceling existing schedule for phase ${phaseKey} before rescheduling.`,
         );
-        this.schedulerService.cancelScheduledTransition(existingJobId);
+        const canceled =
+          await this.schedulerService.cancelScheduledTransition(existingJobId);
+        if (!canceled) {
+          this.logger.warn(
+            `Failed to cancel existing schedule ${existingJobId} for phase ${phaseKey}`,
+          );
+        }
         this.activeSchedules.delete(phaseKey);
       }
 
-      const jobId = this.schedulerService.schedulePhaseTransition(phaseData);
+      const jobId =
+        await this.schedulerService.schedulePhaseTransition(phaseData);
       this.activeSchedules.set(phaseKey, jobId);
 
       this.logger.log(
@@ -86,7 +95,10 @@ export class AutopilotService {
     }
   }
 
-  cancelPhaseTransition(challengeId: string, phaseId: string): boolean {
+  async cancelPhaseTransition(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<boolean> {
     const phaseKey = `${challengeId}:${phaseId}`;
     const jobId = this.activeSchedules.get(phaseKey);
 
@@ -95,19 +107,25 @@ export class AutopilotService {
       return false;
     }
 
-    const canceled = this.schedulerService.cancelScheduledTransition(jobId);
+    const canceled =
+      await this.schedulerService.cancelScheduledTransition(jobId);
     if (canceled) {
       this.activeSchedules.delete(phaseKey);
       this.logger.log(`Canceled scheduled transition for phase ${phaseKey}`);
+      return true;
     }
 
-    return canceled;
+    this.logger.warn(
+      `Unable to cancel scheduled transition for phase ${phaseKey}; job may have already executed. Removing stale reference.`,
+    );
+    this.activeSchedules.delete(phaseKey);
+    return false;
   }
 
-  reschedulePhaseTransition(
+  async reschedulePhaseTransition(
     challengeId: string,
     newPhaseData: PhaseTransitionPayload,
-  ): string {
+  ): Promise<string> {
     const phaseKey = `${challengeId}:${newPhaseData.phaseId}`;
     const existingJobId = this.activeSchedules.get(phaseKey);
     let wasRescheduled = false;
@@ -138,7 +156,7 @@ export class AutopilotService {
       }
     }
 
-    const newJobId = this.schedulePhaseTransition(newPhaseData);
+    const newJobId = await this.schedulePhaseTransition(newPhaseData);
 
     if (wasRescheduled) {
       this.logger.log(
@@ -187,7 +205,7 @@ export class AutopilotService {
           );
 
           // Clean up the scheduled job after closing the phase
-          const canceled = this.cancelPhaseTransition(
+          const canceled = await this.cancelPhaseTransition(
             message.challengeId,
             message.phaseId,
           );
@@ -276,7 +294,7 @@ export class AutopilotService {
           date: scheduleDate,
         };
 
-        this.schedulePhaseTransition(phaseData);
+        await this.schedulePhaseTransition(phaseData);
         scheduledSummaries.push(
           `${nextPhase.name} (${nextPhase.id}) -> ${state} @ ${scheduleDate}`,
         );
@@ -368,7 +386,7 @@ export class AutopilotService {
           state,
         };
 
-        this.reschedulePhaseTransition(challengeDetails.id, payload);
+        await this.reschedulePhaseTransition(challengeDetails.id, payload);
         rescheduledSummaries.push(
           `${nextPhase.name} (${nextPhase.id}) -> ${state} @ ${scheduleDate}`,
         );
@@ -419,9 +437,8 @@ export class AutopilotService {
     }
 
     try {
-      const challenge = await this.challengeApiService.getChallengeById(
-        challengeId,
-      );
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
 
       if (!this.isFirst2FinishChallenge(challenge.type)) {
         this.logger.debug(
@@ -493,7 +510,7 @@ export class AutopilotService {
     }
   }
 
-  handleCommand(message: CommandPayload): void {
+  async handleCommand(message: CommandPayload): Promise<void> {
     const { command, operator, projectId, date, phaseId } = message;
 
     this.logger.log(`[COMMAND RECEIVED] ${command} from ${operator}`);
@@ -516,16 +533,7 @@ export class AutopilotService {
               );
               return;
             }
-            const canceled = this.cancelPhaseTransition(challengeId, phaseId);
-            if (canceled) {
-              this.logger.log(
-                `Canceled scheduled transition for phase ${challengeId}:${phaseId}`,
-              );
-            } else {
-              this.logger.warn(
-                `No active schedule found for phase ${challengeId}:${phaseId}`,
-              );
-            }
+            await this.handleSinglePhaseCancellation(challengeId, phaseId);
           } else {
             const challengeId = message.challengeId;
             if (!challengeId) {
@@ -534,12 +542,7 @@ export class AutopilotService {
               );
               return;
             }
-            for (const key of this.activeSchedules.keys()) {
-              if (key.startsWith(`${challengeId}:`)) {
-                const phaseIdFromKey = key.split(':')[1];
-                this.cancelPhaseTransition(challengeId, phaseIdFromKey);
-              }
-            }
+            await this.cancelAllPhasesForChallenge(challengeId);
           }
           break;
 
@@ -588,7 +591,10 @@ export class AutopilotService {
                 date,
               };
 
-              this.reschedulePhaseTransition(challengeDetails.id, payload);
+              await this.reschedulePhaseTransition(
+                challengeDetails.id,
+                payload,
+              );
             } catch (error) {
               const err = error as Error;
               this.logger.error(
@@ -606,6 +612,28 @@ export class AutopilotService {
     } catch (error) {
       const err = error as Error;
       this.logger.error(`Error handling command: ${err.message}`, err.stack);
+    }
+  }
+
+  private async handleSinglePhaseCancellation(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<void> {
+    await this.cancelPhaseTransition(challengeId, phaseId);
+  }
+
+  private async cancelAllPhasesForChallenge(
+    challengeId: string,
+  ): Promise<void> {
+    const phaseKeys = Array.from(this.activeSchedules.keys()).filter((key) =>
+      key.startsWith(`${challengeId}:`),
+    );
+
+    for (const key of phaseKeys) {
+      const [, phaseId] = key.split(':');
+      if (phaseId) {
+        await this.handleSinglePhaseCancellation(challengeId, phaseId);
+      }
     }
   }
 
@@ -858,7 +886,7 @@ export class AutopilotService {
       date: updatedPhase.scheduledEndDate,
     };
 
-    const jobId = this.schedulePhaseTransition(nextPhaseData);
+    const jobId = await this.schedulePhaseTransition(nextPhaseData);
     this.logger.log(
       `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${jobId}`,
     );

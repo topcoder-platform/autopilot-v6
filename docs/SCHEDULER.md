@@ -34,22 +34,14 @@ The Autopilot Scheduler is an event-based scheduling system that automatically t
 
 ### 1. Event-Based Scheduling Mechanism
 
-The system uses NestJS's `@nestjs/schedule` module with `SchedulerRegistry` for dynamic job management:
-
-```typescript
-// Key Dependencies Added
-"@nestjs/schedule": "^6.0.0"
-
-// Module Configuration
-ScheduleModule.forRoot() // Added to AppModule
-```
+The system uses BullMQ (Redis-backed queues) for dynamic job management and durable delayed execution.
 
 #### Core Scheduling Features
 
-- **Dynamic Job Registration**: Jobs are created and registered at runtime based on phase end times
-- **Unique Job Identification**: Each job uses format `{projectId}:{phaseId}`
-- **Automatic Cleanup**: Jobs are automatically removed from the registry after execution or cancellation.
-- **Timeout-Based Execution**: Uses `setTimeout` for precise, one-time execution, which is ideal for phase deadlines.
+- **Dynamic Job Registration**: Jobs are queued at runtime based on phase end times
+- **Unique Job Identification**: Each BullMQ job uses format `{challengeId}:{phaseId}`
+- **Automatic Cleanup**: Jobs are automatically removed from the queue after execution or cancellation
+- **Durable Delays**: Redis stores the delay, so jobs survive restarts and are not subject to Node.js timer limits
 
 ### 2. Event Generation
 
@@ -180,9 +172,9 @@ Cancels a scheduled phase transition.
 
 - `projectId`: Challenge project ID
 - `phaseId`: Phase ID to cancel
-- **Returns:** `true` if cancelled successfully
+- **Returns:** `Promise<boolean>` resolving to `true` if cancelled successfully (false when the job has already run)
 
-#### reschedulePhaseTransition(projectId: number, newPhaseData: PhaseTransitionPayload): string
+#### reschedulePhaseTransition(projectId: number, newPhaseData: PhaseTransitionPayload): Promise<string>
 
 Updates an existing schedule with new timing information.
 
@@ -190,17 +182,17 @@ Updates an existing schedule with new timing information.
 
 - `projectId`: Challenge project ID
 - `newPhaseData`: Updated phase information
-- **Returns:** New job ID
+- **Returns:** `Promise<string>` resolving to the new BullMQ job ID
 
 ### SchedulerService
 
-#### schedulePhaseTransition(phaseData: PhaseTransitionPayload)
+#### schedulePhaseTransition(phaseData: PhaseTransitionPayload): Promise<string>
 
-Low-level job scheduling using NestJS SchedulerRegistry.
+Queues a delayed phase transition using BullMQ (backed by Redis) and returns the job ID once scheduled.
 
-#### cancelScheduledTransition(jobId: string): boolean
+#### cancelScheduledTransition(jobId: string): Promise<boolean>
 
-Removes a scheduled job by ID.
+Removes a scheduled BullMQ job by ID.
 
 #### getAllScheduledTransitions(): string[]
 
@@ -226,7 +218,7 @@ const phaseData = {
   date: '2025-06-20T23:59:59Z'
 };
 
-const jobId = autopilotService.schedulePhaseTransition(phaseData);
+const jobId = await autopilotService.schedulePhaseTransition(phaseData);
 // Job scheduled, will trigger automatically at specified time
 ```
 
@@ -239,7 +231,7 @@ const updatedData = {
   date: '2025-06-21T23:59:59Z' // New end time
 };
 
-const newJobId = autopilotService.reschedulePhaseTransition(101, updatedData);
+const newJobId = await autopilotService.reschedulePhaseTransition(101, updatedData);
 // Old job cancelled, new job scheduled with updated time
 ```
 
