@@ -7,11 +7,16 @@ import {
   ChallengeUpdatePayload,
   CommandPayload,
   AutopilotOperator,
+  SubmissionAggregatePayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+
+const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
+const ITERATIVE_REVIEW_PHASE_NAME = 'Iterative Review';
+const FIRST2FINISH_TYPE = 'first2finish';
 
 @Injectable()
 export class AutopilotService {
@@ -45,6 +50,10 @@ export class AutopilotService {
 
   private isChallengeActive(status?: string): boolean {
     return (status ?? '').toUpperCase() === 'ACTIVE';
+  }
+
+  private isFirst2FinishChallenge(type?: string): boolean {
+    return (type ?? '').toLowerCase() === FIRST2FINISH_TYPE;
   }
 
   schedulePhaseTransition(phaseData: PhaseTransitionPayload): string {
@@ -379,6 +388,106 @@ export class AutopilotService {
       const err = error as Error;
       this.logger.error(
         `Error handling challenge update: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleSubmissionNotificationAggregate(
+    payload: SubmissionAggregatePayload,
+  ): Promise<void> {
+    const { id: submissionId } = payload;
+    const challengeId = payload.v5ChallengeId;
+
+    if (payload.originalTopic !== SUBMISSION_NOTIFICATION_CREATE_TOPIC) {
+      this.logger.debug(
+        'Ignoring submission aggregate message with non-create original topic',
+        {
+          submissionId,
+          originalTopic: payload.originalTopic,
+        },
+      );
+      return;
+    }
+
+    if (!challengeId) {
+      this.logger.warn(
+        'Submission aggregate message missing v5ChallengeId; unable to process',
+        { submissionId },
+      );
+      return;
+    }
+
+    try {
+      const challenge = await this.challengeApiService.getChallengeById(
+        challengeId,
+      );
+
+      if (!this.isFirst2FinishChallenge(challenge.type)) {
+        this.logger.debug(
+          'Skipping submission aggregate for non-First2Finish challenge',
+          {
+            submissionId,
+            challengeId,
+            challengeType: challenge.type,
+          },
+        );
+        return;
+      }
+
+      const iterativeReviewPhase = challenge.phases?.find(
+        (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
+      );
+
+      if (!iterativeReviewPhase) {
+        this.logger.warn(
+          'No Iterative Review phase found for First2Finish challenge',
+          { submissionId, challengeId },
+        );
+        return;
+      }
+
+      if (iterativeReviewPhase.isOpen) {
+        this.logger.debug(
+          'Iterative Review phase already open; skipping advance',
+          {
+            submissionId,
+            challengeId,
+            phaseId: iterativeReviewPhase.id,
+          },
+        );
+        return;
+      }
+
+      this.logger.log(
+        `Opening Iterative Review phase ${iterativeReviewPhase.id} for challenge ${challengeId} in response to submission ${submissionId}.`,
+      );
+
+      const advanceResult = await this.challengeApiService.advancePhase(
+        challenge.id,
+        iterativeReviewPhase.id,
+        'open',
+      );
+
+      if (!advanceResult.success) {
+        this.logger.warn(
+          'Advance phase operation reported failure for Iterative Review phase',
+          {
+            submissionId,
+            challengeId,
+            phaseId: iterativeReviewPhase.id,
+            message: advanceResult.message,
+          },
+        );
+      } else {
+        this.logger.log(
+          `Iterative Review phase ${iterativeReviewPhase.id} opened for challenge ${challengeId}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed processing submission aggregate for challenge ${challengeId}: ${err.message}`,
         err.stack,
       );
     }

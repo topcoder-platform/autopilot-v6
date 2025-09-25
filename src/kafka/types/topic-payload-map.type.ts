@@ -3,6 +3,7 @@ import {
   ChallengeUpdatePayload,
   CommandPayload,
   PhaseTransitionPayload,
+  SubmissionAggregatePayload,
 } from 'src/autopilot/interfaces/autopilot.interface';
 
 export type TopicPayloadMap = {
@@ -11,4 +12,5 @@ export type TopicPayloadMap = {
   [KAFKA_TOPICS.CHALLENGE_CREATED]: ChallengeUpdatePayload;
   [KAFKA_TOPICS.CHALLENGE_UPDATED]: ChallengeUpdatePayload;
   [KAFKA_TOPICS.COMMAND]: CommandPayload;
+  [KAFKA_TOPICS.SUBMISSION_NOTIFICATION_AGGREGATE]: SubmissionAggregatePayload;
 };

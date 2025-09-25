@@ -8,6 +8,7 @@ import {
   ChallengeUpdatePayload,
   CommandPayload,
   PhaseTransitionPayload,
+  SubmissionAggregatePayload,
 } from 'src/autopilot/interfaces/autopilot.interface';
 
 @Injectable()
@@ -44,6 +45,10 @@ export class AutopilotConsumer {
       [KAFKA_TOPICS.COMMAND]: this.autopilotService.handleCommand.bind(
         this.autopilotService,
       ) as (message: CommandPayload) => Promise<void>,
+      [KAFKA_TOPICS.SUBMISSION_NOTIFICATION_AGGREGATE]:
+        this.autopilotService.handleSubmissionNotificationAggregate.bind(
+          this.autopilotService,
+        ) as (message: SubmissionAggregatePayload) => Promise<void>,
     };
   }
 
@@ -72,6 +77,11 @@ export class AutopilotConsumer {
               break;
             case KAFKA_TOPICS.COMMAND:
               this.autopilotService.handleCommand(payload as CommandPayload);
+              break;
+            case KAFKA_TOPICS.SUBMISSION_NOTIFICATION_AGGREGATE:
+              await this.autopilotService.handleSubmissionNotificationAggregate(
+                payload as SubmissionAggregatePayload,
+              );
               break;
             default:
               throw new Error(`Unexpected topic: ${topic as string}`);
