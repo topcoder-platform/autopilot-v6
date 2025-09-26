@@ -5,9 +5,11 @@ WORKDIR /usr/src/app
 # ---- Dependencies Stage ----
 FROM base AS deps
 COPY package.json ./
+COPY pnpm-lock.yaml ./
+COPY patches ./patches
 COPY prisma ./prisma
 RUN npm install -g pnpm
-RUN pnpm install 
+RUN pnpm install
 
 # ---- Build Stage ----
 FROM deps AS build
