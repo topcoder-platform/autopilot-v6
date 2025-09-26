@@ -272,7 +272,7 @@ export class ReviewService {
     phaseId: string,
     scorecardId: string,
     challengeId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const insert = Prisma.sql`
       INSERT INTO ${ReviewService.REVIEW_TABLE} (
         "resourceId",
@@ -282,7 +282,8 @@ export class ReviewService {
         "status",
         "createdAt",
         "updatedAt"
-      ) VALUES (
+      )
+      SELECT
         ${resourceId},
         ${phaseId},
         ${submissionId},
@@ -290,11 +291,25 @@ export class ReviewService {
         'PENDING',
         NOW(),
         NOW()
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM ${ReviewService.REVIEW_TABLE} existing
+        WHERE existing."resourceId" = ${resourceId}
+          AND existing."phaseId" = ${phaseId}
+          AND existing."submissionId" = ${submissionId}
+          AND (
+            existing."scorecardId" = ${scorecardId}
+            OR (
+              existing."scorecardId" IS NULL
+              AND ${scorecardId} IS NULL
+            )
+          )
       )
     `;
 
     try {
-      await this.prisma.$executeRaw(insert);
+      const rowsInserted = await this.prisma.$executeRaw(insert);
+      const created = rowsInserted > 0;
 
       void this.dbLogger.logAction('review.createPendingReview', {
         challengeId,
@@ -304,8 +319,11 @@ export class ReviewService {
           resourceId,
           submissionId,
           phaseId,
+          created,
         },
       });
+
+      return created;
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('review.createPendingReview', {

@@ -91,7 +91,7 @@ export class PhaseReviewService {
         }
 
         try {
-          await this.reviewService.createPendingReview(
+          const created = await this.reviewService.createPendingReview(
             submissionId,
             resource.id,
             phase.id,
@@ -99,7 +99,9 @@ export class PhaseReviewService {
             challengeId,
           );
           existingPairs.add(key);
-          createdCount++;
+          if (created) {
+            createdCount++;
+          }
         } catch (error) {
           const err = error as Error;
           this.logger.error(
