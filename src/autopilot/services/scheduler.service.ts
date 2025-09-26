@@ -160,7 +160,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     phaseData: PhaseTransitionPayload,
   ): Promise<string> {
     const { challengeId, phaseId, date: endTime } = phaseData;
-    const jobId = `${challengeId}:${phaseId}`;
+    const jobId = `${challengeId}|${phaseId}`; // BullMQ rejects ':' in custom IDs, use pipe instead
 
     if (!endTime || endTime === '' || isNaN(new Date(endTime).getTime())) {
       this.logger.error(
