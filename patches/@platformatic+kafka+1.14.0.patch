@@ -1,0 +1,55 @@
+--- a/node_modules/.pnpm/@platformatic+kafka@1.14.0/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
++++ b/node_modules/.pnpm/@platformatic+kafka@1.14.0/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
+@@ -842,14 +842,44 @@
+             .appendInt32(0).buffer; // No user data
+     }
+     #decodeProtocolAssignment(buffer) {
+-        const reader = Reader.from(buffer);
+-        reader.skip(2); // Ignore Version information
+-        return reader.readArray(r => {
+-            return {
+-                topic: r.readString(false),
+-                partitions: r.readArray(r => r.readInt32(), false, false)
+-            };
+-        }, false, false);
++        if (!buffer || typeof buffer.length !== 'number' || buffer.length === 0) {
++            return [];
++        }
++        const totalLength = typeof buffer.length === 'number' ? buffer.length : 0;
++        if (totalLength < 2) {
++            return [];
++        }
++        const decode = (compact) => {
++            const reader = Reader.from(buffer);
++            reader.skip(2); // Ignore Version information
++            return reader.readArray(r => {
++                return {
++                    topic: r.readString(compact),
++                    partitions: r.readArray(r => r.readInt32(), compact, compact)
++                };
++            }, compact, compact);
++        };
++        const shouldFallback = (error) => error?.code === 'PLT_KFK_USER' && error?.message === 'Out of bounds.';
++        const preferCompact = totalLength - 2 < 4;
++        if (!preferCompact) {
++            try {
++                return decode(false);
++            }
++            catch (error) {
++                if (!shouldFallback(error)) {
++                    throw error;
++                }
++            }
++        }
++        try {
++            return decode(true);
++        }
++        catch (error) {
++            if (shouldFallback(error)) {
++                return [];
++            }
++            throw error;
++        }
+     }
+     #createAssignments(metadata) {
+         const partitionTracker = new Map();
