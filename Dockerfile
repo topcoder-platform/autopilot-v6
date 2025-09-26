@@ -6,6 +6,7 @@ WORKDIR /usr/src/app
 FROM base AS deps
 COPY package.json ./
 COPY prisma ./prisma
+RUN npm install -g pnpm
 RUN pnpm install 
 
 # ---- Build Stage ----
