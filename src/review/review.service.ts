@@ -231,7 +231,7 @@ export class ReviewService {
       WHERE "phaseId" = ${phaseId}
         AND (
           "status" IS NULL
-          OR UPPER("status") NOT IN ('COMPLETED', 'NO_REVIEW')
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
         )
     `;
 

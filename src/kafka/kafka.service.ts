@@ -46,9 +46,9 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
   constructor(private readonly configService: ConfigService) {
     try {
-      const brokersValue = this.configService.get<string | string[] | undefined>(
-        'kafka.brokers',
-      );
+      const brokersValue = this.configService.get<
+        string | string[] | undefined
+      >('kafka.brokers');
       const kafkaBrokers = Array.isArray(brokersValue)
         ? brokersValue
         : brokersValue?.split(',') || CONFIG.KAFKA.DEFAULT_BROKERS;
@@ -73,7 +73,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
       this.producer = this.createProducer();
     } catch (error) {
-      const err = this.normalizeError(error, 'Failed to initialize Kafka service');
+      const err = this.normalizeError(
+        error,
+        'Failed to initialize Kafka service',
+      );
       this.logger.error(err.message, { error: err.stack || err.message });
       throw new KafkaConnectionException({
         error: err.stack || err.message,
@@ -112,7 +115,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         timestamp: new Date(timestamp).toISOString(),
       });
     } catch (error) {
-      const err = this.normalizeError(error, `Failed to produce message to ${topic}`);
+      const err = this.normalizeError(
+        error,
+        `Failed to produce message to ${topic}`,
+      );
       this.logger.error(err.message, {
         correlationId,
         error: err.stack || err.message,
@@ -242,21 +248,23 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
       this.logger.info('Closing Kafka consumers...');
       await Promise.all(
-        Array.from(this.consumers.entries()).map(async ([groupId, consumer]) => {
-          try {
-            await consumer.close();
-            this.logger.info(`Consumer ${groupId} closed successfully`);
-          } catch (error) {
-            const err = this.normalizeError(
-              error,
-              `Error closing consumer ${groupId}`,
-            );
-            this.logger.error(err.message, {
-              groupId,
-              error: err.stack || err.message,
-            });
-          }
-        }),
+        Array.from(this.consumers.entries()).map(
+          async ([groupId, consumer]) => {
+            try {
+              await consumer.close();
+              this.logger.info(`Consumer ${groupId} closed successfully`);
+            } catch (error) {
+              const err = this.normalizeError(
+                error,
+                `Error closing consumer ${groupId}`,
+              );
+              this.logger.error(err.message, {
+                groupId,
+                error: err.stack || err.message,
+              });
+            }
+          },
+        ),
       );
 
       this.logger.info('Closing Kafka producer...');
@@ -264,7 +272,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       this.logger.info('Kafka connections closed successfully');
     } catch (error) {
       const err = this.normalizeError(error, 'Error during Kafka shutdown');
-      this.logger.error(err.message, { signal, error: err.stack || err.message });
+      this.logger.error(err.message, {
+        signal,
+        error: err.stack || err.message,
+      });
       throw err;
     } finally {
       this.consumerLoops.clear();
@@ -277,7 +288,9 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     try {
       return (
         this.producer.isConnected() &&
-        Array.from(this.consumers.values()).every((consumer) => consumer.isConnected())
+        Array.from(this.consumers.values()).every((consumer) =>
+          consumer.isConnected(),
+        )
       );
     } catch (error) {
       const err = this.normalizeError(
@@ -365,7 +378,9 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       for await (const message of stream) {
         const correlationId =
           this.getHeaderValue(message.headers, 'correlation-id') || uuidv4();
-        const messageTimestamp = Number(message.timestamp ?? BigInt(Date.now()));
+        const messageTimestamp = Number(
+          message.timestamp ?? BigInt(Date.now()),
+        );
 
         try {
           if (message.value === undefined) {
@@ -404,17 +419,19 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
             partition: message.partition,
             error: err.stack || err.message,
           });
-          await this.sendToDLQ(message.topic, message.value).catch((dlqError) => {
-            const dlqErr = this.normalizeError(
-              dlqError,
-              `Failed to send message to DLQ for topic ${message.topic}`,
-            );
-            this.logger.error(dlqErr.message, {
-              correlationId,
-              topic: message.topic,
-              error: dlqErr.stack || dlqErr.message,
-            });
-          });
+          await this.sendToDLQ(message.topic, message.value).catch(
+            (dlqError) => {
+              const dlqErr = this.normalizeError(
+                dlqError,
+                `Failed to send message to DLQ for topic ${message.topic}`,
+              );
+              this.logger.error(dlqErr.message, {
+                correlationId,
+                topic: message.topic,
+                error: dlqErr.stack || dlqErr.message,
+              });
+            },
+          );
         }
       }
     } catch (error) {
@@ -490,7 +507,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     });
   }
 
-  private async sendToDLQ(originalTopic: string, message: unknown): Promise<void> {
+  private async sendToDLQ(
+    originalTopic: string,
+    message: unknown,
+  ): Promise<void> {
     const dlqTopic = `${originalTopic}.dlq`;
 
     const serializedMessage = this.serializeForDlq(message);
@@ -515,7 +535,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
       return Buffer.from(JSON.stringify(message), 'utf8').toString('base64');
     } catch (error) {
-      const fallback = this.normalizeError(error, 'Failed to serialize DLQ message');
+      const fallback = this.normalizeError(
+        error,
+        'Failed to serialize DLQ message',
+      );
       this.logger.warn(fallback.message, {
         error: fallback.stack || fallback.message,
       });
@@ -545,4 +568,3 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 }
-

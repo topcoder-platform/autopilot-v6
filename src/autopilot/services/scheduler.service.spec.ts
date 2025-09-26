@@ -10,7 +10,10 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
-import { AutopilotOperator, PhaseTransitionPayload } from '../interfaces/autopilot.interface';
+import {
+  AutopilotOperator,
+  PhaseTransitionPayload,
+} from '../interfaces/autopilot.interface';
 
 const createPayload = (
   overrides: Partial<PhaseTransitionPayload> = {},
@@ -98,9 +101,9 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(rescheduledPayload.phaseId).toBe(payload.phaseId);
     expect(rescheduledPayload.challengeId).toBe(payload.challengeId);
     expect(rescheduledPayload.date).toBeDefined();
-    expect(new Date(rescheduledPayload.date as string).getTime()).toBeGreaterThan(
-      Date.now(),
-    );
+    expect(
+      new Date(rescheduledPayload.date as string).getTime(),
+    ).toBeGreaterThan(Date.now());
   });
 
   it('closes review phases when no pending reviews remain', async () => {

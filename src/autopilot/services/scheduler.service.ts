@@ -418,6 +418,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             `[REVIEW LATE] Unable to verify pending reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
+
+          await this.deferReviewPhaseClosure(data);
+          return;
         }
       }
 
@@ -627,7 +630,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async deferReviewPhaseClosure(
     data: PhaseTransitionPayload,
-    pendingCount: number,
+    pendingCount?: number,
   ): Promise<void> {
     const key = this.buildReviewPhaseKey(data.challengeId, data.phaseId);
     const attempt = (this.reviewCloseRetryAttempts.get(key) ?? 0) + 1;
@@ -644,8 +647,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
       this.logger.warn(
-        `[REVIEW LATE] Deferred closing review phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingCount} incomplete review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+        `[REVIEW LATE] Deferred closing review phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
       );
     } catch (error) {
       const err = error as Error;
