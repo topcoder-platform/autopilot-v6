@@ -14,10 +14,10 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json ./
 COPY prisma ./prisma
-RUN yarn install 
+RUN pnpm install 
 
 # ---- Build Stage ----
-FROM pnpm AS build
+FROM deps AS build
 COPY . .
 RUN pnpm prisma:generate
 RUN pnpm build
