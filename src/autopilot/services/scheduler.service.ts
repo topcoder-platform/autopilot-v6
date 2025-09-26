@@ -17,6 +17,7 @@ import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
+const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -61,6 +62,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     this.phaseQueue = new Queue<PhaseTransitionPayload>(PHASE_QUEUE_NAME, {
       connection: this.redisConnection,
+      prefix: PHASE_QUEUE_PREFIX,
     });
 
     this.phaseQueueWorker = new Worker<PhaseTransitionPayload>(
@@ -69,6 +71,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       {
         connection: this.redisConnection,
         concurrency: 1,
+        prefix: PHASE_QUEUE_PREFIX,
       },
     );
 

@@ -1,5 +1,5 @@
 # ---- Base Stage ----
-FROM node:20-bookworm AS base
+FROM node:22-alpine AS base
 WORKDIR /usr/src/app
 
 # ---- Dependencies Stage ----
@@ -17,10 +17,10 @@ COPY prisma ./prisma
 RUN yarn install 
 
 # ---- Build Stage ----
-FROM deps AS build
+FROM pnpm AS build
 COPY . .
-RUN yarn prisma:generate
-RUN yarn build
+RUN pnpm prisma:generate
+RUN pnpm build
 
 # ---- Production Stage ----
 FROM base AS production

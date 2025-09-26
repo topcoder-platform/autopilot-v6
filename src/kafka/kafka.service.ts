@@ -4,37 +4,51 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as Kafka from 'node-rdkafka';
+import {
+  Consumer,
+  MessagesStream,
+  ProduceAcks,
+  Producer,
+  jsonDeserializer,
+  jsonSerializer,
+  stringDeserializer,
+  stringSerializer,
+} from '@platformatic/kafka';
+import { v4 as uuidv4 } from 'uuid';
+
 import {
   KafkaConnectionException,
-  KafkaProducerException,
   KafkaConsumerException,
+  KafkaProducerException,
 } from '../common/exceptions/kafka.exception';
+import { CONFIG } from '../common/constants/config.constants';
 import { LoggerService } from '../common/services/logger.service';
 import { CircuitBreaker } from '../common/utils/circuit-breaker';
-import { v4 as uuidv4 } from 'uuid';
-import { CONFIG } from '../common/constants/config.constants';
 import { IKafkaConfig } from '../common/types/kafka.types';
+
+type KafkaProducer = Producer<string, unknown, string, string>;
+type KafkaConsumer = Consumer<string, unknown, string, string>;
+type KafkaStream = MessagesStream<string, unknown, string, string>;
 
 @Injectable()
 export class KafkaService implements OnApplicationShutdown, OnModuleInit {
-  private readonly producer: Kafka.Producer;
-  private readonly consumers: Map<string, Kafka.KafkaConsumer>;
-  private readonly consumerLoops: Map<string, boolean>;
-  private readonly logger: LoggerService;
-  private readonly circuitBreaker: CircuitBreaker;
-  private readonly retryDelayAfterReconnectMs = 5000;
+  private readonly logger = new LoggerService(KafkaService.name);
+  private readonly circuitBreaker = new CircuitBreaker({
+    failureThreshold: CONFIG.CIRCUIT_BREAKER.DEFAULT_FAILURE_THRESHOLD,
+    resetTimeout: CONFIG.CIRCUIT_BREAKER.DEFAULT_RESET_TIMEOUT,
+  });
   private readonly kafkaConfig: IKafkaConfig;
-  private producerReady = false;
-  private producerConnecting?: Promise<void>;
+  private readonly producer: KafkaProducer;
+  private readonly consumers = new Map<string, KafkaConsumer>();
+  private readonly consumerStreams = new Map<string, KafkaStream>();
+  private readonly consumerLoops = new Map<string, Promise<void>>();
+  private shuttingDown = false;
 
   constructor(private readonly configService: ConfigService) {
-    this.logger = new LoggerService(KafkaService.name);
-
     try {
-      const brokersValue = this.configService.get<
-        string | string[] | undefined
-      >('kafka.brokers');
+      const brokersValue = this.configService.get<string | string[] | undefined>(
+        'kafka.brokers',
+      );
       const kafkaBrokers = Array.isArray(brokersValue)
         ? brokersValue
         : brokersValue?.split(',') || CONFIG.KAFKA.DEFAULT_BROKERS;
@@ -57,31 +71,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         },
       };
 
-      const producerConfig: Kafka.ProducerGlobalConfig = {
-        'client.id': this.kafkaConfig.clientId,
-        'metadata.broker.list': this.kafkaConfig.brokers.join(','),
-        dr_cb: true,
-        'enable.idempotence': true,
-      };
-
-      const producerTopicConfig: Kafka.ProducerTopicConfig = {
-        'request.required.acks': -1,
-      };
-
-      this.producer = new Kafka.Producer(producerConfig, producerTopicConfig);
-      this.registerProducerEvents();
-
-      this.consumers = new Map();
-      this.consumerLoops = new Map();
-      this.circuitBreaker = new CircuitBreaker({
-        failureThreshold: CONFIG.CIRCUIT_BREAKER.DEFAULT_FAILURE_THRESHOLD,
-        resetTimeout: CONFIG.CIRCUIT_BREAKER.DEFAULT_RESET_TIMEOUT,
-      });
+      this.producer = this.createProducer();
     } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to initialize Kafka service', {
-        error: err.stack || err.message,
-      });
+      const err = this.normalizeError(error, 'Failed to initialize Kafka service');
+      this.logger.error(err.message, { error: err.stack || err.message });
       throw new KafkaConnectionException({
         error: err.stack || err.message,
       });
@@ -90,133 +83,444 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
-      await this.ensureProducerConnected();
+      await this.producer.metadata({ topics: [] });
       this.logger.info('Kafka service initialized successfully');
     } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to initialize Kafka service', {
-        error: err.stack || err.message,
-      });
+      const err = this.normalizeError(
+        error,
+        'Failed to initialize Kafka producer metadata request',
+      );
+      this.logger.error(err.message, { error: err.stack || err.message });
       throw new KafkaConnectionException({
         error: err.stack || err.message,
       });
     }
   }
 
-  private registerProducerEvents(): void {
-    this.producer.on('event.error', (err: Kafka.LibrdKafkaError) => {
-      this.logger.error('Kafka producer error event received', {
-        error: err.message,
-        code: err.code,
+  async produce(topic: string, message: unknown): Promise<void> {
+    const correlationId = uuidv4();
+    const timestamp = Date.now();
+
+    try {
+      await this.circuitBreaker.execute(async () =>
+        this.sendRecords(topic, [message], correlationId, timestamp),
+      );
+
+      this.logger.info(`[KAFKA-PRODUCER] Message produced to ${topic}`, {
+        correlationId,
+        topic,
+        timestamp: new Date(timestamp).toISOString(),
       });
-    });
+    } catch (error) {
+      const err = this.normalizeError(error, `Failed to produce message to ${topic}`);
+      this.logger.error(err.message, {
+        correlationId,
+        error: err.stack || err.message,
+      });
+      throw new KafkaProducerException(
+        `Failed to produce message to ${topic}: ${err.message}`,
+      );
+    }
+  }
 
-    this.producer.on('ready', () => {
-      this.logger.info('Kafka producer connected');
-    });
+  async produceBatch(topic: string, messages: unknown[]): Promise<void> {
+    const correlationId = uuidv4();
+    const timestamp = Date.now();
 
-    this.producer.on('disconnected', () => {
-      this.producerReady = false;
-      this.producerConnecting = undefined;
-      this.logger.warn('Kafka producer disconnected');
+    try {
+      await this.circuitBreaker.execute(async () =>
+        this.sendRecords(topic, messages, correlationId, timestamp),
+      );
+
+      this.logger.info(`[KAFKA-PRODUCER] Batch produced to ${topic}`, {
+        correlationId,
+        count: messages.length,
+        topic,
+        timestamp: new Date(timestamp).toISOString(),
+      });
+    } catch (error) {
+      const err = this.normalizeError(
+        error,
+        `Failed to produce batch to ${topic}`,
+      );
+      this.logger.error(err.message, {
+        correlationId,
+        topic,
+        count: messages.length,
+        error: err.stack || err.message,
+      });
+      throw new KafkaProducerException(
+        `Failed to produce batch to ${topic}: ${err.message}`,
+      );
+    }
+  }
+
+  async sendMessage(topic: string, message: unknown): Promise<void> {
+    const correlationId = uuidv4();
+    const timestamp = Date.now();
+
+    try {
+      await this.sendRecords(topic, [message], correlationId, timestamp);
+      this.logger.log(`Message sent to topic ${topic}`);
+    } catch (error) {
+      const err = this.normalizeError(
+        error,
+        `Failed to send message to topic ${topic}`,
+      );
+      this.logger.error(err.message, {
+        topic,
+        error: err.stack || err.message,
+      });
+      throw new KafkaProducerException(
+        `Failed to send message to topic ${topic}: ${err.message}`,
+      );
+    }
+  }
+
+  async consume(
+    groupId: string,
+    topics: string[],
+    onMessage: (message: unknown) => Promise<void>,
+  ): Promise<void> {
+    try {
+      await this.circuitBreaker.execute(async () => {
+        const consumer = this.getOrCreateConsumer(groupId);
+
+        if (this.consumerStreams.has(groupId)) {
+          await this.closeStream(groupId);
+        }
+
+        const stream = await consumer.consume({
+          topics,
+          autocommit: true,
+        });
+
+        this.consumerStreams.set(groupId, stream);
+        const loop = this.startConsumerLoop(groupId, topics, stream, onMessage);
+        this.consumerLoops.set(groupId, loop);
+      });
+    } catch (error) {
+      const err = this.normalizeError(
+        error,
+        `Failed to start consumer for group ${groupId}`,
+      );
+      this.logger.error(err.message, {
+        groupId,
+        topics,
+        error: err.stack || err.message,
+      });
+      throw new KafkaConsumerException(
+        `Failed to start consumer for group ${groupId}`,
+        { error: err.stack || err.message },
+      );
+    }
+  }
+
+  async onApplicationShutdown(signal?: string): Promise<void> {
+    this.logger.info('Starting Kafka graceful shutdown', { signal });
+    this.shuttingDown = true;
+
+    try {
+      this.logger.info('Closing consumer streams...');
+      await Promise.all(
+        Array.from(this.consumerStreams.keys()).map((groupId) =>
+          this.closeStream(groupId).catch((error) => {
+            const err = this.normalizeError(
+              error,
+              `Failed closing stream for consumer ${groupId}`,
+            );
+            this.logger.warn(err.message, {
+              groupId,
+              error: err.stack || err.message,
+            });
+          }),
+        ),
+      );
+
+      this.logger.info('Waiting for consumer loops to finish...');
+      await Promise.allSettled(this.consumerLoops.values());
+
+      this.logger.info('Closing Kafka consumers...');
+      await Promise.all(
+        Array.from(this.consumers.entries()).map(async ([groupId, consumer]) => {
+          try {
+            await consumer.close();
+            this.logger.info(`Consumer ${groupId} closed successfully`);
+          } catch (error) {
+            const err = this.normalizeError(
+              error,
+              `Error closing consumer ${groupId}`,
+            );
+            this.logger.error(err.message, {
+              groupId,
+              error: err.stack || err.message,
+            });
+          }
+        }),
+      );
+
+      this.logger.info('Closing Kafka producer...');
+      await this.producer.close();
+      this.logger.info('Kafka connections closed successfully');
+    } catch (error) {
+      const err = this.normalizeError(error, 'Error during Kafka shutdown');
+      this.logger.error(err.message, { signal, error: err.stack || err.message });
+      throw err;
+    } finally {
+      this.consumerLoops.clear();
+      this.consumerStreams.clear();
+      this.consumers.clear();
+    }
+  }
+
+  async isConnected(): Promise<boolean> {
+    try {
+      return (
+        this.producer.isConnected() &&
+        Array.from(this.consumers.values()).every((consumer) => consumer.isConnected())
+      );
+    } catch (error) {
+      const err = this.normalizeError(
+        error,
+        'Failed to check Kafka connection status',
+      );
+      this.logger.error(err.message, {
+        error: err.stack || err.message,
+        timestamp: new Date().toISOString(),
+      });
+      return false;
+    }
+  }
+
+  private createProducer(): KafkaProducer {
+    return new Producer({
+      clientId: this.kafkaConfig.clientId,
+      bootstrapBrokers: this.kafkaConfig.brokers,
+      idempotent: true,
+      acks: ProduceAcks.ALL,
+      retries: this.kafkaConfig.retry.retries,
+      retryDelay: this.kafkaConfig.retry.initialRetryTime,
+      timeout: this.kafkaConfig.retry.maxRetryTime,
+      maxInflights: CONFIG.KAFKA.DEFAULT_MAX_IN_FLIGHT_REQUESTS,
+      serializers: {
+        key: stringSerializer,
+        value: jsonSerializer,
+        headerKey: stringSerializer,
+        headerValue: stringSerializer,
+      },
     });
   }
 
-  private async ensureProducerConnected(): Promise<void> {
-    if (this.producerReady && this.producer.isConnected()) {
-      return;
+  private getOrCreateConsumer(groupId: string): KafkaConsumer {
+    const existing = this.consumers.get(groupId);
+    if (existing) {
+      return existing;
     }
 
-    if (!this.producerConnecting) {
-      this.producerConnecting = new Promise((resolve, reject) => {
-        const cleanup = () => {
-          this.producer.removeListener('event.error', errorListener);
-        };
+    const consumer = new Consumer({
+      clientId: `${this.kafkaConfig.clientId}-${groupId}`,
+      groupId,
+      bootstrapBrokers: this.kafkaConfig.brokers,
+      autocommit: true,
+      retries: this.kafkaConfig.retry.retries,
+      retryDelay: this.kafkaConfig.retry.initialRetryTime,
+      timeout: this.kafkaConfig.retry.maxRetryTime,
+      maxWaitTime: CONFIG.KAFKA.DEFAULT_MAX_WAIT_TIME,
+      maxBytes: CONFIG.KAFKA.DEFAULT_MAX_BYTES,
+      deserializers: {
+        key: stringDeserializer,
+        value: jsonDeserializer,
+        headerKey: stringDeserializer,
+        headerValue: stringDeserializer,
+      },
+    });
 
-        const errorListener = (err: Kafka.LibrdKafkaError) => {
-          cleanup();
-          this.producerConnecting = undefined;
-          reject(new Error(err.message));
-        };
+    consumer.on('consumer:group:rebalance', (info) => {
+      this.logger.info(`Kafka consumer ${groupId} rebalanced`, { info });
+    });
 
-        this.producer.once('event.error', errorListener);
+    consumer.on('client:broker:disconnect', (details) => {
+      this.logger.warn(`Kafka consumer ${groupId} disconnected from broker`, {
+        details,
+      });
+    });
+
+    consumer.on('client:broker:failed', (details) => {
+      this.logger.error(`Kafka consumer ${groupId} broker failure`, {
+        details,
+      });
+    });
+
+    this.consumers.set(groupId, consumer);
+    return consumer;
+  }
+
+  private async startConsumerLoop(
+    groupId: string,
+    topics: string[],
+    stream: KafkaStream,
+    onMessage: (message: unknown) => Promise<void>,
+  ): Promise<void> {
+    try {
+      for await (const message of stream) {
+        const correlationId =
+          this.getHeaderValue(message.headers, 'correlation-id') || uuidv4();
+        const messageTimestamp = Number(message.timestamp ?? BigInt(Date.now()));
 
         try {
-          this.producer.connect(undefined, (err) => {
-            if (err) {
-              cleanup();
-              this.producerConnecting = undefined;
-              reject(
-                this.normalizeError(
-                  err,
-                  'Kafka producer connection callback error',
-                ),
-              );
-            } else {
-              this.producerReady = true;
-              this.producer.setPollInterval(100);
-              cleanup();
-              this.producerConnecting = undefined;
-              resolve();
-            }
+          if (message.value === undefined) {
+            throw new Error('Message value is undefined');
+          }
+
+          this.logger.info(
+            `[KAFKA-CONSUMER] Starting to process message from ${message.topic}`,
+            {
+              correlationId,
+              topic: message.topic,
+              partition: message.partition,
+              timestamp: new Date(messageTimestamp).toISOString(),
+            },
+          );
+
+          await onMessage(message.value);
+
+          this.logger.info(
+            `[KAFKA-CONSUMER] Completed processing message from ${message.topic}`,
+            {
+              correlationId,
+              topic: message.topic,
+              partition: message.partition,
+              timestamp: new Date().toISOString(),
+            },
+          );
+        } catch (processingError) {
+          const err = this.normalizeError(
+            processingError,
+            `Error processing message from topic ${message.topic}`,
+          );
+          this.logger.error(err.message, {
+            correlationId,
+            topic: message.topic,
+            partition: message.partition,
+            error: err.stack || err.message,
           });
-        } catch (connectError) {
-          cleanup();
-          this.producerConnecting = undefined;
-          reject(connectError as Error);
+          await this.sendToDLQ(message.topic, message.value).catch((dlqError) => {
+            const dlqErr = this.normalizeError(
+              dlqError,
+              `Failed to send message to DLQ for topic ${message.topic}`,
+            );
+            this.logger.error(dlqErr.message, {
+              correlationId,
+              topic: message.topic,
+              error: dlqErr.stack || dlqErr.message,
+            });
+          });
         }
-      });
-    }
-
-    await this.producerConnecting;
-
-    if (!this.producerReady) {
-      throw new Error('Kafka producer not ready after connection attempt');
-    }
-  }
-
-  private async reconnectProducer(): Promise<void> {
-    this.producerReady = false;
-    this.producerConnecting = undefined;
-
-    if (this.producer.isConnected()) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          this.producer.disconnect((err) => {
-            if (err) {
-              reject(
-                this.normalizeError(err, 'Kafka producer disconnect error'),
-              );
-            } else {
-              resolve();
-            }
-          });
-        });
-      } catch (error) {
-        const err = error as Error;
-        this.logger.warn('Failed to disconnect producer during reconnect', {
+      }
+    } catch (error) {
+      if (!this.shuttingDown) {
+        const err = this.normalizeError(error, 'Kafka consumer loop error');
+        this.logger.error(err.message, {
+          groupId,
+          topics,
           error: err.stack || err.message,
         });
       }
+    } finally {
+      this.consumerStreams.delete(groupId);
+      this.consumerLoops.delete(groupId);
+      if (!this.shuttingDown) {
+        this.logger.warn(`Kafka consumer loop for group ${groupId} ended`);
+      }
     }
-
-    await this.ensureProducerConnected();
   }
 
-  private async flushProducer(timeoutMs = 1000): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.producer.flush(timeoutMs, (err) => {
-        if (err) {
-          reject(this.normalizeError(err, 'Kafka producer flush error'));
-        } else {
-          resolve();
-        }
-      });
+  private async closeStream(groupId: string): Promise<void> {
+    const stream = this.consumerStreams.get(groupId);
+    if (!stream) {
+      return;
+    }
+
+    await stream.close();
+    this.consumerStreams.delete(groupId);
+  }
+
+  private buildHeaders(
+    correlationId: string,
+    timestamp: number,
+  ): Record<string, string> {
+    return {
+      'correlation-id': correlationId,
+      timestamp: timestamp.toString(),
+      'content-type': 'application/json',
+    };
+  }
+
+  private getHeaderValue(
+    headers: Map<string, string> | undefined,
+    key: string,
+  ): string | undefined {
+    if (!headers) {
+      return undefined;
+    }
+
+    const value = headers.get(key);
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    return undefined;
+  }
+
+  private async sendRecords(
+    topic: string,
+    values: unknown[],
+    correlationId: string,
+    timestamp: number,
+  ): Promise<void> {
+    const headers = this.buildHeaders(correlationId, timestamp);
+
+    await this.producer.send({
+      messages: values.map((value) => ({
+        topic,
+        value,
+        headers,
+      })),
+      acks: ProduceAcks.ALL,
     });
   }
 
-  private async delay(ms: number): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+  private async sendToDLQ(originalTopic: string, message: unknown): Promise<void> {
+    const dlqTopic = `${originalTopic}.dlq`;
+
+    const serializedMessage = this.serializeForDlq(message);
+
+    await this.produce(dlqTopic, {
+      originalTopic,
+      originalMessage: serializedMessage,
+      error: 'Failed to process message',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  private serializeForDlq(message: unknown): string {
+    try {
+      if (Buffer.isBuffer(message)) {
+        return message.toString('base64');
+      }
+
+      if (message === undefined) {
+        return Buffer.from('null', 'utf8').toString('base64');
+      }
+
+      return Buffer.from(JSON.stringify(message), 'utf8').toString('base64');
+    } catch (error) {
+      const fallback = this.normalizeError(error, 'Failed to serialize DLQ message');
+      this.logger.warn(fallback.message, {
+        error: fallback.stack || fallback.message,
+      });
+      return Buffer.from(String(message), 'utf8').toString('base64');
+    }
   }
 
   private normalizeError(error: unknown, fallbackMessage: string): Error {
@@ -240,578 +544,5 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       );
     }
   }
-
-  private async sendWithReconnect(
-    sendAction: () => void,
-    metadata: { topic: string; correlationId?: string; messageCount?: number },
-  ): Promise<void> {
-    await this.ensureProducerConnected();
-
-    try {
-      sendAction();
-      await this.flushProducer();
-      return;
-    } catch (error) {
-      const err = error as Error;
-      this.logger.warn('Kafka producer send failed, attempting reconnect', {
-        ...metadata,
-        error: err.stack || err.message,
-      });
-    }
-
-    await this.reconnectProducer();
-
-    this.logger.info('Retrying Kafka send after reconnect delay', {
-      ...metadata,
-      delayMs: this.retryDelayAfterReconnectMs,
-    });
-
-    await this.delay(this.retryDelayAfterReconnectMs);
-
-    try {
-      sendAction();
-      await this.flushProducer();
-    } catch (retryError) {
-      const retryErr = retryError as Error;
-      this.logger.error('Kafka producer retry failed after reconnect', {
-        ...metadata,
-        error: retryErr.stack || retryErr.message,
-      });
-      throw retryErr;
-    }
-  }
-
-  private buildHeaders(
-    correlationId: string,
-    timestamp: number,
-  ): Array<{ key: string; value: Buffer }> {
-    return [
-      { key: 'correlation-id', value: Buffer.from(correlationId, 'utf8') },
-      { key: 'timestamp', value: Buffer.from(timestamp.toString(), 'utf8') },
-      { key: 'content-type', value: Buffer.from('application/json', 'utf8') },
-    ];
-  }
-
-  private getHeaderValue(headers: unknown, key: string): string | undefined {
-    if (!Array.isArray(headers)) {
-      return undefined;
-    }
-
-    for (const header of headers as Array<{
-      key?: unknown;
-      value?: unknown;
-    }>) {
-      if (header?.key !== key) {
-        continue;
-      }
-
-      const value = header.value;
-      if (typeof value === 'string') {
-        return value;
-      }
-
-      if (Buffer.isBuffer(value)) {
-        return value.toString('utf8');
-      }
-    }
-
-    return undefined;
-  }
-
-  async sendMessage(topic: string, message: unknown): Promise<void> {
-    try {
-      const encodedMessage = this.encodeMessage(message);
-      await this.sendWithReconnect(
-        () => {
-          this.producer.produce(
-            topic,
-            null,
-            encodedMessage,
-            undefined,
-            Date.now(),
-          );
-        },
-        { topic },
-      );
-      this.logger.log(`Message sent to topic ${topic}`);
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `Failed to send message to topic ${topic}: ${err.message}`,
-      );
-      throw new KafkaProducerException(
-        `Failed to send message to topic ${topic}: ${err.message}`,
-      );
-    }
-  }
-
-  private encodeMessage(message: unknown): Buffer {
-    try {
-      const jsonString = JSON.stringify(message);
-      return Buffer.from(jsonString, 'utf8');
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to encode message as JSON', {
-        error: err.stack || err.message,
-      });
-      throw new Error(`Failed to encode message as JSON: ${err.message}`);
-    }
-  }
-
-  private decodeMessage(buffer: Buffer): unknown {
-    try {
-      const jsonString = buffer.toString('utf8');
-      return JSON.parse(jsonString);
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to decode JSON message', {
-        error: err.stack || err.message,
-      });
-      throw new Error(`Failed to decode JSON message: ${err.message}`);
-    }
-  }
-
-  async produce(topic: string, message: unknown): Promise<void> {
-    const correlationId = uuidv4();
-    const timestamp = Date.now();
-
-    try {
-      await this.circuitBreaker.execute(async () => {
-        const encodedValue = this.encodeMessage(message);
-        const headers = this.buildHeaders(correlationId, timestamp);
-
-        await this.sendWithReconnect(
-          () => {
-            this.producer.produce(
-              topic,
-              null,
-              encodedValue,
-              undefined,
-              timestamp,
-              headers as any,
-            );
-          },
-          { topic, correlationId },
-        );
-
-        this.logger.info(`[KAFKA-PRODUCER] Message produced to ${topic}`, {
-          correlationId,
-          topic,
-          timestamp: new Date(timestamp).toISOString(),
-        });
-      });
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(`Failed to produce message to ${topic}`, {
-        correlationId,
-        error: err.stack || err.message,
-      });
-      throw new KafkaProducerException(
-        `Failed to produce message to ${topic}: ${err.message}`,
-      );
-    }
-  }
-
-  async produceBatch(topic: string, messages: unknown[]): Promise<void> {
-    const correlationId = uuidv4();
-    const startTime = Date.now();
-
-    try {
-      await this.circuitBreaker.execute(async () => {
-        this.logger.info(`Producing batch to ${topic}`, {
-          correlationId,
-          count: messages.length,
-        });
-
-        const timestamp = Date.now();
-        const headers = this.buildHeaders(correlationId, timestamp);
-
-        await this.sendWithReconnect(
-          () => {
-            messages.forEach((message) => {
-              const encoded = this.encodeMessage(message);
-
-              this.producer.produce(
-                topic,
-                null,
-                encoded,
-                undefined,
-                timestamp,
-                headers as any,
-              );
-            });
-          },
-          {
-            topic,
-            correlationId,
-            messageCount: messages.length,
-          },
-        );
-        this.logger.info(`Batch produced to ${topic}`, {
-          correlationId,
-          count: messages.length,
-          latency: Date.now() - startTime,
-        });
-      });
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(`Failed to produce batch to ${topic}`, {
-        correlationId,
-        error: err.stack || err.message,
-        count: messages.length,
-      });
-      throw new KafkaProducerException(
-        `Failed to produce batch to ${topic}: ${err.message}`,
-      );
-    }
-  }
-
-  async consume(
-    groupId: string,
-    topics: string[],
-    onMessage: (message: unknown) => Promise<void>,
-  ): Promise<void> {
-    const correlationId = uuidv4();
-
-    try {
-      await this.circuitBreaker.execute(async () => {
-        let consumer = this.consumers.get(groupId);
-        if (!consumer) {
-          consumer = this.createConsumer(groupId);
-          this.consumers.set(groupId, consumer);
-        }
-
-        await this.connectConsumer(consumer, groupId, topics);
-        this.startConsumerLoop(consumer, groupId, topics, onMessage);
-      });
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(`Failed to start consumer for group ${groupId}`, {
-        error: err.stack,
-        correlationId,
-        topics,
-      });
-      throw new KafkaConsumerException(
-        `Failed to start consumer for group ${groupId}`,
-        {
-          error: err.stack || err.message,
-        },
-      );
-    }
-  }
-
-  private createConsumer(groupId: string): Kafka.KafkaConsumer {
-    const consumerConfig: Kafka.ConsumerGlobalConfig = {
-      'group.id': groupId,
-      'metadata.broker.list': this.kafkaConfig.brokers.join(','),
-      'client.id': `${this.kafkaConfig.clientId}-${groupId}`,
-      'enable.auto.commit': true,
-      'auto.commit.interval.ms': CONFIG.KAFKA.DEFAULT_AUTO_COMMIT_INTERVAL,
-      'queued.min.messages': 1,
-    };
-
-    const topicConfig: Kafka.ConsumerTopicConfig = {
-      'auto.offset.reset': 'latest',
-    };
-
-    const consumer = new Kafka.KafkaConsumer(consumerConfig, topicConfig);
-
-    consumer.on('event.error', (err: Kafka.LibrdKafkaError) => {
-      this.logger.error(`Kafka consumer error for group ${groupId}`, {
-        error: err.message,
-        code: err.code,
-      });
-    });
-
-    consumer.on('disconnected', () => {
-      this.consumerLoops.delete(groupId);
-      this.logger.warn(`Kafka consumer ${groupId} disconnected`);
-    });
-
-    return consumer;
-  }
-
-  private async connectConsumer(
-    consumer: Kafka.KafkaConsumer,
-    groupId: string,
-    topics: string[],
-  ): Promise<void> {
-    if (consumer.isConnected()) {
-      consumer.unsubscribe();
-      consumer.subscribe(topics);
-      this.logger.info(`Kafka consumer ${groupId} re-subscribed`, { topics });
-      return;
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      const onReady = () => {
-        try {
-          consumer.subscribe(topics);
-          this.logger.info(`Kafka consumer ${groupId} connected`, { topics });
-          resolve();
-        } catch (subscribeError) {
-          reject(subscribeError as Error);
-        } finally {
-          cleanup();
-        }
-      };
-
-      const onError = (err: Kafka.LibrdKafkaError) => {
-        cleanup();
-        reject(new Error(err.message));
-      };
-
-      const cleanup = () => {
-        consumer.removeListener('ready', onReady);
-        consumer.removeListener('event.error', onError);
-      };
-
-      consumer.once('ready', onReady);
-      consumer.once('event.error', onError);
-
-      try {
-        consumer.connect();
-      } catch (error) {
-        cleanup();
-        reject(error as Error);
-      }
-    });
-  }
-
-  private startConsumerLoop(
-    consumer: Kafka.KafkaConsumer,
-    groupId: string,
-    topics: string[],
-    onMessage: (message: unknown) => Promise<void>,
-  ): void {
-    if (this.consumerLoops.get(groupId)) {
-      return;
-    }
-
-    this.consumerLoops.set(groupId, true);
-
-    const consumeNext = () => {
-      if (!consumer.isConnected()) {
-        this.logger.warn(
-          `Kafka consumer ${groupId} is not connected, retrying consume`,
-          {
-            groupId,
-            topics,
-          },
-        );
-        setTimeout(consumeNext, this.retryDelayAfterReconnectMs);
-        return;
-      }
-
-      consumer.consume(1, (err, messages) => {
-        if (err) {
-          this.logger.error(`Kafka consumer error for group ${groupId}`, {
-            error: err.message,
-            code: err.code,
-          });
-          setTimeout(consumeNext, this.retryDelayAfterReconnectMs);
-          return;
-        }
-
-        if (!messages || messages.length === 0) {
-          setTimeout(consumeNext, 100);
-          return;
-        }
-
-        const [message] = messages;
-
-        void (async () => {
-          const messageCorrelationId =
-            this.getHeaderValue(message.headers, 'correlation-id') || uuidv4();
-
-          try {
-            if (!message.value) {
-              throw new Error('Message value is null or undefined');
-            }
-
-            const decodedMessage = this.decodeMessage(message.value);
-
-            if (!decodedMessage) {
-              throw new Error('Decoded message is null or undefined');
-            }
-
-            this.logger.info(
-              `[KAFKA-CONSUMER] Starting to process message from ${message.topic}`,
-              {
-                correlationId: messageCorrelationId,
-                topic: message.topic,
-                partition: message.partition,
-                timestamp: new Date().toISOString(),
-              },
-            );
-
-            await onMessage(decodedMessage);
-
-            this.logger.info(
-              `[KAFKA-CONSUMER] Completed processing message from ${message.topic}`,
-              {
-                correlationId: messageCorrelationId,
-                topic: message.topic,
-                partition: message.partition,
-                timestamp: new Date().toISOString(),
-              },
-            );
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Error processing message from topic ${message.topic}`,
-              {
-                error: err.stack,
-                correlationId: messageCorrelationId,
-                topic: message.topic,
-                partition: message.partition,
-              },
-            );
-            if (message.value) {
-              await this.sendToDLQ(message.topic, message.value);
-            }
-          } finally {
-            consumeNext();
-          }
-        })();
-      });
-    };
-
-    consumeNext();
-  }
-
-  private async sendToDLQ(
-    originalTopic: string,
-    message: Buffer,
-  ): Promise<void> {
-    const dlqTopic = `${originalTopic}.dlq`;
-    try {
-      await this.produce(dlqTopic, {
-        originalTopic,
-        originalMessage: message.toString('base64'),
-        error: 'Failed to process message',
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to send message to DLQ', {
-        error: err.stack,
-        topic: dlqTopic,
-      });
-    }
-  }
-
-  async onApplicationShutdown(signal?: string): Promise<void> {
-    this.logger.info('Starting Kafka graceful shutdown', { signal });
-    const shutdownTimeout = 30000;
-
-    try {
-      this.logger.info('Stopping producer...');
-      await Promise.race([
-        new Promise<void>((resolve, reject) => {
-          this.producer.disconnect((err) => {
-            if (err) {
-              reject(
-                this.normalizeError(
-                  err,
-                  'Kafka producer shutdown disconnect error',
-                ),
-              );
-            } else {
-              resolve();
-            }
-          });
-        }),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Producer disconnect timeout')),
-            shutdownTimeout,
-          ),
-        ),
-      ]);
-      this.logger.info('Producer disconnected successfully');
-
-      this.logger.info('Stopping consumers...');
-      const consumerDisconnectPromises = Array.from(
-        this.consumers.entries(),
-      ).map(async ([groupId, consumer]) => {
-        try {
-          await Promise.race([
-            new Promise<void>((resolve, reject) => {
-              consumer.disconnect((err) => {
-                if (err) {
-                  reject(
-                    this.normalizeError(
-                      err,
-                      `Kafka consumer ${groupId} shutdown disconnect error`,
-                    ),
-                  );
-                } else {
-                  resolve();
-                }
-              });
-            }),
-            new Promise((_, reject) =>
-              setTimeout(
-                () =>
-                  reject(new Error(`Consumer ${groupId} disconnect timeout`)),
-                shutdownTimeout,
-              ),
-            ),
-          ]);
-          this.logger.info(`Consumer ${groupId} disconnected successfully`);
-        } catch (error) {
-          const err = error as Error;
-          this.logger.error(`Error disconnecting consumer ${groupId}`, {
-            error: err.stack,
-            groupId,
-          });
-        } finally {
-          this.consumerLoops.delete(groupId);
-        }
-      });
-
-      await Promise.all(consumerDisconnectPromises);
-      this.logger.info('All Kafka connections closed successfully.');
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error('Error during Kafka shutdown', {
-        error: err.stack,
-        signal,
-      });
-      throw err;
-    } finally {
-      this.consumers.clear();
-    }
-  }
-
-  async isConnected(): Promise<boolean> {
-    try {
-      await this.sendWithReconnect(
-        () => {
-          this.producer.produce(
-            '__kafka_health_check',
-            null,
-            Buffer.from('health_check'),
-            undefined,
-            Date.now(),
-          );
-        },
-        { topic: '__kafka_health_check' },
-      );
-
-      const consumersConnected = Array.from(this.consumers.values()).every(
-        (consumer) => consumer.isConnected(),
-      );
-
-      return this.producer.isConnected() && consumersConnected;
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error('Failed to check Kafka connection status', {
-        error: err.stack,
-        timestamp: new Date().toISOString(),
-      });
-      return false;
-    }
-  }
 }
+
