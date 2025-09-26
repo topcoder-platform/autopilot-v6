@@ -17,10 +17,6 @@ RUN pnpm build
 # ---- Production Stage ----
 FROM base AS production
 ENV NODE_ENV production
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    librdkafka1 \
-  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 EXPOSE 3000
