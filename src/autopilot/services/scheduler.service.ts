@@ -15,6 +15,8 @@ import {
 } from '../interfaces/autopilot.interface';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { Job, Queue, RedisOptions, Worker } from 'bullmq';
+import { ReviewService } from '../../review/review.service';
+import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -36,6 +38,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly finalizationRetryBaseDelayMs = 60_000;
   private readonly finalizationRetryMaxAttempts = 10;
   private readonly finalizationRetryMaxDelayMs = 10 * 60 * 1000;
+  private readonly reviewCloseRetryAttempts = new Map<string, number>();
+  private readonly reviewCloseRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly reviewCloseRetryMaxDelayMs = 60 * 60 * 1000;
 
   private redisConnection?: RedisOptions;
   private phaseQueue?: Queue<PhaseTransitionPayload>;
@@ -47,6 +52,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
+    private readonly reviewService: ReviewService,
   ) {}
 
   private async ensureInitialized(): Promise<void> {
@@ -391,6 +397,30 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      const isReviewPhase =
+        REVIEW_PHASE_NAMES.has(phaseDetails.name) ||
+        REVIEW_PHASE_NAMES.has(data.phaseTypeName);
+
+      if (operation === 'close' && isReviewPhase) {
+        try {
+          const pendingReviews = await this.reviewService.getPendingReviewCount(
+            data.phaseId,
+            data.challengeId,
+          );
+
+          if (pendingReviews > 0) {
+            await this.deferReviewPhaseClosure(data, pendingReviews);
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[REVIEW LATE] Unable to verify pending reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
       this.logger.log(
         `Phase ${data.phaseId} is currently ${phaseDetails.isOpen ? 'open' : 'closed'}, will ${operation} it`,
       );
@@ -405,6 +435,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
+
+        if (operation === 'close' && isReviewPhase) {
+          this.reviewCloseRetryAttempts.delete(
+            this.buildReviewPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
 
         if (operation === 'open') {
           try {
@@ -587,5 +623,48 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       clearTimeout(timer);
     }
     this.finalizationRetryTimers.delete(challengeId);
+  }
+
+  private async deferReviewPhaseClosure(
+    data: PhaseTransitionPayload,
+    pendingCount: number,
+  ): Promise<void> {
+    const key = this.buildReviewPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.reviewCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.reviewCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeReviewCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      this.logger.warn(
+        `[REVIEW LATE] Deferred closing review phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingCount} incomplete review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[REVIEW LATE] Failed to reschedule close for review phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.reviewCloseRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeReviewCloseRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.reviewCloseRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.reviewCloseRetryMaxDelayMs);
+  }
+
+  private buildReviewPhaseKey(challengeId: string, phaseId: string): string {
+    return `${challengeId}|${phaseId}`;
   }
 }

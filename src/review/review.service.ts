@@ -12,6 +12,10 @@ interface ReviewRecord {
   resourceId: string;
 }
 
+interface PendingCountRecord {
+  count: number | string;
+}
+
 @Injectable()
 export class ReviewService {
   private static readonly REVIEW_TABLE = Prisma.sql`"review"`;
@@ -205,6 +209,51 @@ export class ReviewService {
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('review.getExistingReviewPairs', {
+        challengeId: challengeId ?? null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getPendingReviewCount(
+    phaseId: string,
+    challengeId?: string,
+  ): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${phaseId}
+        AND (
+          "status" IS NULL
+          OR UPPER("status") NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getPendingReviewCount', {
+        challengeId: challengeId ?? null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          pendingCount: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getPendingReviewCount', {
         challengeId: challengeId ?? null,
         status: 'ERROR',
         source: ReviewService.name,
