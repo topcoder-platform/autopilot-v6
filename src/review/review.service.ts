@@ -247,6 +247,10 @@ export class ReviewService {
       SELECT "submissionId", "resourceId"
       FROM ${ReviewService.REVIEW_TABLE}
       WHERE "phaseId" = ${phaseId}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
     `;
 
     try {
