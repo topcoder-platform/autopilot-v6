@@ -375,7 +375,7 @@ export class ReviewService {
       );
 
       const created = await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw(Prisma.sql`
+        await tx.$executeRaw(Prisma.sql`
           SELECT pg_advisory_xact_lock(${lockId})
         `);
 
