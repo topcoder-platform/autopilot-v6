@@ -30,7 +30,6 @@ import {
   getNormalizedStringArray,
   isActiveStatus,
 } from '../utils/config.utils';
-import { getRequiredReviewerCountForPhase } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 
 @Injectable()
@@ -223,37 +222,20 @@ export class AutopilotService {
         return;
       }
 
-      const templatePhaseId = phase.phaseId ?? phase.id;
-      const requiredReviewers = getRequiredReviewerCountForPhase(
-        challenge.reviewers,
-        templatePhaseId,
-      );
-      if (requiredReviewers === 0) {
-        return;
-      }
-
-      const submissionCount = Math.max(
-        challenge.numOfSubmissions ?? 0,
-        await this.reviewService.getActiveSubmissionCount(challengeId),
+      const pendingReviews = await this.reviewService.getPendingReviewCount(
+        phase.id,
+        challengeId,
       );
 
-      if (submissionCount === 0) {
-        return;
-      }
-
-      const requiredReviews = submissionCount * requiredReviewers;
-      const completedReviews =
-        await this.reviewService.getCompletedReviewCountForPhase(phase.id);
-
-      if (completedReviews < requiredReviews) {
+      if (pendingReviews > 0) {
         this.logger.debug(
-          `Review phase ${phase.id} for challenge ${challengeId} has ${completedReviews}/${requiredReviews} completed reviews.`,
+          `Review phase ${phase.id} for challenge ${challengeId} still has ${pendingReviews} review(s) in progress.`,
         );
         return;
       }
 
       this.logger.log(
-        `All required reviews (${completedReviews}) completed for phase ${phase.id} on challenge ${challengeId}. Closing Review phase early.`,
+        `All reviews completed for phase ${phase.id} on challenge ${challengeId}. Closing Review phase early.`,
       );
 
       await this.schedulerService.advancePhase({

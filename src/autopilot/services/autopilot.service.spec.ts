@@ -157,6 +157,172 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       first2FinishService.handleSubmissionByChallengeId,
     ).toHaveBeenCalledWith('challenge-123', 'submission-123');
   });
+  describe('handleReviewCompleted (review phase)', () => {
+    const buildReviewPhase = (): IPhase => ({
+      id: 'phase-review',
+      phaseId: 'template-review',
+      name: 'Review',
+      description: null,
+      isOpen: true,
+      duration: 7200,
+      scheduledStartDate: new Date().toISOString(),
+      scheduledEndDate: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+      actualStartDate: new Date().toISOString(),
+      actualEndDate: null,
+      predecessor: null,
+      constraints: [],
+    });
+
+    const buildAppealsPhase = (): IPhase => ({
+      id: 'phase-appeals',
+      phaseId: 'template-appeals',
+      name: 'Appeals',
+      description: null,
+      isOpen: false,
+      duration: 3600,
+      scheduledStartDate: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+      scheduledEndDate: new Date(Date.now() + 3 * 3600 * 1000).toISOString(),
+      actualStartDate: null,
+      actualEndDate: null,
+      predecessor: 'template-review',
+      constraints: [],
+    });
+
+    const buildReviewChallenge = (
+      reviewPhase: IPhase = buildReviewPhase(),
+    ): IChallenge => ({
+      id: 'challenge-1',
+      name: 'Test Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 1001,
+      typeId: 'type-1',
+      trackId: 'track-1',
+      timelineTemplateId: 'timeline-1',
+      currentPhaseNames: [reviewPhase.name],
+      tags: [],
+      groups: [],
+      submissionStartDate: new Date().toISOString(),
+      submissionEndDate: new Date().toISOString(),
+      registrationStartDate: new Date().toISOString(),
+      registrationEndDate: new Date().toISOString(),
+      startDate: new Date().toISOString(),
+      endDate: null,
+      legacyId: null,
+      status: 'ACTIVE',
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: [],
+      phases: [reviewPhase, buildAppealsPhase()],
+      reviewers: [
+        {
+          id: 'reviewer-config',
+          scorecardId: 'scorecard-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: 'template-review',
+          basePayment: null,
+          incrementalPayment: null,
+          type: null,
+          aiWorkflowId: null,
+        },
+      ],
+      winners: [],
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: 'DEVELOP',
+      type: 'Standard',
+      legacy: {},
+      task: {},
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      overview: {},
+      numOfSubmissions: 2,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+    });
+
+    const buildPayload = () => ({
+      challengeId: 'challenge-1',
+      reviewId: 'review-1',
+      submissionId: 'sub-1',
+      scorecardId: 'scorecard-1',
+      reviewerResourceId: 'resource-1',
+      reviewerHandle: 'reviewer',
+      reviewerMemberId: '1',
+      submitterHandle: 'submitter',
+      submitterMemberId: '2',
+      completedAt: new Date().toISOString(),
+      initialScore: 90,
+    });
+
+    beforeEach(() => {
+      reviewService.getPendingReviewCount.mockResolvedValue(0);
+    });
+
+    it('does not close the review phase while reviews are still pending', async () => {
+      const reviewPhase = buildReviewPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildReviewChallenge(reviewPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+      reviewService.getPendingReviewCount.mockResolvedValueOnce(1);
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+        reviewPhase.id,
+        'challenge-1',
+      );
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    });
+
+    it('closes the review phase once all reviews are completed', async () => {
+      const reviewPhase = buildReviewPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildReviewChallenge(reviewPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+        reviewPhase.id,
+        'challenge-1',
+      );
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: reviewPhase.id,
+          phaseTypeName: reviewPhase.name,
+          state: 'END',
+        }),
+      );
+    });
+  });
+
   describe('handleReviewCompleted (post-mortem)', () => {
     const buildPhase = (): IPhase => ({
       id: 'phase-1',

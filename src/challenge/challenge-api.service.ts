@@ -336,6 +336,18 @@ export class ChallengeApiService {
       const currentPhaseNames = new Set<string>(
         challenge.currentPhaseNames || [],
       );
+      const scheduledStartDate = targetPhase.scheduledStartDate
+        ? new Date(targetPhase.scheduledStartDate)
+        : null;
+      const durationSeconds = this.computePhaseDurationSeconds(targetPhase);
+      const shouldAdjustSchedule =
+        operation === 'open' &&
+        scheduledStartDate !== null &&
+        durationSeconds !== null &&
+        scheduledStartDate.getTime() - now.getTime() > 1000;
+      const adjustedEndDate = shouldAdjustSchedule
+        ? new Date(now.getTime() + durationSeconds * 1000)
+        : null;
 
       try {
         await this.prisma.$transaction(async (tx) => {
@@ -347,6 +359,13 @@ export class ChallengeApiService {
                 isOpen: true,
                 actualStartDate: targetPhase.actualStartDate ?? now,
                 actualEndDate: null,
+                ...(shouldAdjustSchedule
+                  ? {
+                      scheduledStartDate: now,
+                      scheduledEndDate: adjustedEndDate!,
+                      duration: durationSeconds!,
+                    }
+                  : {}),
               },
             });
           } else {
@@ -453,6 +472,7 @@ export class ChallengeApiService {
           operation,
           hasWinningSubmission,
           nextPhaseCount: nextPhases?.length ?? 0,
+          scheduleAdjusted: shouldAdjustSchedule,
         },
       });
 
@@ -471,6 +491,26 @@ export class ChallengeApiService {
       });
       throw err;
     }
+  }
+
+  private computePhaseDurationSeconds(
+    phase: ChallengePhaseWithConstraints,
+  ): number | null {
+    if (typeof phase.duration === 'number' && phase.duration > 0) {
+      return phase.duration;
+    }
+
+    if (phase.scheduledStartDate && phase.scheduledEndDate) {
+      const startMs = new Date(phase.scheduledStartDate).getTime();
+      const endMs = new Date(phase.scheduledEndDate).getTime();
+      const diffSeconds = Math.round((endMs - startMs) / 1000);
+
+      if (Number.isFinite(diffSeconds) && diffSeconds > 0) {
+        return diffSeconds;
+      }
+    }
+
+    return null;
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
