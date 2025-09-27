@@ -178,6 +178,25 @@ export class ReviewAssignmentService {
     this.pollers.set(key, context);
   }
 
+  async handleReviewerRemoved(
+    challengeId: string,
+    phase: PhaseSummary,
+  ): Promise<void> {
+    const status = await this.evaluateAssignmentStatus(challengeId, phase);
+
+    if (status.phaseMissing || status.phaseOpen || status.ready) {
+      return;
+    }
+
+    this.logger.warn(
+      `Reviewer count below requirement for challenge ${challengeId}, phase ${phase.id}. Monitoring for new assignments.`,
+    );
+
+    if (!this.pollers.has(this.buildKey(challengeId, phase.id))) {
+      this.startPolling(challengeId, phase, () => Promise.resolve(true));
+    }
+  }
+
   private async evaluateAssignmentStatus(
     challengeId: string,
     phase: PhaseSummary,

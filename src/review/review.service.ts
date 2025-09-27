@@ -16,11 +16,57 @@ interface PendingCountRecord {
   count: number | string;
 }
 
+interface ReviewDetailRecord {
+  id: string;
+  phaseId: string | null;
+  resourceId: string;
+  submissionId: string | null;
+  scorecardId: string | null;
+  score: number | string | null;
+  status: string | null;
+}
+
+interface ScorecardRecord {
+  passingScore: number | string | null;
+}
+
+interface AppealCountRecord {
+  count: number | string;
+}
+
+interface SubmissionAggregationRecord {
+  submissionId: string;
+  legacySubmissionId: string | null;
+  memberId: string | null;
+  submittedDate: Date | null;
+  aggregateScore: number | string | null;
+  scorecardId: string | null;
+  scorecardLegacyId: string | null;
+  passingScore: number | string | null;
+}
+
+export interface SubmissionSummary {
+  submissionId: string;
+  legacySubmissionId: string | null;
+  memberId: string | null;
+  submittedDate: Date | null;
+  aggregateScore: number;
+  scorecardId: string | null;
+  scorecardLegacyId: string | null;
+  passingScore: number | null;
+  isPassing: boolean;
+}
+
 @Injectable()
 export class ReviewService {
   private static readonly REVIEW_TABLE = Prisma.sql`"review"`;
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
+  private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
+  private static readonly APPEAL_TABLE = Prisma.sql`"appeal"`;
+  private static readonly APPEAL_RESPONSE_TABLE = Prisma.sql`"appealResponse"`;
+  private static readonly REVIEW_ITEM_COMMENT_TABLE = Prisma.sql`"reviewItemComment"`;
+  private static readonly REVIEW_ITEM_TABLE = Prisma.sql`"reviewItem"`;
 
   constructor(
     private readonly prisma: ReviewPrismaService,
@@ -267,7 +313,7 @@ export class ReviewService {
   }
 
   async createPendingReview(
-    submissionId: string,
+    submissionId: string | null,
     resourceId: string,
     phaseId: string,
     scorecardId: string,
@@ -296,14 +342,8 @@ export class ReviewService {
         FROM ${ReviewService.REVIEW_TABLE} existing
         WHERE existing."resourceId" = ${resourceId}
           AND existing."phaseId" = ${phaseId}
-          AND existing."submissionId" = ${submissionId}
-          AND (
-            existing."scorecardId" = ${scorecardId}
-            OR (
-              existing."scorecardId" IS NULL
-              AND ${scorecardId} IS NULL
-            )
-          )
+          AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
+          AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
       )
     `;
 
@@ -341,7 +381,429 @@ export class ReviewService {
     }
   }
 
+  async deletePendingReviewsForResource(
+    phaseId: string,
+    resourceId: string,
+    challengeId: string,
+  ): Promise<number> {
+    const query = Prisma.sql`
+      DELETE FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${phaseId}
+        AND "resourceId" = ${resourceId}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) = 'PENDING'
+        )
+    `;
+
+    try {
+      const deleted = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.deletePendingReviewsForResource', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          resourceId,
+          deletedCount: deleted,
+        },
+      });
+
+      return deleted;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.deletePendingReviewsForResource', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          resourceId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveSubmissionCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.SUBMISSION_TABLE}
+      WHERE "challengeId" = ${challengeId}
+        AND (
+          "status" = 'ACTIVE'
+          OR "status" IS NULL
+        )
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getActiveSubmissionCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          submissionCount: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveSubmissionCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getAllSubmissionIdsOrdered(challengeId: string): Promise<string[]> {
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SUBMISSION_TABLE}
+      WHERE "challengeId" = ${challengeId}
+      ORDER BY "submittedDate" ASC NULLS LAST, "createdAt" ASC, "id" ASC
+    `;
+
+    try {
+      const submissions =
+        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = submissions
+        .map((record) => record.id)
+        .filter(Boolean);
+
+      void this.dbLogger.logAction('review.getAllSubmissionIdsOrdered', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          submissionCount: submissionIds.length,
+        },
+      });
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getAllSubmissionIdsOrdered', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getCompletedReviewCountForPhase(phaseId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${phaseId}
+        AND UPPER(("status")::text) = 'COMPLETED'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getCompletedReviewCountForPhase', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          completedCount: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getCompletedReviewCountForPhase', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async generateReviewSummaries(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const aggregationQuery = Prisma.sql`
+      SELECT
+        s."id" AS "submissionId",
+        s."legacySubmissionId" AS "legacySubmissionId",
+        s."memberId" AS "memberId",
+        s."submittedDate" AS "submittedDate",
+        COALESCE(AVG(r."finalScore"), 0) AS "aggregateScore",
+        MAX(r."scorecardId") AS "scorecardId",
+        MAX(sc."legacyId") AS "scorecardLegacyId",
+        MAX(sc."minScore") AS "passingScore"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      LEFT JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."submissionId" = s."id"
+        AND (r."status"::text = 'COMPLETED')
+      LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+      GROUP BY s."id", s."legacySubmissionId", s."memberId", s."submittedDate"
+    `;
+
+    const aggregationRows =
+      await this.prisma.$queryRaw<SubmissionAggregationRecord[]>(
+        aggregationQuery,
+      );
+
+    const summaries: SubmissionSummary[] = aggregationRows.map((row) => {
+      const aggregateScore = Number(row.aggregateScore ?? 0);
+      const passingScore =
+        row.passingScore !== null && row.passingScore !== undefined
+          ? Number(row.passingScore)
+          : null;
+      const isPassing =
+        passingScore !== null ? aggregateScore >= passingScore : false;
+
+      return {
+        submissionId: row.submissionId,
+        legacySubmissionId: row.legacySubmissionId ?? null,
+        memberId: row.memberId ?? null,
+        submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+        aggregateScore,
+        scorecardId: row.scorecardId ?? null,
+        scorecardLegacyId: row.scorecardLegacyId ?? null,
+        passingScore,
+        isPassing,
+      };
+    });
+
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`
+          DELETE FROM ${ReviewService.REVIEW_SUMMATION_TABLE}
+          WHERE "submissionId" IN (
+            SELECT "id"
+            FROM ${ReviewService.SUBMISSION_TABLE}
+            WHERE "challengeId" = ${challengeId}
+          )
+        `,
+      );
+
+      for (const summary of summaries) {
+        await tx.$executeRaw(
+          Prisma.sql`
+            INSERT INTO ${ReviewService.REVIEW_SUMMATION_TABLE} (
+              "submissionId",
+              "legacySubmissionId",
+              "aggregateScore",
+              "scorecardId",
+              "scorecardLegacyId",
+              "isPassing",
+              "isFinal",
+              "reviewedDate",
+              "createdAt",
+              "createdBy",
+              "updatedAt",
+              "updatedBy"
+            )
+            VALUES (
+              ${summary.submissionId},
+              ${summary.legacySubmissionId},
+              ${summary.aggregateScore},
+              ${summary.scorecardId},
+              ${summary.scorecardLegacyId},
+              ${summary.isPassing},
+              true,
+              ${now},
+              ${now},
+              'autopilot',
+              ${now},
+              'autopilot'
+            )
+          `,
+        );
+      }
+    });
+
+    void this.dbLogger.logAction('review.generateReviewSummaries', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ReviewService.name,
+      details: {
+        submissionCount: summaries.length,
+        passingCount: summaries.filter((summary) => summary.isPassing).length,
+      },
+    });
+
+    return summaries;
+  }
+
   private composeKey(resourceId: string, submissionId: string): string {
     return `${resourceId}:${submissionId}`;
+  }
+
+  async getReviewById(reviewId: string): Promise<ReviewDetailRecord | null> {
+    if (!reviewId) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        "id",
+        "phaseId",
+        "resourceId",
+        "submissionId",
+        "scorecardId",
+        "score",
+        "status"
+      FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "id" = ${reviewId}
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<ReviewDetailRecord[]>(query);
+
+      void this.dbLogger.logAction('review.getReviewById', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          reviewId,
+          found: Boolean(record),
+          phaseId: record?.phaseId ?? null,
+        },
+      });
+
+      return record ?? null;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getReviewById', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          reviewId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getScorecardPassingScore(
+    scorecardId: string | null,
+  ): Promise<number | null> {
+    if (!scorecardId) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT "passingScore"
+      FROM "scorecard"
+      WHERE "id" = ${scorecardId}
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<ScorecardRecord[]>(query);
+      const rawScore = Number(record?.passingScore ?? NaN);
+      const passingScore = Number.isFinite(rawScore) ? rawScore : null;
+
+      void this.dbLogger.logAction('review.getScorecardPassingScore', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          scorecardId,
+          passingScore,
+        },
+      });
+
+      return passingScore;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getScorecardPassingScore', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          scorecardId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getPendingAppealCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.APPEAL_TABLE} a
+      INNER JOIN ${ReviewService.REVIEW_ITEM_COMMENT_TABLE} ric
+        ON ric."id" = a."reviewItemCommentId"
+      INNER JOIN ${ReviewService.REVIEW_ITEM_TABLE} ri
+        ON ri."id" = ric."reviewItemId"
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."id" = ri."reviewId"
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = r."submissionId"
+      LEFT JOIN ${ReviewService.APPEAL_RESPONSE_TABLE} ar
+        ON ar."appealId" = a."id"
+      WHERE s."challengeId" = ${challengeId}
+        AND ar."id" IS NULL
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<AppealCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getPendingAppealCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pendingAppeals: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getPendingAppealCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
   }
 }

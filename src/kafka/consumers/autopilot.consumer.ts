@@ -7,7 +7,11 @@ import { TopicPayloadMap } from '../types/topic-payload-map.type';
 import {
   ChallengeUpdatePayload,
   CommandPayload,
+  AppealRespondedPayload,
+  First2FinishSubmissionPayload,
   PhaseTransitionPayload,
+  ResourceEventPayload,
+  ReviewCompletedPayload,
   SubmissionAggregatePayload,
 } from 'src/autopilot/interfaces/autopilot.interface';
 
@@ -49,6 +53,26 @@ export class AutopilotConsumer {
         this.autopilotService.handleSubmissionNotificationAggregate.bind(
           this.autopilotService,
         ) as (message: SubmissionAggregatePayload) => Promise<void>,
+      [KAFKA_TOPICS.RESOURCE_CREATED]:
+        this.autopilotService.handleResourceCreated.bind(
+          this.autopilotService,
+        ) as (message: ResourceEventPayload) => Promise<void>,
+      [KAFKA_TOPICS.RESOURCE_DELETED]:
+        this.autopilotService.handleResourceDeleted.bind(
+          this.autopilotService,
+        ) as (message: ResourceEventPayload) => Promise<void>,
+      [KAFKA_TOPICS.REVIEW_COMPLETED]:
+        this.autopilotService.handleReviewCompleted.bind(
+          this.autopilotService,
+        ) as (message: ReviewCompletedPayload) => Promise<void>,
+      [KAFKA_TOPICS.REVIEW_APPEAL_RESPONDED]:
+        this.autopilotService.handleAppealResponded.bind(
+          this.autopilotService,
+        ) as (message: AppealRespondedPayload) => Promise<void>,
+      [KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED]:
+        this.autopilotService.handleFirst2FinishSubmission.bind(
+          this.autopilotService,
+        ) as (message: First2FinishSubmissionPayload) => Promise<void>,
     };
   }
 
@@ -83,6 +107,31 @@ export class AutopilotConsumer {
             case KAFKA_TOPICS.SUBMISSION_NOTIFICATION_AGGREGATE:
               await this.autopilotService.handleSubmissionNotificationAggregate(
                 payload as SubmissionAggregatePayload,
+              );
+              break;
+            case KAFKA_TOPICS.RESOURCE_CREATED:
+              await this.autopilotService.handleResourceCreated(
+                payload as ResourceEventPayload,
+              );
+              break;
+            case KAFKA_TOPICS.RESOURCE_DELETED:
+              await this.autopilotService.handleResourceDeleted(
+                payload as ResourceEventPayload,
+              );
+              break;
+            case KAFKA_TOPICS.REVIEW_COMPLETED:
+              await this.autopilotService.handleReviewCompleted(
+                payload as ReviewCompletedPayload,
+              );
+              break;
+            case KAFKA_TOPICS.REVIEW_APPEAL_RESPONDED:
+              await this.autopilotService.handleAppealResponded(
+                payload as AppealRespondedPayload,
+              );
+              break;
+            case KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED:
+              await this.autopilotService.handleFirst2FinishSubmission(
+                payload as First2FinishSubmissionPayload,
               );
               break;
             default:

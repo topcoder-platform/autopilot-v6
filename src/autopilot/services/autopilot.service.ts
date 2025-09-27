@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
@@ -8,14 +9,29 @@ import {
   CommandPayload,
   AutopilotOperator,
   SubmissionAggregatePayload,
+  ResourceEventPayload,
+  ReviewCompletedPayload,
+  AppealRespondedPayload,
+  First2FinishSubmissionPayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
-import { IPhase } from '../../challenge/interfaces/challenge.interface';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
-import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+import {
+  DEFAULT_APPEALS_PHASE_NAMES,
+  DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+  ITERATIVE_REVIEW_PHASE_NAME,
+  PHASE_ROLE_MAP,
+  REVIEW_PHASE_NAMES,
+  SUBMISSION_PHASE_NAME,
+} from '../constants/review.constants';
+import { ReviewService } from '../../review/review.service';
+import { ResourcesService } from '../../resources/resources.service';
 
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
-const ITERATIVE_REVIEW_PHASE_NAME = 'Iterative Review';
 const FIRST2FINISH_TYPE = 'first2finish';
 
 @Injectable()
@@ -23,12 +39,19 @@ export class AutopilotService {
   private readonly logger = new Logger(AutopilotService.name);
 
   private activeSchedules = new Map<string, string>();
+  private readonly reviewRoleNames: Set<string>;
+  private readonly appealsPhaseNames: Set<string>;
+  private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly postMortemRoles: string[];
 
   constructor(
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly reviewAssignmentService: ReviewAssignmentService,
+    private readonly reviewService: ReviewService,
+    private readonly resourcesService: ResourcesService,
+    private readonly configService: ConfigService,
   ) {
     // Set up the phase chain callback to handle next phase opening and scheduling
     this.schedulerService.setPhaseChainCallback(
@@ -45,6 +68,22 @@ export class AutopilotService {
           nextPhases,
         );
       },
+    );
+
+    this.postMortemRoles = this.getStringArray('autopilot.postMortemRoles', [
+      'Reviewer',
+      'Copilot',
+    ]);
+    this.reviewRoleNames = this.computeReviewRoleNames();
+    this.appealsPhaseNames = new Set(
+      this.getStringArray('autopilot.appealsPhaseNames', [
+        ...Array.from(DEFAULT_APPEALS_PHASE_NAMES),
+      ]),
+    );
+    this.appealsResponsePhaseNames = new Set(
+      this.getStringArray('autopilot.appealsResponsePhaseNames', [
+        ...Array.from(DEFAULT_APPEALS_RESPONSE_PHASE_NAMES),
+      ]),
     );
   }
 
@@ -452,59 +491,359 @@ export class AutopilotService {
         return;
       }
 
-      const iterativeReviewPhase = challenge.phases?.find(
-        (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
+      await this.processFirst2FinishSubmission(challenge, submissionId);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed processing submission aggregate for challenge ${challengeId}: ${err.message}`,
+        err.stack,
       );
+    }
+  }
 
-      if (!iterativeReviewPhase) {
+  async handleResourceCreated(payload: ResourceEventPayload): Promise<void> {
+    const { challengeId, id: resourceId } = payload;
+
+    if (!challengeId) {
+      this.logger.warn('Resource created event missing challengeId.', payload);
+      return;
+    }
+
+    try {
+      const resource = await this.resourcesService.getResourceById(resourceId);
+      const roleName = resource?.roleName
+        ? resource.roleName.trim()
+        : await this.resourcesService.getRoleNameById(payload.roleId);
+
+      if (resource && resource.challengeId !== challengeId) {
         this.logger.warn(
-          'No Iterative Review phase found for First2Finish challenge',
-          { submissionId, challengeId },
+          `Resource ${resourceId} reported for challenge ${challengeId}, but database indicates challenge ${resource.challengeId}. Proceeding with payload challenge ID.`,
         );
-        return;
       }
 
-      if (iterativeReviewPhase.isOpen) {
+      if (!roleName) {
+        this.logger.warn(
+          `Unable to determine role name for resource ${resourceId} on challenge ${challengeId}.`,
+        );
+      }
+
+      if (roleName && !this.isReviewRole(roleName)) {
         this.logger.debug(
-          'Iterative Review phase already open; skipping advance',
-          {
-            submissionId,
-            challengeId,
-            phaseId: iterativeReviewPhase.id,
-          },
+          `Ignoring resource ${resourceId} with non-review role ${roleName} for challenge ${challengeId}.`,
         );
         return;
       }
 
-      this.logger.log(
-        `Opening Iterative Review phase ${iterativeReviewPhase.id} for challenge ${challengeId} in response to submission ${submissionId}.`,
-      );
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
 
-      const advanceResult = await this.challengeApiService.advancePhase(
-        challenge.id,
-        iterativeReviewPhase.id,
-        'open',
-      );
-
-      if (!advanceResult.success) {
-        this.logger.warn(
-          'Advance phase operation reported failure for Iterative Review phase',
-          {
-            submissionId,
-            challengeId,
-            phaseId: iterativeReviewPhase.id,
-            message: advanceResult.message,
-          },
+      if (!this.isChallengeActive(challenge.status)) {
+        this.logger.debug(
+          `Skipping resource create for challenge ${challengeId} with status ${challenge.status}.`,
         );
-      } else {
-        this.logger.log(
-          `Iterative Review phase ${iterativeReviewPhase.id} opened for challenge ${challengeId}.`,
+        return;
+      }
+
+      const openReviewPhases = challenge.phases?.filter(
+        (phase) =>
+          phase.isOpen &&
+          REVIEW_PHASE_NAMES.has(phase.name) &&
+          phase.name !== ITERATIVE_REVIEW_PHASE_NAME,
+      );
+
+      if (openReviewPhases?.length) {
+        for (const phase of openReviewPhases) {
+          try {
+            await this.phaseReviewService.handlePhaseOpened(
+              challengeId,
+              phase.id,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to synchronize pending reviews for phase ${phase.id} on challenge ${challengeId} after resource creation: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+      }
+
+      if (
+        roleName &&
+        this.isFirst2FinishChallenge(challenge.type) &&
+        this.isIterativeReviewerRole(roleName)
+      ) {
+        await this.processFirst2FinishReviewerAdded(challenge);
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to handle resource creation for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleResourceDeleted(payload: ResourceEventPayload): Promise<void> {
+    const { challengeId, id: resourceId } = payload;
+
+    if (!challengeId) {
+      this.logger.warn('Resource deleted event: Missing challengeId.', payload);
+      return;
+    }
+
+    try {
+      const roleName = await this.resourcesService.getRoleNameById(
+        payload.roleId,
+      );
+
+      if (roleName && !this.isReviewRole(roleName)) {
+        this.logger.debug(
+          `Ignoring resource ${resourceId} deletion for non-review role ${roleName} on challenge ${challengeId}.`,
+        );
+        return;
+      }
+
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!this.isChallengeActive(challenge.status)) {
+        return;
+      }
+
+      const reviewPhases = challenge.phases?.filter((phase) =>
+        REVIEW_PHASE_NAMES.has(phase.name),
+      );
+
+      if (reviewPhases?.length) {
+        for (const phase of reviewPhases) {
+          try {
+            await this.reviewService.deletePendingReviewsForResource(
+              phase.id,
+              resourceId,
+              challengeId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to delete pending reviews for phase ${phase.id} on challenge ${challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+
+          await this.reviewAssignmentService.handleReviewerRemoved(
+            challengeId,
+            {
+              id: phase.id,
+              phaseId: phase.phaseId,
+              name: phase.name,
+            },
+          );
+        }
+      }
+
+      if (
+        roleName &&
+        this.isFirst2FinishChallenge(challenge.type) &&
+        this.isIterativeReviewerRole(roleName)
+      ) {
+        this.logger.warn(
+          `Iterative reviewer removed from challenge ${challengeId}; awaiting reassignment before continuing F2F processing.`,
         );
       }
     } catch (error) {
       const err = error as Error;
       this.logger.error(
-        `Failed processing submission aggregate for challenge ${challengeId}: ${err.message}`,
+        `Failed to handle resource deletion for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleReviewCompleted(payload: ReviewCompletedPayload): Promise<void> {
+    const { challengeId, reviewId } = payload;
+
+    try {
+      const review = await this.reviewService.getReviewById(reviewId);
+      if (!review || !review.phaseId) {
+        this.logger.warn(
+          `Review ${reviewId} not found or missing phase reference for challenge ${challengeId}.`,
+        );
+        return;
+      }
+
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!this.isChallengeActive(challenge.status)) {
+        return;
+      }
+
+      const phase = challenge.phases.find((p) => p.id === review.phaseId);
+      if (!phase) {
+        this.logger.warn(
+          `Phase ${review.phaseId} not found on challenge ${challengeId} when handling review completion.`,
+        );
+        return;
+      }
+
+      if (!phase.isOpen) {
+        this.logger.debug(
+          `Phase ${phase.id} already closed for challenge ${challengeId}; ignoring review completion event.`,
+        );
+        return;
+      }
+
+      if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
+        await this.processIterativeReviewCompletion(
+          challenge,
+          phase,
+          review,
+          payload,
+        );
+        return;
+      }
+
+      if (!REVIEW_PHASE_NAMES.has(phase.name)) {
+        return;
+      }
+
+      const requiredReviewers = this.getRequiredReviewerCount(challenge, phase);
+      if (requiredReviewers === 0) {
+        return;
+      }
+
+      const submissionCount = Math.max(
+        challenge.numOfSubmissions ?? 0,
+        await this.reviewService.getActiveSubmissionCount(challengeId),
+      );
+
+      if (submissionCount === 0) {
+        return;
+      }
+
+      const requiredReviews = submissionCount * requiredReviewers;
+      const completedReviews =
+        await this.reviewService.getCompletedReviewCountForPhase(phase.id);
+
+      if (completedReviews < requiredReviews) {
+        this.logger.debug(
+          `Review phase ${phase.id} for challenge ${challengeId} has ${completedReviews}/${requiredReviews} completed reviews.`,
+        );
+        return;
+      }
+
+      this.logger.log(
+        `All required reviews (${completedReviews}) completed for phase ${phase.id} on challenge ${challengeId}. Closing Review phase early.`,
+      );
+
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to handle review completion for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleAppealResponded(payload: AppealRespondedPayload): Promise<void> {
+    const { challengeId } = payload;
+
+    if (!challengeId) {
+      this.logger.warn('Appeal responded event missing challengeId.', payload);
+      return;
+    }
+
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!this.isChallengeActive(challenge.status)) {
+        this.logger.debug(
+          `Skipping appeal responded handling for challenge ${challengeId} with status ${challenge.status}.`,
+        );
+        return;
+      }
+
+      const pendingAppeals =
+        await this.reviewService.getPendingAppealCount(challengeId);
+
+      if (pendingAppeals > 0) {
+        this.logger.debug(
+          `Appeal responded processed for challenge ${challengeId}, but ${pendingAppeals} appeal(s) still pending response.`,
+        );
+        return;
+      }
+
+      const phasesToClose =
+        challenge.phases?.filter(
+          (phase) =>
+            phase.isOpen &&
+            (this.appealsResponsePhaseNames.has(phase.name) ||
+              this.appealsPhaseNames.has(phase.name)),
+        ) ?? [];
+
+      if (!phasesToClose.length) {
+        this.logger.debug(
+          `No open appeals or appeals response phases to close for challenge ${challengeId}.`,
+        );
+        return;
+      }
+
+      for (const phase of phasesToClose) {
+        try {
+          await this.schedulerService.advancePhase({
+            projectId: challenge.projectId,
+            challengeId: challenge.id,
+            phaseId: phase.id,
+            phaseTypeName: phase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM,
+            projectStatus: challenge.status,
+          });
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to close phase ${phase.id} (${phase.name}) on challenge ${challengeId} after appeals resolved: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to handle appeal responded event for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleFirst2FinishSubmission(
+    payload: First2FinishSubmissionPayload,
+  ): Promise<void> {
+    try {
+      const challenge = await this.challengeApiService.getChallengeById(
+        payload.challengeId,
+      );
+
+      if (!this.isFirst2FinishChallenge(challenge.type)) {
+        return;
+      }
+
+      await this.processFirst2FinishSubmission(challenge, payload.submissionId);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to handle First2Finish submission for challenge ${payload.challengeId}: ${err.message}`,
         err.stack,
       );
     }
@@ -634,6 +973,368 @@ export class AutopilotService {
       if (phaseId) {
         await this.handleSinglePhaseCancellation(challengeId, phaseId);
       }
+    }
+  }
+
+  private getStringArray(path: string, fallback: string[]): string[] {
+    const value = this.configService.get<unknown>(path);
+
+    if (Array.isArray(value)) {
+      const normalized = value
+        .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
+        .filter((item) => item.length > 0);
+      if (normalized.length) {
+        return normalized;
+      }
+    }
+
+    if (typeof value === 'string' && value.length > 0) {
+      const normalized = value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      if (normalized.length) {
+        return normalized;
+      }
+    }
+
+    return fallback;
+  }
+
+  private computeReviewRoleNames(): Set<string> {
+    const roles = new Set<string>();
+    for (const names of Object.values(PHASE_ROLE_MAP)) {
+      for (const name of names) {
+        roles.add(name);
+      }
+    }
+    this.postMortemRoles.forEach((role) => roles.add(role));
+    return roles;
+  }
+
+  private isReviewRole(roleName?: string | null): boolean {
+    if (!roleName) {
+      return false;
+    }
+    return this.reviewRoleNames.has(roleName);
+  }
+
+  private isIterativeReviewerRole(roleName: string): boolean {
+    const iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
+      'Iterative Reviewer',
+    ];
+    return iterativeRoles.includes(roleName);
+  }
+
+  private getScorecardIdForPhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): string | null {
+    const configs = challenge.reviewers?.filter(
+      (reviewer) => reviewer.phaseId === phase.phaseId && reviewer.scorecardId,
+    );
+
+    if (!configs?.length) {
+      return null;
+    }
+
+    return configs[0].scorecardId ?? null;
+  }
+
+  private getRequiredReviewerCount(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): number {
+    const reviewers = challenge.reviewers?.filter(
+      (reviewer) =>
+        reviewer.isMemberReview && reviewer.phaseId === phase.phaseId,
+    );
+
+    if (!reviewers?.length) {
+      return 0;
+    }
+
+    return reviewers.reduce((total, reviewer) => {
+      const count = reviewer.memberReviewerCount ?? 1;
+      return total + Math.max(count, 0);
+    }, 0);
+  }
+
+  private async processFirst2FinishSubmission(
+    challenge: IChallenge,
+    submissionId?: string,
+  ): Promise<void> {
+    if (!this.isFirst2FinishChallenge(challenge.type)) {
+      return;
+    }
+
+    const iterativePhase = challenge.phases?.find(
+      (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
+    );
+
+    if (!iterativePhase) {
+      this.logger.warn(
+        `No Iterative Review phase configured for First2Finish challenge ${challenge.id}.`,
+      );
+      return;
+    }
+
+    const iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
+      'Iterative Reviewer',
+    ];
+    const reviewers = await this.resourcesService.getReviewerResources(
+      challenge.id,
+      iterativeRoles,
+    );
+
+    if (!reviewers.length) {
+      this.logger.debug(
+        `Iterative reviewer not yet assigned for challenge ${challenge.id}; awaiting resource creation.`,
+      );
+      return;
+    }
+
+    const scorecardId = this.getScorecardIdForPhase(challenge, iterativePhase);
+    if (!scorecardId) {
+      this.logger.warn(
+        `Unable to determine scorecard for iterative review phase ${iterativePhase.id} on challenge ${challenge.id}.`,
+      );
+      return;
+    }
+
+    if (!iterativePhase.isOpen) {
+      const openResult = await this.challengeApiService.advancePhase(
+        challenge.id,
+        iterativePhase.id,
+        'open',
+      );
+
+      if (!openResult.success) {
+        this.logger.warn(
+          `Failed to open Iterative Review phase ${iterativePhase.id} on challenge ${challenge.id}: ${openResult.message}`,
+        );
+        return;
+      }
+    }
+
+    const assigned = await this.assignNextIterativeReview(
+      challenge.id,
+      iterativePhase,
+      reviewers[0].id,
+      scorecardId,
+      submissionId,
+    );
+
+    if (!assigned) {
+      this.logger.debug(
+        `No pending submissions found for iterative review on challenge ${challenge.id}.`,
+      );
+    }
+  }
+
+  private async processFirst2FinishReviewerAdded(
+    challenge: IChallenge,
+  ): Promise<void> {
+    this.logger.debug(
+      `Iterative reviewer ready for challenge ${challenge.id}; evaluating pending submissions.`,
+    );
+    await this.processFirst2FinishSubmission(challenge);
+  }
+
+  private async assignNextIterativeReview(
+    challengeId: string,
+    phase: IPhase,
+    resourceId: string,
+    scorecardId: string,
+    preferredSubmissionId?: string,
+  ): Promise<boolean> {
+    const submissionIds =
+      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
+
+    if (!submissionIds.length) {
+      return false;
+    }
+
+    const orderedIds = preferredSubmissionId
+      ? [preferredSubmissionId, ...submissionIds]
+      : submissionIds;
+
+    const seen = new Set<string>();
+    const uniqueIds = orderedIds.filter((id) => {
+      if (seen.has(id)) {
+        return false;
+      }
+      seen.add(id);
+      return true;
+    });
+
+    const existingPairs = await this.reviewService.getExistingReviewPairs(
+      phase.id,
+      challengeId,
+    );
+
+    for (const submissionId of uniqueIds) {
+      const key = `${resourceId}:${submissionId}`;
+      if (existingPairs.has(key)) {
+        continue;
+      }
+
+      const created = await this.reviewService.createPendingReview(
+        submissionId,
+        resourceId,
+        phase.id,
+        scorecardId,
+        challengeId,
+      );
+
+      if (created) {
+        this.logger.log(
+          `Assigned iterative review for submission ${submissionId} to resource ${resourceId} on challenge ${challengeId}.`,
+        );
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async processIterativeReviewCompletion(
+    challenge: IChallenge,
+    phase: IPhase,
+    review: {
+      score?: number | string | null;
+      scorecardId: string | null;
+      resourceId: string;
+      submissionId: string | null;
+      phaseId: string | null;
+    },
+    payload: ReviewCompletedPayload,
+  ): Promise<void> {
+    const scorecardId = review.scorecardId ?? payload.scorecardId;
+    const passingScore =
+      await this.reviewService.getScorecardPassingScore(scorecardId);
+
+    const rawScore =
+      typeof review.score === 'number'
+        ? review.score
+        : Number(review.score ?? payload.initialScore ?? 0);
+    const finalScore = Number.isFinite(rawScore)
+      ? Number(rawScore)
+      : Number(payload.initialScore ?? 0);
+
+    await this.schedulerService.advancePhase({
+      projectId: challenge.projectId,
+      challengeId: challenge.id,
+      phaseId: phase.id,
+      phaseTypeName: phase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM,
+      projectStatus: challenge.status,
+    });
+
+    if (passingScore !== null && finalScore >= passingScore) {
+      this.logger.log(
+        `Iterative review passed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
+      );
+
+      const submissionPhase = challenge.phases.find(
+        (p) => p.name === SUBMISSION_PHASE_NAME && p.isOpen,
+      );
+
+      if (submissionPhase) {
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: submissionPhase.id,
+          phaseTypeName: submissionPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+      }
+    } else {
+      this.logger.log(
+        `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore ?? 'N/A'}).`,
+      );
+      await this.prepareNextIterativeReview(challenge.id);
+    }
+  }
+
+  private async prepareNextIterativeReview(challengeId: string): Promise<void> {
+    const challenge =
+      await this.challengeApiService.getChallengeById(challengeId);
+
+    if (!this.isChallengeActive(challenge.status)) {
+      return;
+    }
+
+    const iterativePhase = challenge.phases?.find(
+      (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
+    );
+
+    if (!iterativePhase) {
+      return;
+    }
+
+    const iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
+      'Iterative Reviewer',
+    ];
+    const reviewers = await this.resourcesService.getReviewerResources(
+      challengeId,
+      iterativeRoles,
+    );
+
+    if (!reviewers.length) {
+      this.logger.warn(
+        `Awaiting iterative reviewer assignment for challenge ${challengeId} before processing next submission.`,
+      );
+      return;
+    }
+
+    const scorecardId = this.getScorecardIdForPhase(challenge, iterativePhase);
+    if (!scorecardId) {
+      this.logger.warn(
+        `Unable to determine scorecard for iterative review phase on challenge ${challengeId}.`,
+      );
+      return;
+    }
+
+    if (!iterativePhase.isOpen) {
+      const openResult = await this.challengeApiService.advancePhase(
+        challengeId,
+        iterativePhase.id,
+        'open',
+      );
+
+      if (!openResult.success) {
+        this.logger.warn(
+          `Failed to reopen Iterative Review phase ${iterativePhase.id} on challenge ${challengeId}: ${openResult.message}`,
+        );
+        return;
+      }
+    }
+
+    const assigned = await this.assignNextIterativeReview(
+      challengeId,
+      iterativePhase,
+      reviewers[0].id,
+      scorecardId,
+    );
+
+    if (!assigned) {
+      this.logger.debug(
+        `No additional submissions available for iterative review on challenge ${challengeId}; closing phase.`,
+      );
+
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: iterativePhase.id,
+        phaseTypeName: iterativePhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
     }
   }
 

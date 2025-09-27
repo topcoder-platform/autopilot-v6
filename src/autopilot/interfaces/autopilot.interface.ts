@@ -86,3 +86,51 @@ export interface SubmissionAggregatePayload {
   originalTopic?: string;
   [key: string]: unknown;
 }
+
+export interface ResourceEventPayload {
+  id: string;
+  challengeId: string;
+  memberId: string;
+  memberHandle: string;
+  roleId: string;
+  created: string;
+  createdBy: string;
+}
+
+export interface ReviewCompletedPayload {
+  challengeId: string;
+  submissionId: string;
+  reviewId: string;
+  scorecardId: string;
+  reviewerResourceId: string;
+  reviewerHandle: string;
+  reviewerMemberId: string;
+  submitterHandle: string;
+  submitterMemberId: string;
+  completedAt: string;
+  initialScore: number;
+}
+
+export interface AppealRespondedPayload {
+  challengeId: string;
+  submissionId: string;
+  reviewId: string;
+  scorecardId: string;
+  appealId: string;
+  appealResponseId: string;
+  reviewerResourceId: string;
+  reviewerHandle: string;
+  reviewerMemberId: string;
+  submitterHandle: string;
+  submitterMemberId: string;
+  reviewCompletedAt: string;
+  finalScore: number;
+}
+
+export interface First2FinishSubmissionPayload {
+  challengeId: string;
+  submissionId: string;
+  memberId: string;
+  memberHandle: string;
+  submittedAt: string;
+}

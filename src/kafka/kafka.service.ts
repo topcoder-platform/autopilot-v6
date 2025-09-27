@@ -284,14 +284,14 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 
-  async isConnected(): Promise<boolean> {
+  isConnected(): Promise<boolean> {
     try {
-      return (
-        this.producer.isConnected() &&
-        Array.from(this.consumers.values()).every((consumer) =>
-          consumer.isConnected(),
-        )
+      const producerConnected = this.producer.isConnected();
+      const consumersConnected = Array.from(this.consumers.values()).every(
+        (consumer) => consumer.isConnected(),
       );
+
+      return Promise.resolve(producerConnected && consumersConnected);
     } catch (error) {
       const err = this.normalizeError(
         error,
@@ -301,7 +301,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         error: err.stack || err.message,
         timestamp: new Date().toISOString(),
       });
-      return false;
+      return Promise.resolve(false);
     }
   }
 

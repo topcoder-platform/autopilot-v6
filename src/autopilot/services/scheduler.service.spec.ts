@@ -10,10 +10,33 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
+import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import {
   AutopilotOperator,
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
+
+type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
+  ReturnType<T>,
+  Parameters<OmitThisParameter<T>>
+>;
+
+const createMockMethod = <T extends (...args: any[]) => any>() =>
+  jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
+
+type ChallengeApiServiceMock = {
+  getPhaseDetails: MockedMethod<ChallengeApiService['getPhaseDetails']>;
+  advancePhase: MockedMethod<ChallengeApiService['advancePhase']>;
+  getChallengePhases: MockedMethod<ChallengeApiService['getChallengePhases']>;
+};
+
+type ReviewServiceMock = {
+  getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
+};
+
+type KafkaServiceMock = {
+  produce: MockedMethod<KafkaService['produce']>;
+};
 
 const createPayload = (
   overrides: Partial<PhaseTransitionPayload> = {},
@@ -28,24 +51,47 @@ const createPayload = (
   ...overrides,
 });
 
+const createPhase = (overrides: Partial<IPhase> = {}): IPhase => {
+  const now = new Date();
+  const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
+
+  return {
+    id: 'phase-1',
+    phaseId: 'phase-1',
+    name: 'Review',
+    description: null,
+    isOpen: true,
+    duration: 3600,
+    scheduledStartDate: now.toISOString(),
+    scheduledEndDate: oneHourLater.toISOString(),
+    actualStartDate: null,
+    actualEndDate: null,
+    predecessor: null,
+    constraints: [],
+    ...overrides,
+  };
+};
+
 describe('SchedulerService (review phase deferral)', () => {
   let scheduler: SchedulerService;
-  let kafkaService: jest.Mocked<KafkaService>;
-  let challengeApiService: jest.Mocked<ChallengeApiService>;
+  let kafkaService: KafkaServiceMock;
+  let challengeApiService: ChallengeApiServiceMock;
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
-  let reviewService: jest.Mocked<ReviewService>;
+  let reviewService: ReviewServiceMock;
 
   beforeEach(() => {
     kafkaService = {
-      produce: jest.fn(),
-    } as unknown as jest.Mocked<KafkaService>;
+      produce: createMockMethod<KafkaService['produce']>(),
+    };
 
     challengeApiService = {
-      getPhaseDetails: jest.fn(),
-      advancePhase: jest.fn(),
-      getChallengePhases: jest.fn(),
-    } as unknown as jest.Mocked<ChallengeApiService>;
+      getPhaseDetails:
+        createMockMethod<ChallengeApiService['getPhaseDetails']>(),
+      advancePhase: createMockMethod<ChallengeApiService['advancePhase']>(),
+      getChallengePhases:
+        createMockMethod<ChallengeApiService['getChallengePhases']>(),
+    };
 
     phaseReviewService = {
       handlePhaseOpened: jest.fn(),
@@ -56,15 +102,16 @@ describe('SchedulerService (review phase deferral)', () => {
     } as unknown as jest.Mocked<ChallengeCompletionService>;
 
     reviewService = {
-      getPendingReviewCount: jest.fn(),
-    } as unknown as jest.Mocked<ReviewService>;
+      getPendingReviewCount:
+        createMockMethod<ReviewService['getPendingReviewCount']>(),
+    };
 
     scheduler = new SchedulerService(
-      kafkaService,
-      challengeApiService,
+      kafkaService as unknown as KafkaService,
+      challengeApiService as unknown as ChallengeApiService,
       phaseReviewService,
       challengeCompletionService,
-      reviewService,
+      reviewService as unknown as ReviewService,
     );
   });
 
@@ -74,13 +121,14 @@ describe('SchedulerService (review phase deferral)', () => {
 
   it('defers closing review phases when pending reviews exist', async () => {
     const payload = createPayload();
-    const phaseDetails = {
+    const phaseDetails = createPhase({
       id: payload.phaseId,
+      phaseId: payload.phaseId,
       name: 'Review',
       isOpen: true,
-    };
+    });
 
-    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails as any);
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
     reviewService.getPendingReviewCount.mockResolvedValue(2);
 
     const scheduleSpy = jest
@@ -108,25 +156,32 @@ describe('SchedulerService (review phase deferral)', () => {
 
   it('closes review phases when no pending reviews remain', async () => {
     const payload = createPayload();
-    const phaseDetails = {
+    const phaseDetails = createPhase({
       id: payload.phaseId,
+      phaseId: payload.phaseId,
       name: 'Review',
       isOpen: true,
-    };
+    });
 
-    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails as any);
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
-    challengeApiService.advancePhase.mockResolvedValue({
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
       success: true,
       message: 'closed',
       updatedPhases: [
-        {
+        createPhase({
           id: payload.phaseId,
+          phaseId: payload.phaseId,
           isOpen: false,
           actualEndDate: new Date().toISOString(),
-        },
+        }),
       ],
-    } as any);
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
 
     await scheduler.advancePhase(payload);
 

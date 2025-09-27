@@ -55,6 +55,16 @@ export const validationSchema = Joi.object({
     .integer()
     .positive()
     .default(5 * 60 * 1000),
+  POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
+  POST_MORTEM_DURATION_HOURS: Joi.number().integer().positive().default(72),
+  POST_MORTEM_REVIEW_ROLES: Joi.string().default('Reviewer,Copilot'),
+  SUBMITTER_ROLE_NAMES: Joi.string().default('Submitter'),
+  ITERATIVE_REVIEW_DURATION_HOURS: Joi.number()
+    .integer()
+    .positive()
+    .default(24),
+  APPEALS_PHASE_NAMES: Joi.string().default('Appeals'),
+  APPEALS_RESPONSE_PHASE_NAMES: Joi.string().default('Appeals Response'),
 
   // Auth0 Configuration (optional in test environment)
   AUTH0_URL: Joi.string()

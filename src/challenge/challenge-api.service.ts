@@ -594,6 +594,134 @@ export class ChallengeApiService {
     };
   }
 
+  async createPostMortemPhase(
+    challengeId: string,
+    submissionPhaseId: string,
+    durationHours: number,
+  ): Promise<IPhase> {
+    const now = new Date();
+    const end = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
+
+    try {
+      const { createdPhaseId } = await this.prisma.$transaction(async (tx) => {
+        const challenge = await tx.challenge.findUnique({
+          ...challengeWithRelationsArgs,
+          where: { id: challengeId },
+        });
+
+        if (!challenge) {
+          throw new NotFoundException(
+            `Challenge with ID ${challengeId} not found when creating post-mortem phase.`,
+          );
+        }
+
+        const submissionPhaseIndex = challenge.phases.findIndex(
+          (phase) => phase.id === submissionPhaseId,
+        );
+
+        if (submissionPhaseIndex === -1) {
+          throw new NotFoundException(
+            `Submission phase ${submissionPhaseId} not found for challenge ${challengeId}.`,
+          );
+        }
+
+        const submissionPhase = challenge.phases[submissionPhaseIndex];
+
+        const futurePhaseIds = challenge.phases
+          .slice(submissionPhaseIndex + 1)
+          .map((phase) => phase.id);
+
+        if (futurePhaseIds.length) {
+          await tx.challengePhase.deleteMany({
+            where: { id: { in: futurePhaseIds } },
+          });
+        }
+
+        const postMortemPhaseType = await tx.phase.findUnique({
+          where: { name: 'Post-Mortem' },
+        });
+
+        if (!postMortemPhaseType) {
+          throw new NotFoundException(
+            'Phase type "Post-Mortem" is not configured in the system.',
+          );
+        }
+
+        const created = await tx.challengePhase.create({
+          data: {
+            challengeId,
+            phaseId: postMortemPhaseType.id,
+            name: postMortemPhaseType.name,
+            description: postMortemPhaseType.description,
+            predecessor: submissionPhase.phaseId ?? submissionPhase.id,
+            duration: Math.max(
+              Math.round((end.getTime() - now.getTime()) / 1000),
+              1,
+            ),
+            scheduledStartDate: now,
+            scheduledEndDate: end,
+            actualStartDate: now,
+            isOpen: true,
+            createdBy: 'Autopilot',
+            updatedBy: 'Autopilot',
+          },
+        });
+
+        await tx.challenge.update({
+          where: { id: challengeId },
+          data: {
+            currentPhaseNames: [postMortemPhaseType.name],
+          },
+        });
+
+        return { createdPhaseId: created.id };
+      });
+
+      const refreshed = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
+
+      const phaseRecord = refreshed?.phases.find(
+        (phase) => phase.id === createdPhaseId,
+      );
+
+      if (!phaseRecord) {
+        throw new Error(
+          `Created post-mortem phase ${createdPhaseId} not found after insertion for challenge ${challengeId}.`,
+        );
+      }
+
+      const mapped = this.mapPhase(phaseRecord);
+
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          submissionPhaseId,
+          postMortemPhaseId: mapped.id,
+          durationHours,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          submissionPhaseId,
+          durationHours,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async completeChallenge(
     challengeId: string,
     winners: IChallengeWinner[],
@@ -635,6 +763,38 @@ export class ChallengeApiService {
         status: 'ERROR',
         source: ChallengeApiService.name,
         details: { winnersCount: winners.length, error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async cancelChallenge(
+    challengeId: string,
+    status: ChallengeStatusEnum,
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.challenge.update({
+          where: { id: challengeId },
+          data: { status },
+        });
+
+        await tx.challengeWinner.deleteMany({ where: { challengeId } });
+      });
+
+      void this.dbLogger.logAction('challenge.cancelChallenge', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: { status },
+      });
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.cancelChallenge', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: { status, error: err.message },
       });
       throw err;
     }
