@@ -5,13 +5,18 @@ import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
-import { ResourceEventPayload } from '../interfaces/autopilot.interface';
+import {
+  AutopilotOperator,
+  ResourceEventPayload,
+} from '../interfaces/autopilot.interface';
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
   REVIEW_PHASE_NAMES,
 } from '../constants/review.constants';
 import { First2FinishService } from './first2finish.service';
+import { SchedulerService } from './scheduler.service';
+import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
 
 @Injectable()
 export class ResourceEventHandler {
@@ -27,11 +32,12 @@ export class ResourceEventHandler {
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
     private readonly first2FinishService: First2FinishService,
+    private readonly schedulerService: SchedulerService,
   ) {
-    const postMortemRoles = this.getStringArray('autopilot.postMortemRoles', [
-      'Reviewer',
-      'Copilot',
-    ]);
+    const postMortemRoles = getNormalizedStringArray(
+      this.configService.get('autopilot.postMortemRoles'),
+      ['Reviewer', 'Copilot'],
+    );
     this.reviewRoleNames = this.computeReviewRoleNames(postMortemRoles);
     this.iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
       'Iterative Reviewer',
@@ -74,12 +80,14 @@ export class ResourceEventHandler {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
 
-      if (!this.first2FinishService.isChallengeActive(challenge.status)) {
+      if (!isActiveStatus(challenge.status)) {
         this.logger.debug(
           `Skipping resource create for challenge ${challengeId} with status ${challenge.status}.`,
         );
         return;
       }
+
+      await this.maybeOpenDeferredReviewPhases(challenge);
 
       const openReviewPhases = challenge.phases?.filter(
         (phase) =>
@@ -144,7 +152,7 @@ export class ResourceEventHandler {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
 
-      if (!this.first2FinishService.isChallengeActive(challenge.status)) {
+      if (!isActiveStatus(challenge.status)) {
         return;
       }
 
@@ -197,6 +205,88 @@ export class ResourceEventHandler {
     }
   }
 
+  private async maybeOpenDeferredReviewPhases(
+    challenge: Awaited<ReturnType<ChallengeApiService['getChallengeById']>>,
+  ): Promise<void> {
+    const reviewPhases = challenge.phases ?? [];
+    if (!reviewPhases.length) {
+      return;
+    }
+
+    const now = Date.now();
+
+    for (const phase of reviewPhases) {
+      if (
+        phase.isOpen ||
+        !!phase.actualEndDate ||
+        phase.name === ITERATIVE_REVIEW_PHASE_NAME ||
+        !REVIEW_PHASE_NAMES.has(phase.name)
+      ) {
+        continue;
+      }
+
+      if (phase.scheduledStartDate) {
+        const scheduledStart = new Date(phase.scheduledStartDate).getTime();
+        if (Number.isFinite(scheduledStart) && scheduledStart > now) {
+          continue;
+        }
+      }
+
+      if (phase.predecessor) {
+        const predecessor = reviewPhases.find(
+          (candidate) =>
+            candidate.phaseId === phase.predecessor ||
+            candidate.id === phase.predecessor,
+        );
+
+        if (!predecessor?.actualEndDate) {
+          continue;
+        }
+      }
+
+      const openPhaseCallback = async (): Promise<boolean> => {
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'START',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+        return true;
+      };
+
+      let ready = false;
+      try {
+        ready = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+          challenge.id,
+          phase,
+          openPhaseCallback,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to verify reviewer assignments for phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+          err.stack,
+        );
+        continue;
+      }
+
+      if (!phase.isOpen && ready) {
+        try {
+          await openPhaseCallback();
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to auto-open review phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+    }
+  }
+
   private computeReviewRoleNames(postMortemRoles: string[]): Set<string> {
     const roles = new Set<string>();
     for (const names of Object.values(PHASE_ROLE_MAP)) {
@@ -215,28 +305,4 @@ export class ResourceEventHandler {
     return this.reviewRoleNames.has(roleName);
   }
 
-  private getStringArray(path: string, fallback: string[]): string[] {
-    const value = this.configService.get<unknown>(path);
-
-    if (Array.isArray(value)) {
-      const normalized = value
-        .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    if (typeof value === 'string' && value.length > 0) {
-      const normalized = value
-        .split(',')
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    return fallback;
-  }
 }

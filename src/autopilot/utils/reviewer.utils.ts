@@ -29,3 +29,29 @@ export function getRequiredReviewerCountForPhase(
     return total + Math.max(count, 0);
   }, 0);
 }
+
+export function selectScorecardId(
+  reviewers: IChallengeReviewer[],
+  onMissing?: () => void | null,
+  onMultiple?: (choices: Array<string | null | undefined>) => void | null,
+  phaseTemplateId?: string,
+): string | null {
+  const configs = phaseTemplateId
+    ? getMemberReviewerConfigs(reviewers, phaseTemplateId)
+    : reviewers.filter((reviewer) => reviewer.isMemberReview);
+
+  const uniqueScorecards = Array.from(
+    new Set(configs.map((config) => config.scorecardId).filter(Boolean)),
+  );
+
+  if (uniqueScorecards.length === 0) {
+    onMissing?.();
+    return null;
+  }
+
+  if (uniqueScorecards.length > 1) {
+    onMultiple?.(uniqueScorecards);
+  }
+
+  return uniqueScorecards[0] ?? null;
+}

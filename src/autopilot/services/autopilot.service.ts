@@ -22,9 +22,11 @@ import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
+  POST_MORTEM_PHASE_NAME,
   REVIEW_PHASE_NAMES,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
+import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
 import { getRequiredReviewerCountForPhase } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 
@@ -45,14 +47,16 @@ export class AutopilotService {
     private readonly configService: ConfigService,
   ) {
     this.appealsPhaseNames = new Set(
-      this.getStringArray('autopilot.appealsPhaseNames', [
-        ...Array.from(DEFAULT_APPEALS_PHASE_NAMES),
-      ]),
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsPhaseNames'),
+        [...Array.from(DEFAULT_APPEALS_PHASE_NAMES)],
+      ),
     );
     this.appealsResponsePhaseNames = new Set(
-      this.getStringArray('autopilot.appealsResponsePhaseNames', [
-        ...Array.from(DEFAULT_APPEALS_RESPONSE_PHASE_NAMES),
-      ]),
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsResponsePhaseNames'),
+        [...Array.from(DEFAULT_APPEALS_RESPONSE_PHASE_NAMES)],
+      ),
     );
   }
 
@@ -156,7 +160,7 @@ export class AutopilotService {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
 
-      if (!this.isChallengeActive(challenge.status)) {
+      if (!isActiveStatus(challenge.status)) {
         return;
       }
 
@@ -172,6 +176,33 @@ export class AutopilotService {
         this.logger.debug(
           `Phase ${phase.id} already closed for challenge ${challengeId}; ignoring review completion event.`,
         );
+        return;
+      }
+
+      if (phase.name === POST_MORTEM_PHASE_NAME) {
+        const pendingPostMortemReviews =
+          await this.reviewService.getPendingReviewCount(phase.id, challengeId);
+
+        if (pendingPostMortemReviews > 0) {
+          this.logger.debug(
+            `Post-mortem phase ${phase.id} on challenge ${challengeId} still has ${pendingPostMortemReviews} pending review(s).`,
+          );
+          return;
+        }
+
+        this.logger.log(
+          `All post-mortem reviews submitted for phase ${phase.id} on challenge ${challengeId}. Closing phase.`,
+        );
+
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
         return;
       }
 
@@ -252,7 +283,7 @@ export class AutopilotService {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
 
-      if (!this.isChallengeActive(challenge.status)) {
+      if (!isActiveStatus(challenge.status)) {
         this.logger.debug(
           `Skipping appeal responded handling for challenge ${challengeId} with status ${challenge.status}.`,
         );
@@ -417,9 +448,7 @@ export class AutopilotService {
         return;
       }
 
-      if (
-        !this.first2FinishService.isChallengeActive(challengeDetails.status)
-      ) {
+      if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
           `${AUTOPILOT_COMMANDS.RESCHEDULE_PHASE}: ignoring challenge ${challengeId} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -456,10 +485,6 @@ export class AutopilotService {
     }
   }
 
-  private isChallengeActive(status?: string): boolean {
-    return this.first2FinishService.isChallengeActive(status);
-  }
-
   private getStringArray(path: string, fallback: string[]): string[] {
     const value = this.configService.get<unknown>(path);
 
@@ -492,23 +517,6 @@ export class AutopilotService {
     nextPhases: IPhase[],
   ): Promise<void> {
     await this.phaseScheduleManager.processPhaseChain(
-      challengeId,
-      projectId,
-      projectStatus,
-      nextPhases,
-    );
-  }
-
-  scheduleNextPhases(
-    challengeId: string,
-    projectId: number,
-    projectStatus: string,
-    nextPhases: IPhase[],
-  ): void {
-    this.logger.warn(
-      `[PHASE CHAIN] scheduleNextPhases is deprecated, use openAndScheduleNextPhases instead`,
-    );
-    void this.openAndScheduleNextPhases(
       challengeId,
       projectId,
       projectStatus,

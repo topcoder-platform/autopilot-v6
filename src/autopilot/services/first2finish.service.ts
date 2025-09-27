@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
   IChallenge,
@@ -16,6 +17,8 @@ import {
   PHASE_ROLE_MAP,
   SUBMISSION_PHASE_NAME,
 } from '../constants/review.constants';
+import { isActiveStatus } from '../utils/config.utils';
+import { selectScorecardId } from '../utils/reviewer.utils';
 
 const FIRST2FINISH_TYPE = 'first2finish';
 
@@ -23,16 +26,28 @@ const FIRST2FINISH_TYPE = 'first2finish';
 export class First2FinishService {
   private readonly logger = new Logger(First2FinishService.name);
   private readonly iterativeRoles: string[];
+  private readonly iterativeReviewDurationMs: number;
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
     private readonly schedulerService: SchedulerService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
+    private readonly configService: ConfigService,
   ) {
     this.iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
       'Iterative Reviewer',
     ];
+
+    const configuredDuration = this.configService.get(
+      'autopilot.iterativeReviewDurationHours',
+    );
+    const parsedDuration = Number(configuredDuration);
+    const normalizedHours =
+      Number.isFinite(parsedDuration) && parsedDuration > 0
+        ? parsedDuration
+        : 24;
+    this.iterativeReviewDurationMs = normalizedHours * 60 * 60 * 1000;
   }
 
   isChallengeActive(status?: string): boolean {
@@ -162,7 +177,7 @@ export class First2FinishService {
       return;
     }
 
-    const scorecardId = this.getScorecardIdForPhase(challenge, iterativePhase);
+    const scorecardId = this.pickIterativeScorecard(challenge, iterativePhase);
     if (!scorecardId) {
       this.logger.warn(
         `Unable to determine scorecard for iterative review phase on challenge ${challenge.id}.`,
@@ -170,25 +185,19 @@ export class First2FinishService {
       return;
     }
 
-    if (!iterativePhase.isOpen) {
-      const openResult = await this.challengeApiService.advancePhase(
-        challenge.id,
-        iterativePhase.id,
-        'open',
-      );
+    const activePhase = await this.ensureIterativePhaseOpen(
+      challenge,
+      iterativePhase,
+    );
 
-      if (!openResult.success) {
-        this.logger.warn(
-          `Failed to open Iterative Review phase ${iterativePhase.id} on challenge ${challenge.id}: ${openResult.message}`,
-        );
-        return;
-      }
+    if (!activePhase) {
+      return;
     }
 
     const preferredSubmissionId = submissionId;
     const assigned = await this.assignNextIterativeReview(
       challenge.id,
-      iterativePhase,
+      activePhase,
       reviewers[0].id,
       scorecardId,
       preferredSubmissionId,
@@ -202,13 +211,16 @@ export class First2FinishService {
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,
         challengeId: challenge.id,
-        phaseId: iterativePhase.id,
-        phaseTypeName: iterativePhase.name,
+        phaseId: activePhase.id,
+        phaseTypeName: activePhase.name,
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,
       });
+      return;
     }
+
+    await this.scheduleIterativeReviewClosure(challenge, activePhase);
   }
 
   private async assignNextIterativeReview(
@@ -272,7 +284,7 @@ export class First2FinishService {
     const challenge =
       await this.challengeApiService.getChallengeById(challengeId);
 
-    if (!this.isChallengeActive(challenge.status)) {
+    if (!isActiveStatus(challenge.status)) {
       return;
     }
 
@@ -296,7 +308,7 @@ export class First2FinishService {
       return;
     }
 
-    const scorecardId = this.getScorecardIdForPhase(challenge, iterativePhase);
+    const scorecardId = this.pickIterativeScorecard(challenge, iterativePhase);
     if (!scorecardId) {
       this.logger.warn(
         `Unable to determine scorecard for iterative review phase on challenge ${challengeId}.`,
@@ -304,24 +316,18 @@ export class First2FinishService {
       return;
     }
 
-    if (!iterativePhase.isOpen) {
-      const openResult = await this.challengeApiService.advancePhase(
-        challengeId,
-        iterativePhase.id,
-        'open',
-      );
+    const activePhase = await this.ensureIterativePhaseOpen(
+      challenge,
+      iterativePhase,
+    );
 
-      if (!openResult.success) {
-        this.logger.warn(
-          `Failed to reopen Iterative Review phase ${iterativePhase.id} on challenge ${challengeId}: ${openResult.message}`,
-        );
-        return;
-      }
+    if (!activePhase) {
+      return;
     }
 
     const assigned = await this.assignNextIterativeReview(
       challengeId,
-      iterativePhase,
+      activePhase,
       reviewers[0].id,
       scorecardId,
     );
@@ -334,27 +340,94 @@ export class First2FinishService {
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,
         challengeId: challenge.id,
-        phaseId: iterativePhase.id,
-        phaseTypeName: iterativePhase.name,
+        phaseId: activePhase.id,
+        phaseTypeName: activePhase.name,
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,
       });
+      return;
     }
+
+    await this.scheduleIterativeReviewClosure(challenge, activePhase);
   }
 
-  private getScorecardIdForPhase(
+  private pickIterativeScorecard(
     challenge: IChallenge,
     phase: IPhase,
   ): string | null {
-    const configs = challenge.reviewers?.filter(
-      (reviewer) => reviewer.phaseId === phase.phaseId && reviewer.scorecardId,
+    return selectScorecardId(
+      challenge.reviewers ?? [],
+      () => null,
+      () => null,
+      phase.phaseId,
+    );
+  }
+
+  private async ensureIterativePhaseOpen(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<IPhase | null> {
+    if (phase.isOpen) {
+      return phase;
+    }
+
+    const openResult = await this.challengeApiService.advancePhase(
+      challenge.id,
+      phase.id,
+      'open',
     );
 
-    if (!configs?.length) {
+    if (!openResult.success) {
+      this.logger.warn(
+        `Failed to open Iterative Review phase ${phase.id} on challenge ${challenge.id}: ${openResult.message}`,
+      );
       return null;
     }
 
-    return configs[0].scorecardId ?? null;
+    const refreshedPhase =
+      openResult.updatedPhases?.find((current) => current.id === phase.id) ??
+      phase;
+
+    return {
+      ...phase,
+      ...refreshedPhase,
+      isOpen: true,
+      actualStartDate:
+        refreshedPhase.actualStartDate ?? phase.actualStartDate ?? new Date().toISOString(),
+    };
+  }
+
+  private async scheduleIterativeReviewClosure(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<void> {
+    const startTime = phase.actualStartDate
+      ? new Date(phase.actualStartDate).getTime()
+      : Date.now();
+    const deadline = Math.max(startTime + this.iterativeReviewDurationMs, Date.now());
+    const deadlineIso = new Date(deadline).toISOString();
+
+    try {
+      await this.schedulerService.schedulePhaseTransition({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+        projectStatus: challenge.status,
+        date: deadlineIso,
+      });
+      this.logger.debug(
+        `Scheduled iterative review phase ${phase.id} closure for challenge ${challenge.id} at ${deadlineIso}.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to schedule iterative review closure for challenge ${challenge.id}, phase ${phase.id}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 }

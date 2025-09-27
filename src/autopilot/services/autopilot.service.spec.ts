@@ -4,6 +4,7 @@ jest.mock('../../kafka/kafka.service', () => ({
 
 import { AutopilotService } from './autopilot.service';
 import { SubmissionAggregatePayload } from '../interfaces/autopilot.interface';
+import { POST_MORTEM_PHASE_NAME } from '../constants/review.constants';
 import type { PhaseScheduleManager } from './phase-schedule-manager.service';
 import type { ResourceEventHandler } from './resource-event-handler.service';
 import type { First2FinishService } from './first2finish.service';
@@ -20,21 +21,15 @@ type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
 const createMockMethod = <T extends (...args: any[]) => any>() =>
   jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
 
-type First2FinishServiceMock = {
-  handleSubmissionByChallengeId: MockedMethod<
-    First2FinishService['handleSubmissionByChallengeId']
-  >;
-  handleIterativeReviewerAdded: MockedMethod<
-    First2FinishService['handleIterativeReviewerAdded']
-  >;
-  handleIterativeReviewCompletion: MockedMethod<
-    First2FinishService['handleIterativeReviewCompletion']
-  >;
-  isChallengeActive: MockedMethod<First2FinishService['isChallengeActive']>;
-  isFirst2FinishChallenge: MockedMethod<
-    First2FinishService['isFirst2FinishChallenge']
-  >;
-};
+
+type First2FinishServiceMock = Pick<
+  jest.Mocked<First2FinishService>,
+  | 'handleSubmissionByChallengeId'
+  | 'handleIterativeReviewerAdded'
+  | 'handleIterativeReviewCompletion'
+  | 'isFirst2FinishChallenge'
+  | 'isChallengeActive'
+>;
 
 describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   const createPayload = (
@@ -47,9 +42,12 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     ...overrides,
   });
 
-  let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
-  let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
-  let first2FinishService: First2FinishServiceMock;
+  
+let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
+  
+let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
+  
+let first2FinishService: First2FinishServiceMock;
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
@@ -84,24 +82,20 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createMockMethod<
         First2FinishService['handleIterativeReviewCompletion']
       >();
-    const isChallengeActive =
-      createMockMethod<First2FinishService['isChallengeActive']>();
-    isChallengeActive.mockReturnValue(true);
-    const isFirst2FinishChallenge =
-      createMockMethod<First2FinishService['isFirst2FinishChallenge']>();
-    isFirst2FinishChallenge.mockReturnValue(true);
 
     first2FinishService = {
+
       handleSubmissionByChallengeId,
       handleIterativeReviewerAdded,
       handleIterativeReviewCompletion,
-      isChallengeActive,
-      isFirst2FinishChallenge,
-    };
+      isFirst2FinishChallenge: jest.fn().mockReturnValue(true),
+      isChallengeActive: jest.fn().mockReturnValue(true),
+    } as unknown as First2FinishServiceMock;
 
     schedulerService = {
       getAllScheduledTransitions: jest.fn().mockReturnValue([]),
       getAllScheduledTransitionsWithData: jest.fn().mockReturnValue(new Map()),
+      advancePhase: jest.fn(),
     } as unknown as jest.Mocked<SchedulerService>;
 
     challengeApiService = {
@@ -115,6 +109,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getActiveSubmissionCount: jest.fn(),
       getCompletedReviewCountForPhase: jest.fn(),
       getScorecardPassingScore: jest.fn(),
+      getPendingReviewCount: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
     configService = {
@@ -124,7 +119,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     autopilotService = new AutopilotService(
       phaseScheduleManager,
       resourceEventHandler,
-      first2FinishService,
+      first2FinishService as unknown as First2FinishService,
       schedulerService,
       challengeApiService,
       reviewService,
@@ -162,5 +157,114 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     expect(
       first2FinishService.handleSubmissionByChallengeId,
     ).toHaveBeenCalledWith('challenge-123', 'submission-123');
+  });
+  describe('handleReviewCompleted (post-mortem)', () => {
+    const buildPhase = () => ({
+      id: 'phase-1',
+      phaseId: 'template-1',
+      name: POST_MORTEM_PHASE_NAME,
+      description: null,
+      isOpen: true,
+      duration: 0,
+      scheduledStartDate: new Date().toISOString(),
+      scheduledEndDate: new Date(Date.now() + 3600 * 1000).toISOString(),
+      actualStartDate: new Date().toISOString(),
+      actualEndDate: null,
+      predecessor: null,
+      constraints: [],
+    });
+
+    const buildChallenge = (phase = buildPhase()) => ({
+      id: 'challenge-1',
+      projectId: 1001,
+      status: 'ACTIVE',
+      type: '',
+      typeId: '',
+      trackId: '',
+      timelineTemplateId: '',
+      currentPhaseNames: [],
+      tags: [],
+      groups: [],
+      submissionStartDate: new Date().toISOString(),
+      submissionEndDate: new Date().toISOString(),
+      registrationStartDate: new Date().toISOString(),
+      registrationEndDate: new Date().toISOString(),
+      startDate: new Date().toISOString(),
+      endDate: null,
+      legacyId: null,
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: [],
+      phases: [phase],
+      reviewers: [],
+      winners: [],
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: '',
+      legacy: {},
+      task: {},
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      overview: {},
+      numOfSubmissions: 0,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+    });
+
+    const buildPayload = () => ({
+      challengeId: 'challenge-1',
+      reviewId: 'review-1',
+      submissionId: 'submission-1',
+      scorecardId: 'scorecard-1',
+      reviewerResourceId: 'resource-1',
+      reviewerHandle: 'handle',
+      reviewerMemberId: '1',
+      submitterHandle: 'submitter',
+      submitterMemberId: '2',
+      completedAt: new Date().toISOString(),
+      initialScore: 0,
+    });
+
+    beforeEach(() => {
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: 'phase-1',
+        resourceId: 'resource-1',
+        submissionId: null,
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      } as any);
+
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildChallenge() as any,
+      );
+      reviewService.getPendingReviewCount.mockResolvedValue(0);
+    });
+
+    it('does not close the phase when post-mortem reviews are still pending', async () => {
+      reviewService.getPendingReviewCount.mockResolvedValueOnce(2);
+
+      await autopilotService.handleReviewCompleted(buildPayload() as any);
+
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    });
+
+    it('closes the post-mortem phase when all reviews are complete', async () => {
+      await autopilotService.handleReviewCompleted(buildPayload() as any);
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: 'phase-1',
+          phaseTypeName: POST_MORTEM_PHASE_NAME,
+          state: 'END',
+        }),
+      );
+    });
   });
 });

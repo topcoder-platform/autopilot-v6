@@ -10,6 +10,8 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
+import { ResourcesService } from '../../resources/resources.service';
+import { ConfigService } from '@nestjs/config';
 import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import {
   AutopilotOperator,
@@ -79,6 +81,8 @@ describe('SchedulerService (review phase deferral)', () => {
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let reviewService: ReviewServiceMock;
+  let resourcesService: jest.Mocked<ResourcesService>;
+  let configService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
     kafkaService = {
@@ -106,12 +110,24 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getPendingReviewCount']>(),
     };
 
+    resourcesService = {
+      hasSubmitterResource: jest.fn().mockResolvedValue(true),
+      getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
+      getReviewerResources: jest.fn().mockResolvedValue([]),
+    } as unknown as jest.Mocked<ResourcesService>;
+
+    configService = {
+      get: jest.fn().mockReturnValue(undefined),
+    } as unknown as jest.Mocked<ConfigService>;
+
     scheduler = new SchedulerService(
       kafkaService as unknown as KafkaService,
       challengeApiService as unknown as ChallengeApiService,
       phaseReviewService,
       challengeCompletionService,
       reviewService as unknown as ReviewService,
+      resourcesService,
+      configService,
     );
   });
 

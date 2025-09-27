@@ -6,7 +6,10 @@ import {
   getRoleNamesForPhase,
   REVIEW_PHASE_NAMES,
 } from '../constants/review.constants';
-import { getMemberReviewerConfigs } from '../utils/reviewer.utils';
+import {
+  getMemberReviewerConfigs,
+  selectScorecardId,
+} from '../utils/reviewer.utils';
 import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
 
 @Injectable()
@@ -47,10 +50,16 @@ export class PhaseReviewService {
       return;
     }
 
-    const scorecardId = this.pickScorecardId(
+    const scorecardId = selectScorecardId(
       reviewerConfigs,
-      challengeId,
-      phase.id,
+      () =>
+        this.logger.warn(
+          `Member reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phase.id}`,
+        ),
+      (choices) =>
+        this.logger.warn(
+          `Multiple scorecard IDs detected for challenge ${challengeId}, phase ${phase.id}. Using ${choices[0]} for pending reviews`,
+        ),
     );
     if (!scorecardId) {
       return;
@@ -120,28 +129,4 @@ export class PhaseReviewService {
     }
   }
 
-  private pickScorecardId(
-    reviewerConfigs: IChallengeReviewer[],
-    challengeId: string,
-    phaseId: string,
-  ): string | null {
-    const uniqueScorecards = Array.from(
-      new Set(reviewerConfigs.map((config) => config.scorecardId)),
-    );
-
-    if (uniqueScorecards.length === 0) {
-      this.logger.warn(
-        `Member reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phaseId}`,
-      );
-      return null;
-    }
-
-    if (uniqueScorecards.length > 1) {
-      this.logger.warn(
-        `Multiple scorecard IDs detected for challenge ${challengeId}, phase ${phaseId}. Using ${uniqueScorecards[0]} for pending reviews`,
-      );
-    }
-
-    return uniqueScorecards[0];
-  }
 }
