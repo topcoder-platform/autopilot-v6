@@ -1,7 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, ChallengeStatusEnum } from '@prisma/client';
+import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { ChallengePrismaService } from './challenge-prisma.service';
-import { IPhase, IChallenge } from './interfaces/challenge.interface';
+import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
+import {
+  IPhase,
+  IChallenge,
+  IChallengeWinner,
+} from './interfaces/challenge.interface';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -49,7 +54,10 @@ export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
   private readonly defaultPageSize = 50;
 
-  constructor(private readonly prisma: ChallengePrismaService) {}
+  constructor(
+    private readonly prisma: ChallengePrismaService,
+    private readonly dbLogger: AutopilotDbLoggerService,
+  ) {}
 
   async getAllActiveChallenges(
     filters: ChallengeFiltersDto = {},
@@ -66,34 +74,100 @@ export class ChallengeApiService {
       typeof filters.page === 'number' || typeof filters.perPage === 'number';
     const perPage = filters.perPage ?? this.defaultPageSize;
     const page = filters.page ?? 1;
+    try {
+      const challenges = await this.prisma.challenge.findMany({
+        ...challengeWithRelationsArgs,
+        where,
+        ...(shouldPaginate
+          ? {
+              skip: Math.max(page - 1, 0) * perPage,
+              take: perPage,
+            }
+          : {}),
+        orderBy: { updatedAt: 'desc' },
+      });
 
-    const challenges = await this.prisma.challenge.findMany({
-      ...challengeWithRelationsArgs,
-      where,
-      ...(shouldPaginate
-        ? {
-            skip: Math.max(page - 1, 0) * perPage,
-            take: perPage,
-          }
-        : {}),
-      orderBy: { updatedAt: 'desc' },
-    });
+      const mapped = challenges.map((challenge) =>
+        this.mapChallenge(challenge),
+      );
 
-    return challenges.map((challenge) => this.mapChallenge(challenge));
+      void this.dbLogger.logAction('challenge.getAllActiveChallenges', {
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          filters: {
+            status: filters.status ?? null,
+            isLightweight: filters.isLightweight ?? null,
+            page,
+            perPage,
+          },
+          resultCount: mapped.length,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+
+      void this.dbLogger.logAction('challenge.getAllActiveChallenges', {
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          filters: {
+            status: filters.status ?? null,
+            isLightweight: filters.isLightweight ?? null,
+            page,
+            perPage,
+          },
+          error: err.message,
+        },
+      });
+
+      throw err;
+    }
   }
 
   async getChallenge(challengeId: string): Promise<IChallenge | null> {
     this.logger.debug(`Fetching challenge with ID: ${challengeId}`);
-    const challenge = await this.prisma.challenge.findUnique({
-      ...challengeWithRelationsArgs,
-      where: { id: challengeId },
-    });
+    try {
+      const challenge = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
 
-    if (!challenge) {
-      return null;
+      if (!challenge) {
+        void this.dbLogger.logAction('challenge.getChallenge', {
+          challengeId,
+          status: 'SUCCESS',
+          source: ChallengeApiService.name,
+          details: { found: false },
+        });
+        return null;
+      }
+
+      const mapped = this.mapChallenge(challenge);
+
+      void this.dbLogger.logAction('challenge.getChallenge', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          found: true,
+          phaseCount: mapped.phases?.length ?? 0,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.getChallenge', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: { error: err.message },
+      });
+      throw err;
     }
-
-    return this.mapChallenge(challenge);
   }
 
   /**
@@ -112,7 +186,16 @@ export class ChallengeApiService {
 
   async getChallengePhases(challengeId: string): Promise<IPhase[]> {
     const challenge = await this.getChallenge(challengeId);
-    return challenge?.phases || [];
+    const phases = challenge?.phases || [];
+
+    void this.dbLogger.logAction('challenge.getChallengePhases', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ChallengeApiService.name,
+      details: { phaseCount: phases.length },
+    });
+
+    return phases;
   }
 
   async getPhaseDetails(
@@ -120,7 +203,19 @@ export class ChallengeApiService {
     phaseId: string,
   ): Promise<IPhase | null> {
     const phases = await this.getChallengePhases(challengeId);
-    return phases.find((p) => p.id === phaseId) || null;
+    const phase = phases.find((p) => p.id === phaseId) || null;
+
+    void this.dbLogger.logAction('challenge.getPhaseDetails', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ChallengeApiService.name,
+      details: {
+        phaseId,
+        found: Boolean(phase),
+      },
+    });
+
+    return phase;
   }
 
   async getPhaseTypeName(
@@ -128,7 +223,19 @@ export class ChallengeApiService {
     phaseId: string,
   ): Promise<string> {
     const phase = await this.getPhaseDetails(challengeId, phaseId);
-    return phase?.name || 'Unknown';
+    const name = phase?.name || 'Unknown';
+
+    void this.dbLogger.logAction('challenge.getPhaseTypeName', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ChallengeApiService.name,
+      details: {
+        phaseId,
+        phaseName: name,
+      },
+    });
+
+    return name;
   }
 
   async advancePhase(
@@ -136,153 +243,234 @@ export class ChallengeApiService {
     phaseId: string,
     operation: 'open' | 'close',
   ): Promise<PhaseAdvanceResponseDto> {
-    const challenge = await this.prisma.challenge.findUnique({
-      ...challengeWithRelationsArgs,
-      where: { id: challengeId },
-    });
-
     this.logger.debug(
       `Attempting to ${operation} phase ${phaseId} for challenge ${challengeId}`,
-    );  
-    
-    if (!challenge) {
-      this.logger.warn(
-        `Challenge ${challengeId} not found when advancing phase.`,
-      );
-      return {
-        success: false,
-        message: `Challenge ${challengeId} not found`,
-      };
-    }
-
-    if (challenge.status !== ChallengeStatusEnum.ACTIVE) {
-      return {
-        success: false,
-        message: `Challenge ${challengeId} is not active (status: ${challenge.status}).`,
-      };
-    }
-
-    const targetPhase = challenge.phases.find((phase) => phase.id === phaseId);
-
-    if (!targetPhase) {
-      this.logger.warn(
-        `Phase ${phaseId} not found in challenge ${challengeId} while attempting to ${operation}.`,
-      );
-      return {
-        success: false,
-        message: `Phase ${phaseId} not found in challenge ${challengeId}`,
-      };
-    }
-
-    if (operation === 'open' && targetPhase.isOpen) {
-      return {
-        success: false,
-        message: `Phase ${targetPhase.name} is already open`,
-      };
-    }
-
-    if (operation === 'close' && !targetPhase.isOpen) {
-      return {
-        success: false,
-        message: `Phase ${targetPhase.name} is already closed`,
-      };
-    }
-
-    const now = new Date();
-
-    const currentPhaseNames = new Set<string>(
-      challenge.currentPhaseNames || [],
     );
-
     try {
-      await this.prisma.$transaction(async (tx) => {
-        if (operation === 'open') {
-          currentPhaseNames.add(targetPhase.name);
-          await tx.challengePhase.update({
-            where: { id: targetPhase.id },
-            data: {
-              isOpen: true,
-              actualStartDate: targetPhase.actualStartDate ?? now,
-              actualEndDate: null,
-            },
-          });
-        } else {
-          currentPhaseNames.delete(targetPhase.name);
-          await tx.challengePhase.update({
-            where: { id: targetPhase.id },
-            data: {
-              isOpen: false,
-              actualEndDate: targetPhase.actualEndDate ?? now,
-            },
-          });
-        }
-
-        await tx.challenge.update({
-          where: { id: challengeId },
-          data: {
-            currentPhaseNames: Array.from(currentPhaseNames),
-          },
-        });
+      const challenge = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
       });
+
+      if (!challenge) {
+        this.logger.warn(
+          `Challenge ${challengeId} not found when advancing phase.`,
+        );
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Challenge ${challengeId} not found`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      if (challenge.status !== ChallengeStatusEnum.ACTIVE) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Challenge ${challengeId} is not active (status: ${challenge.status}).`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      const targetPhase = challenge.phases.find(
+        (phase) => phase.id === phaseId,
+      );
+
+      if (!targetPhase) {
+        this.logger.warn(
+          `Phase ${phaseId} not found in challenge ${challengeId} while attempting to ${operation}.`,
+        );
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${phaseId} not found in challenge ${challengeId}`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      if (operation === 'open' && targetPhase.isOpen) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${targetPhase.name} is already open`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      if (operation === 'close' && !targetPhase.isOpen) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${targetPhase.name} is already closed`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      const now = new Date();
+      const currentPhaseNames = new Set<string>(
+        challenge.currentPhaseNames || [],
+      );
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (operation === 'open') {
+            currentPhaseNames.add(targetPhase.name);
+            await tx.challengePhase.update({
+              where: { id: targetPhase.id },
+              data: {
+                isOpen: true,
+                actualStartDate: targetPhase.actualStartDate ?? now,
+                actualEndDate: null,
+              },
+            });
+          } else {
+            currentPhaseNames.delete(targetPhase.name);
+            await tx.challengePhase.update({
+              where: { id: targetPhase.id },
+              data: {
+                isOpen: false,
+                actualEndDate: targetPhase.actualEndDate ?? now,
+              },
+            });
+          }
+
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: {
+              currentPhaseNames: Array.from(currentPhaseNames),
+            },
+          });
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to ${operation} phase ${phaseId} for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Failed to ${operation} phase`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'ERROR',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, error: err.message },
+        });
+        return result;
+      }
+
+      const updatedChallenge = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
+
+      if (!updatedChallenge) {
+        const result: PhaseAdvanceResponseDto = {
+          success: true,
+          message: `Phase ${targetPhase.name} ${operation}d but failed to reload challenge`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      const hasWinningSubmission = (updatedChallenge.winners || []).length > 0;
+
+      const updatedPhases = updatedChallenge.phases.map((phase) =>
+        this.mapPhase(phase),
+      );
+
+      let nextPhases: IPhase[] | undefined;
+
+      if (operation === 'close') {
+        const successors = updatedChallenge.phases.filter((phase) => {
+          if (!phase.predecessor) {
+            return false;
+          }
+
+          const predecessorMatches =
+            phase.predecessor === targetPhase.phaseId ||
+            phase.predecessor === targetPhase.id;
+
+          return predecessorMatches && !phase.actualEndDate && !phase.isOpen;
+        });
+
+        if (successors.length > 0) {
+          nextPhases = successors.map((phase) => this.mapPhase(phase));
+        }
+      }
+
+      const result: PhaseAdvanceResponseDto = {
+        success: true,
+        hasWinningSubmission,
+        message: `Successfully ${operation}d phase ${targetPhase.name} for challenge ${challengeId}`,
+        updatedPhases,
+        next: nextPhases
+          ? {
+              operation: 'open',
+              phases: nextPhases,
+            }
+          : undefined,
+      };
+
+      void this.dbLogger.logAction('challenge.advancePhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          phaseId,
+          operation,
+          hasWinningSubmission,
+          nextPhaseCount: nextPhases?.length ?? 0,
+        },
+      });
+
+      return result;
     } catch (error) {
       const err = error as Error;
-      this.logger.error(
-        `Failed to ${operation} phase ${phaseId} for challenge ${challengeId}: ${err.message}`,
-        err.stack,
-      );
-      return { success: false, message: `Failed to ${operation} phase` };
-    }
-
-    const updatedChallenge = await this.prisma.challenge.findUnique({
-      ...challengeWithRelationsArgs,
-      where: { id: challengeId },
-    });
-
-    if (!updatedChallenge) {
-      return {
-        success: true,
-        message: `Phase ${targetPhase.name} ${operation}d but failed to reload challenge`,
-      };
-    }
-
-    const hasWinningSubmission = (updatedChallenge.winners || []).length > 0;
-
-    const updatedPhases = updatedChallenge.phases.map((phase) =>
-      this.mapPhase(phase),
-    );
-
-    let nextPhases: IPhase[] | undefined;
-
-    if (operation === 'close') {
-      const successors = updatedChallenge.phases.filter((phase) => {
-        if (!phase.predecessor) {
-          return false;
-        }
-
-        const predecessorMatches =
-          phase.predecessor === targetPhase.phaseId ||
-          phase.predecessor === targetPhase.id;
-
-        return predecessorMatches && !phase.actualEndDate && !phase.isOpen;
+      void this.dbLogger.logAction('challenge.advancePhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          phaseId,
+          operation,
+          error: err.message,
+        },
       });
-
-      if (successors.length > 0) {
-        nextPhases = successors.map((phase) => this.mapPhase(phase));
-      }
+      throw err;
     }
-
-    return {
-      success: true,
-      hasWinningSubmission,
-      message: `Successfully ${operation}d phase ${targetPhase.name} for challenge ${challengeId}`,
-      updatedPhases,
-      next: nextPhases
-        ? {
-            operation: 'open',
-            phases: nextPhases,
-          }
-        : undefined,
-    };
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
@@ -312,9 +500,10 @@ export class ChallengeApiService {
       updatedBy: challenge.updatedBy,
       metadata: [],
       phases: challenge.phases.map((phase) => this.mapPhase(phase)),
-      reviewers: challenge.reviewers?.map((reviewer) =>
-        this.mapReviewer(reviewer),
-      ) || [],
+      reviewers:
+        challenge.reviewers?.map((reviewer) => this.mapReviewer(reviewer)) ||
+        [],
+      winners: challenge.winners?.map((winner) => this.mapWinner(winner)) || [],
       discussions: [],
       events: [],
       prizeSets: [],
@@ -392,6 +581,63 @@ export class ChallengeApiService {
       type: reviewer.type ?? null,
       aiWorkflowId: reviewer.aiWorkflowId ?? null,
     };
+  }
+
+  private mapWinner(
+    winner: ChallengeWithRelations['winners'][number],
+  ): IChallengeWinner {
+    return {
+      userId: winner.userId,
+      handle: winner.handle,
+      placement: winner.placement,
+      type: winner.type,
+    };
+  }
+
+  async completeChallenge(
+    challengeId: string,
+    winners: IChallengeWinner[],
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.challenge.update({
+          where: { id: challengeId },
+          data: { status: ChallengeStatusEnum.COMPLETED },
+        });
+
+        await tx.challengeWinner.deleteMany({ where: { challengeId } });
+
+        if (winners.length) {
+          await tx.challengeWinner.createMany({
+            data: winners.map((winner) => ({
+              challengeId,
+              userId: winner.userId,
+              handle: winner.handle,
+              placement: winner.placement,
+              type: PrizeSetTypeEnum.PLACEMENT,
+              createdBy: 'Autopilot',
+              updatedBy: 'Autopilot',
+            })),
+          });
+        }
+      });
+
+      void this.dbLogger.logAction('challenge.completeChallenge', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: { winnersCount: winners.length },
+      });
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.completeChallenge', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: { winnersCount: winners.length, error: err.message },
+      });
+      throw err;
+    }
   }
 
   private ensureTimestamp(date?: Date | null): string {

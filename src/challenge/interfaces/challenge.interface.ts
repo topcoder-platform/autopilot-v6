@@ -33,6 +33,13 @@ export interface IChallengeReviewer {
   aiWorkflowId: string | null;
 }
 
+export interface IChallengeWinner {
+  userId: number;
+  handle: string;
+  placement: number;
+  type?: string;
+}
+
 /**
  * Represents a full challenge object from the Challenge API.
  */
@@ -61,6 +68,7 @@ export interface IChallenge {
   metadata: any[];
   phases: IPhase[];
   reviewers: IChallengeReviewer[];
+  winners: IChallengeWinner[];
   discussions: any[];
   events: any[];
   prizeSets: any[];

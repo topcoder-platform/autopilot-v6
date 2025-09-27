@@ -65,3 +65,24 @@ export interface ChallengeUpdateMessage extends BaseMessage {
 export interface CommandMessage extends BaseMessage {
   payload: CommandPayload;
 }
+
+export interface SubmissionAggregatePayload {
+  resource: string;
+  id: string;
+  type?: string;
+  memberId?: number;
+  challengeId?: number;
+  legacyChallengeId?: number;
+  v5ChallengeId?: string;
+  submissionPhaseId?: string;
+  fileType?: string;
+  submittedDate?: string;
+  url?: string;
+  isFileSubmission?: boolean;
+  created?: string;
+  updated?: string;
+  createdBy?: string;
+  updatedBy?: string;
+  originalTopic?: string;
+  [key: string]: unknown;
+}

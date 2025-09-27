@@ -7,6 +7,8 @@ import { ChallengeModule } from '../challenge/challenge.module';
 import { ReviewModule } from '../review/review.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { PhaseReviewService } from './services/phase-review.service';
+import { ReviewAssignmentService } from './services/review-assignment.service';
+import { ChallengeCompletionService } from './services/challenge-completion.service';
 
 @Module({
   imports: [
@@ -18,7 +20,13 @@ import { PhaseReviewService } from './services/phase-review.service';
     ReviewModule,
     ResourcesModule,
   ],
-  providers: [AutopilotService, SchedulerService, PhaseReviewService],
+  providers: [
+    AutopilotService,
+    SchedulerService,
+    PhaseReviewService,
+    ReviewAssignmentService,
+    ChallengeCompletionService,
+  ],
   exports: [AutopilotService, SchedulerService],
 })
 export class AutopilotModule {}

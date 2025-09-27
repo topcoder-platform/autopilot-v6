@@ -3,12 +3,10 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
-
-const REVIEW_PHASE_NAMES = new Set(['Review', 'Iterative Review']);
-const PHASE_ROLE_MAP: Record<string, string[]> = {
-  Review: ['Reviewer'],
-  'Iterative Review': ['Iterative Reviewer'],
-};
+import {
+  getRoleNamesForPhase,
+  REVIEW_PHASE_NAMES,
+} from '../constants/review.constants';
 
 @Injectable()
 export class PhaseReviewService {
@@ -20,11 +18,9 @@ export class PhaseReviewService {
     private readonly resourcesService: ResourcesService,
   ) {}
 
-  async handlePhaseOpened(
-    challengeId: string,
-    phaseId: string,
-  ): Promise<void> {
-    const challenge = await this.challengeApiService.getChallengeById(challengeId);
+  async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
+    const challenge =
+      await this.challengeApiService.getChallengeById(challengeId);
     const phase = challenge.phases.find((p) => p.id === phaseId);
 
     if (!phase) {
@@ -50,12 +46,16 @@ export class PhaseReviewService {
       return;
     }
 
-    const scorecardId = this.pickScorecardId(reviewerConfigs, challengeId, phase.id);
+    const scorecardId = this.pickScorecardId(
+      reviewerConfigs,
+      challengeId,
+      phase.id,
+    );
     if (!scorecardId) {
       return;
     }
 
-    const roleNames = PHASE_ROLE_MAP[phase.name] ?? ['Reviewer', 'Iterative Reviewer'];
+    const roleNames = getRoleNamesForPhase(phase.name);
     const reviewerResources = await this.resourcesService.getReviewerResources(
       challengeId,
       roleNames,
@@ -68,7 +68,8 @@ export class PhaseReviewService {
       return;
     }
 
-    const submissionIds = await this.reviewService.getActiveSubmissionIds(challengeId);
+    const submissionIds =
+      await this.reviewService.getActiveSubmissionIds(challengeId);
     if (!submissionIds.length) {
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,
@@ -76,7 +77,10 @@ export class PhaseReviewService {
       return;
     }
 
-    const existingPairs = await this.reviewService.getExistingReviewPairs(phase.id);
+    const existingPairs = await this.reviewService.getExistingReviewPairs(
+      phase.id,
+      challengeId,
+    );
 
     let createdCount = 0;
     for (const resource of reviewerResources) {
@@ -87,14 +91,17 @@ export class PhaseReviewService {
         }
 
         try {
-          await this.reviewService.createPendingReview(
+          const created = await this.reviewService.createPendingReview(
             submissionId,
             resource.id,
             phase.id,
             scorecardId,
+            challengeId,
           );
           existingPairs.add(key);
-          createdCount++;
+          if (created) {
+            createdCount++;
+          }
         } catch (error) {
           const err = error as Error;
           this.logger.error(
