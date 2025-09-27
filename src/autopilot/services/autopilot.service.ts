@@ -26,7 +26,10 @@ import {
   REVIEW_PHASE_NAMES,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
-import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
+import {
+  getNormalizedStringArray,
+  isActiveStatus,
+} from '../utils/config.utils';
 import { getRequiredReviewerCountForPhase } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 

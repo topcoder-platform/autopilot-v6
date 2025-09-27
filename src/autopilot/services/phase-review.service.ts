@@ -10,7 +10,6 @@ import {
   getMemberReviewerConfigs,
   selectScorecardId,
 } from '../utils/reviewer.utils';
-import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
 
 @Injectable()
 export class PhaseReviewService {
@@ -128,5 +127,4 @@ export class PhaseReviewService {
       );
     }
   }
-
 }

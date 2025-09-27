@@ -3,7 +3,10 @@ jest.mock('../../kafka/kafka.service', () => ({
 }));
 
 import { AutopilotService } from './autopilot.service';
-import { SubmissionAggregatePayload } from '../interfaces/autopilot.interface';
+import type {
+  ReviewCompletedPayload,
+  SubmissionAggregatePayload,
+} from '../interfaces/autopilot.interface';
 import { POST_MORTEM_PHASE_NAME } from '../constants/review.constants';
 import type { PhaseScheduleManager } from './phase-schedule-manager.service';
 import type { ResourceEventHandler } from './resource-event-handler.service';
@@ -12,15 +15,13 @@ import type { SchedulerService } from './scheduler.service';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { ReviewService } from '../../review/review.service';
 import type { ConfigService } from '@nestjs/config';
-
-type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
-  ReturnType<T>,
-  Parameters<OmitThisParameter<T>>
->;
+import type {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 
 const createMockMethod = <T extends (...args: any[]) => any>() =>
   jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
-
 
 type First2FinishServiceMock = Pick<
   jest.Mocked<First2FinishService>,
@@ -42,12 +43,11 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     ...overrides,
   });
 
-  
-let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
-  
-let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
-  
-let first2FinishService: First2FinishServiceMock;
+  let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
+
+  let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
+
+  let first2FinishService: First2FinishServiceMock;
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
@@ -84,7 +84,6 @@ let first2FinishService: First2FinishServiceMock;
       >();
 
     first2FinishService = {
-
       handleSubmissionByChallengeId,
       handleIterativeReviewerAdded,
       handleIterativeReviewCompletion,
@@ -159,7 +158,7 @@ let first2FinishService: First2FinishServiceMock;
     ).toHaveBeenCalledWith('challenge-123', 'submission-123');
   });
   describe('handleReviewCompleted (post-mortem)', () => {
-    const buildPhase = () => ({
+    const buildPhase = (): IPhase => ({
       id: 'phase-1',
       phaseId: 'template-1',
       name: POST_MORTEM_PHASE_NAME,
@@ -174,14 +173,15 @@ let first2FinishService: First2FinishServiceMock;
       constraints: [],
     });
 
-    const buildChallenge = (phase = buildPhase()) => ({
+    const buildChallenge = (phase: IPhase = buildPhase()): IChallenge => ({
       id: 'challenge-1',
+      name: 'Test Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
       projectId: 1001,
-      status: 'ACTIVE',
-      type: '',
-      typeId: '',
-      trackId: '',
-      timelineTemplateId: '',
+      typeId: 'type-1',
+      trackId: 'track-1',
+      timelineTemplateId: 'timeline-1',
       currentPhaseNames: [],
       tags: [],
       groups: [],
@@ -192,6 +192,7 @@ let first2FinishService: First2FinishServiceMock;
       startDate: new Date().toISOString(),
       endDate: null,
       legacyId: null,
+      status: 'ACTIVE',
       createdBy: 'tester',
       updatedBy: 'tester',
       metadata: [],
@@ -204,7 +205,8 @@ let first2FinishService: First2FinishServiceMock;
       terms: [],
       skills: [],
       attachments: [],
-      track: '',
+      track: 'DEVELOP',
+      type: 'First2Finish',
       legacy: {},
       task: {},
       created: new Date().toISOString(),
@@ -215,7 +217,7 @@ let first2FinishService: First2FinishServiceMock;
       numOfRegistrants: 0,
     });
 
-    const buildPayload = () => ({
+    const buildPayload = (): ReviewCompletedPayload => ({
       challengeId: 'challenge-1',
       reviewId: 'review-1',
       submissionId: 'submission-1',
@@ -230,7 +232,7 @@ let first2FinishService: First2FinishServiceMock;
     });
 
     beforeEach(() => {
-      reviewService.getReviewById.mockResolvedValue({
+      const completedReview = {
         id: 'review-1',
         phaseId: 'phase-1',
         resourceId: 'resource-1',
@@ -238,26 +240,34 @@ let first2FinishService: First2FinishServiceMock;
         scorecardId: 'scorecard-1',
         score: null,
         status: 'COMPLETED',
-      } as any);
+      } satisfies Exclude<
+        Awaited<ReturnType<ReviewService['getReviewById']>>,
+        null
+      >;
 
-      challengeApiService.getChallengeById.mockResolvedValue(
-        buildChallenge() as any,
-      );
+      reviewService.getReviewById.mockResolvedValue(completedReview);
+
+      challengeApiService.getChallengeById.mockResolvedValue(buildChallenge());
       reviewService.getPendingReviewCount.mockResolvedValue(0);
     });
 
     it('does not close the phase when post-mortem reviews are still pending', async () => {
       reviewService.getPendingReviewCount.mockResolvedValueOnce(2);
 
-      await autopilotService.handleReviewCompleted(buildPayload() as any);
+      await autopilotService.handleReviewCompleted(buildPayload());
 
-      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const advancePhaseMock = schedulerService.advancePhase as jest.Mock;
+      expect(advancePhaseMock).not.toHaveBeenCalled();
     });
 
     it('closes the post-mortem phase when all reviews are complete', async () => {
-      await autopilotService.handleReviewCompleted(buildPayload() as any);
+      await autopilotService.handleReviewCompleted(buildPayload());
 
-      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const advancePhaseMock = schedulerService.advancePhase as jest.Mock;
+
+      expect(advancePhaseMock).toHaveBeenCalledWith(
         expect.objectContaining({
           challengeId: 'challenge-1',
           phaseId: 'phase-1',

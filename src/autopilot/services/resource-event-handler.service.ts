@@ -16,7 +16,10 @@ import {
 } from '../constants/review.constants';
 import { First2FinishService } from './first2finish.service';
 import { SchedulerService } from './scheduler.service';
-import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
+import {
+  getNormalizedStringArray,
+  isActiveStatus,
+} from '../utils/config.utils';
 
 @Injectable()
 export class ResourceEventHandler {
@@ -304,5 +307,4 @@ export class ResourceEventHandler {
     }
     return this.reviewRoleNames.has(roleName);
   }
-
 }

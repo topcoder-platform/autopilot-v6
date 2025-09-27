@@ -33,5 +33,7 @@ export function isActiveStatus(status?: string): boolean {
 }
 
 export function parseOperator(operator?: AutopilotOperator | string): string {
-  return typeof operator === 'string' ? operator : operator ?? AutopilotOperator.SYSTEM;
+  return typeof operator === 'string'
+    ? operator
+    : (operator ?? AutopilotOperator.SYSTEM);
 }

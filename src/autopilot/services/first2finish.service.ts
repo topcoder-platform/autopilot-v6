@@ -39,7 +39,7 @@ export class First2FinishService {
       'Iterative Reviewer',
     ];
 
-    const configuredDuration = this.configService.get(
+    const configuredDuration = this.configService.get<number | string>(
       'autopilot.iterativeReviewDurationHours',
     );
     const parsedDuration = Number(configuredDuration);
@@ -394,7 +394,9 @@ export class First2FinishService {
       ...refreshedPhase,
       isOpen: true,
       actualStartDate:
-        refreshedPhase.actualStartDate ?? phase.actualStartDate ?? new Date().toISOString(),
+        refreshedPhase.actualStartDate ??
+        phase.actualStartDate ??
+        new Date().toISOString(),
     };
   }
 
@@ -405,7 +407,10 @@ export class First2FinishService {
     const startTime = phase.actualStartDate
       ? new Date(phase.actualStartDate).getTime()
       : Date.now();
-    const deadline = Math.max(startTime + this.iterativeReviewDurationMs, Date.now());
+    const deadline = Math.max(
+      startTime + this.iterativeReviewDurationMs,
+      Date.now(),
+    );
     const deadlineIso = new Date(deadline).toISOString();
 
     try {
