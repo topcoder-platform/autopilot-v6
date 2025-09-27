@@ -52,20 +52,22 @@ async function bootstrap() {
   // Handle graceful shutdown
   const signals = ['SIGTERM', 'SIGINT'];
   signals.forEach((signal) => {
-    process.on(signal, async () => {
+    process.on(signal, () => {
       logger.info(`Received ${signal}, starting graceful shutdown`);
-      try {
-        await app.close();
-        logger.info('Application closed successfully');
-        process.exit(0);
-      } catch (error) {
-        const err = error as Error;
-        logger.error('Error during application shutdown', {
-          error: err.stack || err.message,
-          signal,
-        });
-        process.exit(1);
-      }
+      void (async () => {
+        try {
+          await app.close();
+          logger.info('Application closed successfully');
+          process.exit(0);
+        } catch (error) {
+          const err = error as Error;
+          logger.error('Error during application shutdown', {
+            error: err.stack || err.message,
+            signal,
+          });
+          process.exit(1);
+        }
+      })();
     });
   });
 

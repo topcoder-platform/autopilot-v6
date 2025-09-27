@@ -12,6 +12,30 @@ import type { ChallengeApiService } from '../../challenge/challenge-api.service'
 import type { ReviewService } from '../../review/review.service';
 import type { ConfigService } from '@nestjs/config';
 
+type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
+  ReturnType<T>,
+  Parameters<OmitThisParameter<T>>
+>;
+
+const createMockMethod = <T extends (...args: any[]) => any>() =>
+  jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
+
+type First2FinishServiceMock = {
+  handleSubmissionByChallengeId: MockedMethod<
+    First2FinishService['handleSubmissionByChallengeId']
+  >;
+  handleIterativeReviewerAdded: MockedMethod<
+    First2FinishService['handleIterativeReviewerAdded']
+  >;
+  handleIterativeReviewCompletion: MockedMethod<
+    First2FinishService['handleIterativeReviewCompletion']
+  >;
+  isChallengeActive: MockedMethod<First2FinishService['isChallengeActive']>;
+  isFirst2FinishChallenge: MockedMethod<
+    First2FinishService['isFirst2FinishChallenge']
+  >;
+};
+
 describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   const createPayload = (
     overrides: Partial<SubmissionAggregatePayload> = {},
@@ -25,7 +49,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
 
   let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
   let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
-  let first2FinishService: jest.Mocked<First2FinishService>;
+  let first2FinishService: First2FinishServiceMock;
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
@@ -50,13 +74,30 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       handleResourceDeleted: jest.fn(),
     } as unknown as jest.Mocked<ResourceEventHandler>;
 
+    const handleSubmissionByChallengeId =
+      createMockMethod<First2FinishService['handleSubmissionByChallengeId']>();
+    handleSubmissionByChallengeId.mockResolvedValue(undefined);
+
+    const handleIterativeReviewerAdded =
+      createMockMethod<First2FinishService['handleIterativeReviewerAdded']>();
+    const handleIterativeReviewCompletion =
+      createMockMethod<
+        First2FinishService['handleIterativeReviewCompletion']
+      >();
+    const isChallengeActive =
+      createMockMethod<First2FinishService['isChallengeActive']>();
+    isChallengeActive.mockReturnValue(true);
+    const isFirst2FinishChallenge =
+      createMockMethod<First2FinishService['isFirst2FinishChallenge']>();
+    isFirst2FinishChallenge.mockReturnValue(true);
+
     first2FinishService = {
-      handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
-      handleIterativeReviewerAdded: jest.fn(),
-      handleIterativeReviewCompletion: jest.fn(),
-      isChallengeActive: jest.fn().mockReturnValue(true),
-      isFirst2FinishChallenge: jest.fn().mockReturnValue(true),
-    } as unknown as jest.Mocked<First2FinishService>;
+      handleSubmissionByChallengeId,
+      handleIterativeReviewerAdded,
+      handleIterativeReviewCompletion,
+      isChallengeActive,
+      isFirst2FinishChallenge,
+    };
 
     schedulerService = {
       getAllScheduledTransitions: jest.fn().mockReturnValue([]),

@@ -23,7 +23,6 @@ import {
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
   REVIEW_PHASE_NAMES,
-  SUBMISSION_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
 import { getRequiredReviewerCountForPhase } from '../utils/reviewer.utils';
@@ -84,7 +83,7 @@ export class AutopilotService {
   }
 
   handlePhaseTransition(message: PhaseTransitionPayload): void {
-    this.phaseScheduleManager.handlePhaseTransition(message);
+    void this.phaseScheduleManager.handlePhaseTransition(message);
   }
 
   async handleNewChallenge(challenge: ChallengeUpdatePayload): Promise<void> {
