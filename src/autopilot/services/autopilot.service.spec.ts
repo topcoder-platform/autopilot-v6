@@ -1,80 +1,18 @@
+jest.mock('../../kafka/kafka.service', () => ({
+  KafkaService: jest.fn().mockImplementation(() => ({})),
+}));
+
 import { AutopilotService } from './autopilot.service';
-import { SchedulerService } from './scheduler.service';
-import { ChallengeApiService } from '../../challenge/challenge-api.service';
-import { PhaseReviewService } from './phase-review.service';
-import { ReviewAssignmentService } from './review-assignment.service';
 import { SubmissionAggregatePayload } from '../interfaces/autopilot.interface';
-import {
-  IChallenge,
-  IPhase,
-} from '../../challenge/interfaces/challenge.interface';
+import type { PhaseScheduleManager } from './phase-schedule-manager.service';
+import type { ResourceEventHandler } from './resource-event-handler.service';
+import type { First2FinishService } from './first2finish.service';
+import type { SchedulerService } from './scheduler.service';
+import type { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { ReviewService } from '../../review/review.service';
+import type { ConfigService } from '@nestjs/config';
 
 describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
-  const isoNow = new Date().toISOString();
-
-  const createPhase = (overrides: Partial<IPhase> = {}): IPhase => ({
-    id: 'phase-1',
-    phaseId: 'phase-1',
-    name: 'Iterative Review',
-    description: null,
-    isOpen: false,
-    duration: 0,
-    scheduledStartDate: isoNow,
-    scheduledEndDate: isoNow,
-    actualStartDate: null,
-    actualEndDate: null,
-    predecessor: null,
-    constraints: [],
-    ...overrides,
-  });
-
-  const createChallenge = (
-    overrides: Partial<IChallenge> = {},
-  ): IChallenge => ({
-    id: 'challenge-123',
-    name: 'Test Challenge',
-    description: null,
-    descriptionFormat: 'markdown',
-    projectId: 123,
-    typeId: 'type-id',
-    trackId: 'track-id',
-    timelineTemplateId: 'template-id',
-    currentPhaseNames: [],
-    tags: [],
-    groups: [],
-    submissionStartDate: isoNow,
-    submissionEndDate: isoNow,
-    registrationStartDate: isoNow,
-    registrationEndDate: isoNow,
-    startDate: isoNow,
-    endDate: null,
-    legacyId: null,
-    status: 'ACTIVE',
-    createdBy: 'tester',
-    updatedBy: 'tester',
-    metadata: [],
-    phases: [createPhase()],
-    reviewers: [],
-    winners: [],
-    discussions: [],
-    events: [],
-    prizeSets: [],
-    terms: [],
-    skills: [],
-    attachments: [],
-    track: 'Development',
-    type: 'First2Finish',
-    legacy: {},
-    task: {},
-    created: isoNow,
-    updated: isoNow,
-    overview: {},
-    numOfSubmissions: 0,
-    numOfCheckpointSubmissions: 0,
-    numOfRegistrants: 0,
-    ...overrides,
-  });
-
   const createPayload = (
     overrides: Partial<SubmissionAggregatePayload> = {},
   ): SubmissionAggregatePayload => ({
@@ -85,31 +23,71 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     ...overrides,
   });
 
-  let schedulerService: Partial<SchedulerService>;
-  let challengeApiService: {
-    getChallengeById: jest.Mock;
-    advancePhase: jest.Mock;
-  };
+  let phaseScheduleManager: jest.Mocked<PhaseScheduleManager>;
+  let resourceEventHandler: jest.Mocked<ResourceEventHandler>;
+  let first2FinishService: jest.Mocked<First2FinishService>;
+  let schedulerService: jest.Mocked<SchedulerService>;
+  let challengeApiService: jest.Mocked<ChallengeApiService>;
+  let reviewService: jest.Mocked<ReviewService>;
+  let configService: jest.Mocked<ConfigService>;
   let autopilotService: AutopilotService;
 
   beforeEach(() => {
+    phaseScheduleManager = {
+      schedulePhaseTransition: jest.fn(),
+      cancelPhaseTransition: jest.fn(),
+      reschedulePhaseTransition: jest.fn(),
+      handlePhaseTransition: jest.fn(),
+      handleNewChallenge: jest.fn(),
+      handleChallengeUpdate: jest.fn(),
+      cancelAllPhasesForChallenge: jest.fn(),
+      processPhaseChain: jest.fn(),
+      getActiveSchedulesSnapshot: jest.fn().mockReturnValue(new Map()),
+    } as unknown as jest.Mocked<PhaseScheduleManager>;
+
+    resourceEventHandler = {
+      handleResourceCreated: jest.fn(),
+      handleResourceDeleted: jest.fn(),
+    } as unknown as jest.Mocked<ResourceEventHandler>;
+
+    first2FinishService = {
+      handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
+      handleIterativeReviewerAdded: jest.fn(),
+      handleIterativeReviewCompletion: jest.fn(),
+      isChallengeActive: jest.fn().mockReturnValue(true),
+      isFirst2FinishChallenge: jest.fn().mockReturnValue(true),
+    } as unknown as jest.Mocked<First2FinishService>;
+
     schedulerService = {
-      setPhaseChainCallback: jest.fn(),
-      schedulePhaseTransition: jest.fn().mockResolvedValue('job-id'),
-      cancelScheduledTransition: jest.fn().mockResolvedValue(true),
-      getScheduledTransition: jest.fn(),
-    };
+      getAllScheduledTransitions: jest.fn().mockReturnValue([]),
+      getAllScheduledTransitionsWithData: jest.fn().mockReturnValue(new Map()),
+    } as unknown as jest.Mocked<SchedulerService>;
 
     challengeApiService = {
       getChallengeById: jest.fn(),
       advancePhase: jest.fn(),
-    };
+      getPhaseTypeName: jest.fn(),
+    } as unknown as jest.Mocked<ChallengeApiService>;
+
+    reviewService = {
+      getReviewById: jest.fn(),
+      getActiveSubmissionCount: jest.fn(),
+      getCompletedReviewCountForPhase: jest.fn(),
+      getScorecardPassingScore: jest.fn(),
+    } as unknown as jest.Mocked<ReviewService>;
+
+    configService = {
+      get: jest.fn().mockReturnValue(undefined),
+    } as unknown as jest.Mocked<ConfigService>;
 
     autopilotService = new AutopilotService(
-      schedulerService as SchedulerService,
-      challengeApiService as unknown as ChallengeApiService,
-      {} as PhaseReviewService,
-      {} as ReviewAssignmentService,
+      phaseScheduleManager,
+      resourceEventHandler,
+      first2FinishService,
+      schedulerService,
+      challengeApiService,
+      reviewService,
+      configService,
     );
 
     jest.clearAllMocks();
@@ -120,8 +98,9 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createPayload({ originalTopic: 'submission.notification.update' }),
     );
 
-    expect(challengeApiService.getChallengeById).not.toHaveBeenCalled();
-    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleSubmissionByChallengeId,
+    ).not.toHaveBeenCalled();
   });
 
   it('ignores messages without a v5 challenge id', async () => {
@@ -129,69 +108,18 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createPayload({ v5ChallengeId: undefined }),
     );
 
-    expect(challengeApiService.getChallengeById).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleSubmissionByChallengeId,
+    ).not.toHaveBeenCalled();
   });
 
-  it('opens iterative review phase for First2Finish challenge', async () => {
-    const iterativeReviewPhase = createPhase({ id: 'iterative-phase' });
-    challengeApiService.getChallengeById.mockResolvedValue(
-      createChallenge({ phases: [iterativeReviewPhase] }),
-    );
-    challengeApiService.advancePhase.mockResolvedValue({
-      success: true,
-      message: 'opened',
-    });
-
+  it('delegates to First2FinishService when payload is valid', async () => {
     await autopilotService.handleSubmissionNotificationAggregate(
       createPayload({ id: 'submission-123' }),
     );
 
-    expect(challengeApiService.getChallengeById).toHaveBeenCalledWith(
-      'challenge-123',
-    );
-    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
-      'challenge-123',
-      'iterative-phase',
-      'open',
-    );
-  });
-
-  it('skips non-First2Finish challenges', async () => {
-    challengeApiService.getChallengeById.mockResolvedValue(
-      createChallenge({ type: 'Design Challenge' }),
-    );
-
-    await autopilotService.handleSubmissionNotificationAggregate(
-      createPayload(),
-    );
-
-    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
-  });
-
-  it('skips when iterative review phase is already open', async () => {
-    const iterativeReviewPhase = createPhase({ isOpen: true });
-    challengeApiService.getChallengeById.mockResolvedValue(
-      createChallenge({ phases: [iterativeReviewPhase] }),
-    );
-
-    await autopilotService.handleSubmissionNotificationAggregate(
-      createPayload(),
-    );
-
-    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
-  });
-
-  it('skips when iterative review phase is not present', async () => {
-    challengeApiService.getChallengeById.mockResolvedValue(
-      createChallenge({
-        phases: [createPhase({ name: 'Submission', id: 'submission-phase' })],
-      }),
-    );
-
-    await autopilotService.handleSubmissionNotificationAggregate(
-      createPayload(),
-    );
-
-    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleSubmissionByChallengeId,
+    ).toHaveBeenCalledWith('challenge-123', 'submission-123');
   });
 });

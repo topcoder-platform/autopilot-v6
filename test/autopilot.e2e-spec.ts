@@ -22,6 +22,7 @@ import { ResourcesService } from '../src/resources/resources.service';
 import { PhaseReviewService } from '../src/autopilot/services/phase-review.service';
 import { ReviewAssignmentService } from '../src/autopilot/services/review-assignment.service';
 import { ChallengeCompletionService } from '../src/autopilot/services/challenge-completion.service';
+import { PhaseScheduleManager } from '../src/autopilot/services/phase-schedule-manager.service';
 
 jest.mock('@platformatic/kafka', () => {
   class MockProducer {
@@ -185,6 +186,7 @@ describe('Autopilot Service (e2e)', () => {
   let autopilotConsumer: AutopilotConsumer;
   let recoveryService: RecoveryService;
   let autopilotService: AutopilotService;
+  let phaseScheduleManager: PhaseScheduleManager;
   let mockKafkaProduce: jest.Mock;
   let mockChallengeApiService: {
     getAllActiveChallenges: jest.Mock;
@@ -377,6 +379,7 @@ describe('Autopilot Service (e2e)', () => {
     autopilotConsumer = app.get<AutopilotConsumer>(AutopilotConsumer);
     recoveryService = app.get<RecoveryService>(RecoveryService);
     autopilotService = app.get<AutopilotService>(AutopilotService);
+    phaseScheduleManager = app.get<PhaseScheduleManager>(PhaseScheduleManager);
 
     await app.init();
   });
@@ -498,7 +501,7 @@ describe('Autopilot Service (e2e)', () => {
         updatedChallenge,
       );
       const rescheduleSpy = jest.spyOn(
-        app.get(AutopilotService),
+        phaseScheduleManager,
         'reschedulePhaseTransition',
       );
 
@@ -539,7 +542,7 @@ describe('Autopilot Service (e2e)', () => {
       });
 
       const autopilotCancelSpy = jest.spyOn(
-        app.get(AutopilotService),
+        phaseScheduleManager,
         'cancelPhaseTransition',
       );
 
@@ -631,9 +634,9 @@ describe('Autopilot Service (e2e)', () => {
     });
 
     it('should open and schedule next phases in the chain when a phase completes', async () => {
-      const openAndScheduleNextPhasesSpy = jest.spyOn(
-        autopilotService,
-        'openAndScheduleNextPhases',
+      const scheduleSpy = jest.spyOn(
+        schedulerService,
+        'schedulePhaseTransition',
       );
 
       // Simulate a phase transition that triggers the chain
@@ -658,16 +661,12 @@ describe('Autopilot Service (e2e)', () => {
       );
 
       // Should open and schedule the next phase in the chain
-      expect(openAndScheduleNextPhasesSpy).toHaveBeenCalledWith(
-        mockChallenge.id,
-        mockChallenge.projectId,
-        'ACTIVE',
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: 'p2a3b4c5-d6e7-f8a9-b0c1-d2e3f4a5b6c7',
-            name: 'Submission',
-          }),
-        ]),
+      expect(scheduleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: mockChallenge.id,
+          phaseId: 'p2a3b4c5-d6e7-f8a9-b0c1-d2e3f4a5b6c7',
+          state: 'END',
+        }),
       );
     });
 

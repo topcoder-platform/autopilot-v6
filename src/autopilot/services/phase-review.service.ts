@@ -2,11 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
-import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
 import {
   getRoleNamesForPhase,
   REVIEW_PHASE_NAMES,
 } from '../constants/review.constants';
+import { getMemberReviewerConfigs } from '../utils/reviewer.utils';
+import { IChallengeReviewer } from '../../challenge/interfaces/challenge.interface';
 
 @Injectable()
 export class PhaseReviewService {
@@ -34,10 +35,10 @@ export class PhaseReviewService {
       return;
     }
 
-    const reviewerConfigs = this.getReviewerConfigsForPhase(
+    const reviewerConfigs = getMemberReviewerConfigs(
       challenge.reviewers,
       phase.phaseId,
-    );
+    ).filter((config) => Boolean(config.scorecardId));
 
     if (!reviewerConfigs.length) {
       this.logger.log(
@@ -117,18 +118,6 @@ export class PhaseReviewService {
         `Created ${createdCount} pending review(s) for challenge ${challengeId}, phase ${phase.id}`,
       );
     }
-  }
-
-  private getReviewerConfigsForPhase(
-    reviewers: IChallengeReviewer[],
-    phaseTemplateId: string,
-  ): IChallengeReviewer[] {
-    return reviewers.filter(
-      (reviewer) =>
-        reviewer.isMemberReview &&
-        reviewer.phaseId === phaseTemplateId &&
-        Boolean(reviewer.scorecardId),
-    );
   }
 
   private pickScorecardId(

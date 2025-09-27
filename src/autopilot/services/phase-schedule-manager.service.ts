@@ -1,0 +1,639 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
+import { SchedulerService } from './scheduler.service';
+import { PhaseReviewService } from './phase-review.service';
+import { ReviewAssignmentService } from './review-assignment.service';
+import {
+  AutopilotOperator,
+  ChallengeUpdatePayload,
+  PhaseTransitionPayload,
+} from '../interfaces/autopilot.interface';
+import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+
+@Injectable()
+export class PhaseScheduleManager {
+  private readonly logger = new Logger(PhaseScheduleManager.name);
+
+  constructor(
+    private readonly schedulerService: SchedulerService,
+    private readonly challengeApiService: ChallengeApiService,
+    private readonly phaseReviewService: PhaseReviewService,
+    private readonly reviewAssignmentService: ReviewAssignmentService,
+  ) {
+    this.schedulerService.setPhaseChainCallback(
+      (
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        nextPhases: IPhase[],
+      ) => {
+        void this.openAndScheduleNextPhases(
+          challengeId,
+          projectId,
+          projectStatus,
+          nextPhases,
+        );
+      },
+    );
+  }
+
+  async schedulePhaseTransition(
+    phaseData: PhaseTransitionPayload,
+  ): Promise<string> {
+    const jobId = this.schedulerService.buildJobId(
+      phaseData.challengeId,
+      phaseData.phaseId,
+    );
+
+    const existingJob = this.schedulerService.getScheduledTransition(jobId);
+    if (existingJob) {
+      this.logger.log(
+        `Canceling existing schedule ${jobId} before scheduling new transition.`,
+      );
+      const canceled =
+        await this.schedulerService.cancelScheduledTransition(jobId);
+      if (!canceled) {
+        this.logger.warn(
+          `Failed to cancel existing schedule ${jobId} for challenge ${phaseData.challengeId}.`,
+        );
+      }
+    }
+
+    const newJobId =
+      await this.schedulerService.schedulePhaseTransition(phaseData);
+
+    this.logger.log(
+      `Scheduled phase transition for challenge ${phaseData.challengeId}, phase ${phaseData.phaseId} at ${phaseData.date}`,
+    );
+    return newJobId;
+  }
+
+  async cancelPhaseTransition(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<boolean> {
+    const jobId = this.schedulerService.buildJobId(challengeId, phaseId);
+    const scheduledJob = this.schedulerService.getScheduledTransition(jobId);
+
+    if (!scheduledJob) {
+      this.logger.warn(
+        `No active schedule found for challenge ${challengeId}, phase ${phaseId}`,
+      );
+      return false;
+    }
+
+    const canceled =
+      await this.schedulerService.cancelScheduledTransition(jobId);
+    if (canceled) {
+      this.logger.log(
+        `Canceled scheduled transition for phase ${phaseId} on challenge ${challengeId}`,
+      );
+      return true;
+    }
+
+    this.logger.warn(
+      `Unable to cancel scheduled transition ${jobId}; job may have already executed.`,
+    );
+    return false;
+  }
+
+  async reschedulePhaseTransition(
+    challengeId: string,
+    newPhaseData: PhaseTransitionPayload,
+  ): Promise<string> {
+    const jobId = this.schedulerService.buildJobId(
+      challengeId,
+      newPhaseData.phaseId,
+    );
+    const existingJob = this.schedulerService.getScheduledTransition(jobId);
+    let wasRescheduled = false;
+
+    if (existingJob && existingJob.date && newPhaseData.date) {
+      const existingTime = new Date(existingJob.date).getTime();
+      const newTime = new Date(newPhaseData.date).getTime();
+
+      if (existingTime === newTime) {
+        this.logger.log(
+          `No change detected for challenge ${challengeId}, phase ${newPhaseData.phaseId}; skipping reschedule.`,
+        );
+        return jobId;
+      }
+
+      this.logger.log(
+        `Detected change in end time for challenge ${challengeId}, phase ${newPhaseData.phaseId}; rescheduling.`,
+      );
+      wasRescheduled = true;
+    }
+
+    const newJobId = await this.schedulePhaseTransition(newPhaseData);
+
+    if (wasRescheduled) {
+      this.logger.log(
+        `Successfully rescheduled phase ${newPhaseData.phaseId} with new end time: ${newPhaseData.date}`,
+      );
+    }
+
+    return newJobId;
+  }
+
+  async handlePhaseTransition(message: PhaseTransitionPayload): Promise<void> {
+    this.logger.log(
+      `Consumed phase transition event: ${JSON.stringify(message)}`,
+    );
+
+    if (!this.isChallengeActive(message.projectStatus)) {
+      this.logger.log(
+        `Ignoring phase transition for challenge ${message.challengeId} with status ${message.projectStatus}; only ACTIVE challenges are processed.`,
+      );
+      return;
+    }
+
+    try {
+      await this.schedulerService.advancePhase(message);
+      this.logger.log(
+        `Successfully processed ${message.state} event for phase ${message.phaseId} (challenge ${message.challengeId})`,
+      );
+
+      if (message.state === 'END') {
+        const canceled = await this.cancelPhaseTransition(
+          message.challengeId,
+          message.phaseId,
+        );
+        if (canceled) {
+          this.logger.log(
+            `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
+          );
+        }
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to advance phase ${message.phaseId} for challenge ${message.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
+  async handleNewChallenge(challenge: ChallengeUpdatePayload): Promise<void> {
+    this.logger.log(
+      `Handling new challenge creation: ${JSON.stringify(challenge)}`,
+    );
+    try {
+      const challengeDetails = await this.challengeApiService.getChallengeById(
+        challenge.id,
+      );
+
+      if (!this.isChallengeActive(challengeDetails.status)) {
+        this.logger.log(
+          `Skipping challenge ${challenge.id} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
+        );
+        return;
+      }
+
+      if (!challengeDetails.phases) {
+        this.logger.warn(
+          `Challenge ${challenge.id} has no phases to schedule.`,
+        );
+        return;
+      }
+
+      await this.scheduleRelevantPhases(challengeDetails, {
+        operator: AutopilotOperator.SYSTEM_NEW_CHALLENGE,
+        schedulePhase: (payload) => this.schedulePhaseTransition(payload),
+        onNoPhases: () =>
+          this.logger.log(
+            `No phase needs to be scheduled for new challenge ${challenge.id}`,
+          ),
+        onMissingScheduleData: () =>
+          this.logger.warn(
+            `Unable to schedule any phases for new challenge ${challenge.id} due to missing schedule data.`,
+          ),
+        onSuccess: (summaries) =>
+          this.logger.log(
+            `Scheduled ${summaries.length} phase(s) for new challenge ${challenge.id}: ${summaries.join('; ')}`,
+          ),
+        onMissingDates: (phase, stateLabel) =>
+          this.logger.warn(
+            `Next phase ${phase.id} for new challenge ${challenge.id} has no scheduled ${stateLabel} date. Skipping.`,
+          ),
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Error handling new challenge creation for id ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async handleChallengeUpdate(message: ChallengeUpdatePayload): Promise<void> {
+    this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
+
+    try {
+      const challengeDetails = await this.challengeApiService.getChallengeById(
+        message.id,
+      );
+
+      if (!this.isChallengeActive(challengeDetails.status)) {
+        this.logger.log(
+          `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
+        );
+        return;
+      }
+
+      if (!challengeDetails.phases) {
+        this.logger.warn(
+          `Updated challenge ${message.id} has no phases to process.`,
+        );
+        return;
+      }
+
+      await this.scheduleRelevantPhases(challengeDetails, {
+        operator: message.operator,
+        schedulePhase: (payload) =>
+          this.reschedulePhaseTransition(challengeDetails.id, payload),
+        onNoPhases: () =>
+          this.logger.log(
+            `No phase needs to be rescheduled for updated challenge ${message.id}`,
+          ),
+        onMissingScheduleData: () =>
+          this.logger.warn(
+            `Unable to reschedule any phases for updated challenge ${message.id} due to missing schedule data.`,
+          ),
+        onSuccess: (summaries) =>
+          this.logger.log(
+            `Rescheduled ${summaries.length} phase(s) for updated challenge ${message.id}: ${summaries.join('; ')}`,
+          ),
+        onMissingDates: (phase, stateLabel) =>
+          this.logger.warn(
+            `Next phase ${phase.id} for updated challenge ${message.id} has no scheduled ${stateLabel} date. Skipping.`,
+          ),
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Error handling challenge update: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  async processPhaseChain(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    nextPhases: IPhase[],
+  ): Promise<void> {
+    await this.openAndScheduleNextPhases(
+      challengeId,
+      projectId,
+      projectStatus,
+      nextPhases,
+    );
+  }
+
+  async cancelAllPhasesForChallenge(challengeId: string): Promise<void> {
+    const jobIds = this.schedulerService
+      .getAllScheduledTransitions()
+      .filter((jobId) => jobId.startsWith(`${challengeId}|`));
+
+    for (const jobId of jobIds) {
+      const [, phaseId] = jobId.split('|');
+      if (phaseId) {
+        await this.cancelPhaseTransition(challengeId, phaseId);
+      }
+    }
+  }
+
+  private async scheduleRelevantPhases(
+    challenge: IChallenge,
+    context: {
+      operator: AutopilotOperator | string | undefined;
+      schedulePhase: (payload: PhaseTransitionPayload) => Promise<unknown>;
+      onNoPhases: () => void;
+      onSuccess: (summaries: string[]) => void;
+      onMissingScheduleData: () => void;
+      onMissingDates: (phase: IPhase, stateLabel: 'start' | 'end') => void;
+    },
+  ): Promise<void> {
+    const phasesToSchedule = this.findPhasesToSchedule(challenge.phases ?? []);
+
+    if (phasesToSchedule.length === 0) {
+      context.onNoPhases();
+      return;
+    }
+
+    const now = new Date();
+    const summaries: string[] = [];
+
+    for (const nextPhase of phasesToSchedule) {
+      const shouldOpen =
+        !nextPhase.isOpen &&
+        !nextPhase.actualEndDate &&
+        nextPhase.scheduledStartDate &&
+        new Date(nextPhase.scheduledStartDate).getTime() <= now.getTime();
+
+      const state = shouldOpen ? 'START' : 'END';
+      const scheduleDate = shouldOpen
+        ? nextPhase.scheduledStartDate
+        : nextPhase.scheduledEndDate;
+
+      if (!scheduleDate) {
+        context.onMissingDates(nextPhase, shouldOpen ? 'start' : 'end');
+        continue;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: nextPhase.id,
+        phaseTypeName: nextPhase.name,
+        state,
+        operator: context.operator ?? AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+        date: scheduleDate,
+      };
+
+      await context.schedulePhase(payload);
+      summaries.push(
+        `${nextPhase.name} (${nextPhase.id}) -> ${state} @ ${scheduleDate}`,
+      );
+    }
+
+    if (summaries.length === 0) {
+      context.onMissingScheduleData();
+      return;
+    }
+
+    context.onSuccess(summaries);
+  }
+
+  getActiveSchedulesSnapshot(): Map<string, string> {
+    const snapshot = new Map<string, string>();
+    const scheduledJobs = this.schedulerService.getAllScheduledTransitions();
+
+    for (const jobId of scheduledJobs) {
+      const [challengeId, phaseId] = jobId.split('|');
+      if (challengeId && phaseId) {
+        snapshot.set(`${challengeId}:${phaseId}`, jobId);
+      }
+    }
+
+    return snapshot;
+  }
+
+  private findPhasesToSchedule(phases: IPhase[]): IPhase[] {
+    const now = new Date();
+
+    const phasesToOpen = phases
+      .filter((phase) => {
+        if (phase.isOpen || phase.actualEndDate) {
+          return false;
+        }
+
+        const startTime = new Date(phase.scheduledStartDate);
+        if (startTime > now) {
+          return false;
+        }
+
+        if (!phase.predecessor) {
+          return true;
+        }
+
+        const predecessor = phases.find(
+          (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
+        );
+
+        return Boolean(predecessor?.actualEndDate);
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.scheduledStartDate).getTime() -
+          new Date(b.scheduledStartDate).getTime(),
+      );
+
+    if (phasesToOpen.length > 0) {
+      return phasesToOpen;
+    }
+
+    const openPhases = phases
+      .filter((phase) => phase.isOpen)
+      .sort(
+        (a, b) =>
+          new Date(a.scheduledEndDate).getTime() -
+          new Date(b.scheduledEndDate).getTime(),
+      );
+
+    if (openPhases.length > 0) {
+      return openPhases;
+    }
+
+    const futurePhases = phases.filter(
+      (phase) =>
+        !phase.actualStartDate &&
+        !phase.actualEndDate &&
+        phase.scheduledStartDate &&
+        new Date(phase.scheduledStartDate) > now,
+    );
+
+    const readyPhases = futurePhases.filter((phase) => {
+      if (!phase.predecessor) {
+        return true;
+      }
+
+      const predecessor = phases.find(
+        (p) => p.phaseId === phase.predecessor || p.id === phase.predecessor,
+      );
+
+      return Boolean(predecessor?.actualEndDate);
+    });
+
+    if (readyPhases.length === 0) {
+      return [];
+    }
+
+    const sortedReady = readyPhases.sort(
+      (a, b) =>
+        new Date(a.scheduledStartDate).getTime() -
+        new Date(b.scheduledStartDate).getTime(),
+    );
+
+    const earliest = new Date(sortedReady[0].scheduledStartDate).getTime();
+
+    return sortedReady.filter(
+      (phase) => new Date(phase.scheduledStartDate).getTime() === earliest,
+    );
+  }
+
+  private async openAndScheduleNextPhases(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    nextPhases: IPhase[],
+  ): Promise<void> {
+    if (!this.isChallengeActive(projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}), skipping phase chain processing.`,
+      );
+      return;
+    }
+
+    if (!nextPhases || nextPhases.length === 0) {
+      this.logger.log(
+        `[PHASE CHAIN] No next phases to open for challenge ${challengeId}`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Opening and scheduling ${nextPhases.length} next phases for challenge ${challengeId}`,
+    );
+
+    let processedCount = 0;
+    let deferredCount = 0;
+
+    for (const nextPhase of nextPhases) {
+      const openPhaseCallback = async () =>
+        await this.openPhaseAndSchedule(
+          challengeId,
+          projectId,
+          projectStatus,
+          nextPhase,
+        );
+
+      try {
+        const canOpenNow =
+          await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+            challengeId,
+            nextPhase,
+            openPhaseCallback,
+          );
+
+        if (!canOpenNow) {
+          deferredCount++;
+          continue;
+        }
+
+        const opened = await openPhaseCallback();
+        if (opened) {
+          processedCount++;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to open and schedule phase ${nextPhase.name} (${nextPhase.id}) for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    const summaryParts = [
+      `opened and scheduled ${processedCount} out of ${nextPhases.length}`,
+    ];
+    if (deferredCount > 0) {
+      summaryParts.push(
+        `deferred ${deferredCount} awaiting reviewer assignments`,
+      );
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] ${summaryParts.join(', ')} for challenge ${challengeId}`,
+    );
+  }
+
+  private async openPhaseAndSchedule(
+    challengeId: string,
+    projectId: number,
+    projectStatus: string,
+    phase: IPhase,
+  ): Promise<boolean> {
+    if (!this.isChallengeActive(projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}); skipping phase ${phase.name} (${phase.id}).`,
+      );
+      return false;
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+    );
+
+    const openResult = await this.challengeApiService.advancePhase(
+      challengeId,
+      phase.id,
+      'open',
+    );
+
+    if (!openResult.success) {
+      this.logger.error(
+        `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${openResult.message}`,
+      );
+      return false;
+    }
+
+    this.reviewAssignmentService.clearPolling(challengeId, phase.id);
+
+    this.logger.log(
+      `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+    );
+
+    if (REVIEW_PHASE_NAMES.has(phase.name)) {
+      try {
+        await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    const updatedPhase =
+      openResult.updatedPhases?.find((p) => p.id === phase.id) || phase;
+
+    if (!updatedPhase.scheduledEndDate) {
+      this.logger.warn(
+        `[PHASE CHAIN] Opened phase ${phase.name} (${phase.id}) has no scheduled end date, skipping scheduling`,
+      );
+      return false;
+    }
+
+    const existingJobId = this.schedulerService.buildJobId(
+      challengeId,
+      phase.id,
+    );
+    if (this.schedulerService.getScheduledTransition(existingJobId)) {
+      this.logger.log(
+        `[PHASE CHAIN] Phase ${phase.name} (${phase.id}) is already scheduled, skipping`,
+      );
+      return false;
+    }
+
+    const nextPhaseData: PhaseTransitionPayload = {
+      projectId,
+      challengeId,
+      phaseId: updatedPhase.id,
+      phaseTypeName: updatedPhase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus,
+      date: updatedPhase.scheduledEndDate,
+    };
+
+    const scheduledJobId = await this.schedulePhaseTransition(nextPhaseData);
+    this.logger.log(
+      `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${scheduledJobId}`,
+    );
+    return true;
+  }
+
+  private isChallengeActive(status?: string): boolean {
+    return (status ?? '').toUpperCase() === 'ACTIVE';
+  }
+}

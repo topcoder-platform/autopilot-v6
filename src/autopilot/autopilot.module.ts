@@ -9,6 +9,9 @@ import { ResourcesModule } from '../resources/resources.module';
 import { PhaseReviewService } from './services/phase-review.service';
 import { ReviewAssignmentService } from './services/review-assignment.service';
 import { ChallengeCompletionService } from './services/challenge-completion.service';
+import { PhaseScheduleManager } from './services/phase-schedule-manager.service';
+import { ResourceEventHandler } from './services/resource-event-handler.service';
+import { First2FinishService } from './services/first2finish.service';
 
 @Module({
   imports: [
@@ -23,6 +26,9 @@ import { ChallengeCompletionService } from './services/challenge-completion.serv
   providers: [
     AutopilotService,
     SchedulerService,
+    PhaseScheduleManager,
+    ResourceEventHandler,
+    First2FinishService,
     PhaseReviewService,
     ReviewAssignmentService,
     ChallengeCompletionService,
