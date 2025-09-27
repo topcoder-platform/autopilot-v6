@@ -767,10 +767,14 @@ export class ChallengeApiService {
     winners: IChallengeWinner[],
   ): Promise<void> {
     try {
+      const endDate = new Date();
       await this.prisma.$transaction(async (tx) => {
         await tx.challenge.update({
           where: { id: challengeId },
-          data: { status: ChallengeStatusEnum.COMPLETED },
+          data: {
+            status: ChallengeStatusEnum.COMPLETED,
+            endDate,
+          },
         });
 
         await tx.challengeWinner.deleteMany({ where: { challengeId } });
@@ -794,7 +798,7 @@ export class ChallengeApiService {
         challengeId,
         status: 'SUCCESS',
         source: ChallengeApiService.name,
-        details: { winnersCount: winners.length },
+        details: { winnersCount: winners.length, endDate: endDate.toISOString() },
       });
     } catch (error) {
       const err = error as Error;
@@ -802,7 +806,10 @@ export class ChallengeApiService {
         challengeId,
         status: 'ERROR',
         source: ChallengeApiService.name,
-        details: { winnersCount: winners.length, error: err.message },
+        details: {
+          winnersCount: winners.length,
+          error: err.message,
+        },
       });
       throw err;
     }
@@ -813,10 +820,14 @@ export class ChallengeApiService {
     status: ChallengeStatusEnum,
   ): Promise<void> {
     try {
+      const endDate = new Date();
       await this.prisma.$transaction(async (tx) => {
         await tx.challenge.update({
           where: { id: challengeId },
-          data: { status },
+          data: {
+            status,
+            endDate,
+          },
         });
 
         await tx.challengeWinner.deleteMany({ where: { challengeId } });
@@ -826,7 +837,7 @@ export class ChallengeApiService {
         challengeId,
         status: 'SUCCESS',
         source: ChallengeApiService.name,
-        details: { status },
+        details: { status, endDate: endDate.toISOString() },
       });
     } catch (error) {
       const err = error as Error;

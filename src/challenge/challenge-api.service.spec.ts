@@ -150,3 +150,117 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     });
   });
 });
+
+describe('ChallengeApiService - end date handling', () => {
+  const fixedNow = new Date('2025-01-15T12:30:00.000Z');
+
+  let prisma: jest.Mocked<ChallengePrismaService>;
+  let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
+  let service: ChallengeApiService;
+  let challengeUpdate: jest.Mock;
+  let challengeWinnerDeleteMany: jest.Mock;
+  let challengeWinnerCreateMany: jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(fixedNow);
+
+    challengeUpdate = jest.fn().mockResolvedValue(undefined);
+    challengeWinnerDeleteMany = jest.fn().mockResolvedValue(undefined);
+    challengeWinnerCreateMany = jest.fn().mockResolvedValue(undefined);
+
+    prisma = {
+      challenge: {
+        update: challengeUpdate,
+      },
+      challengeWinner: {
+        deleteMany: challengeWinnerDeleteMany,
+        createMany: challengeWinnerCreateMany,
+      },
+      $transaction: jest.fn(),
+    } as unknown as jest.Mocked<ChallengePrismaService>;
+
+    prisma.$transaction.mockImplementation(async (callback) => {
+      await callback({
+        challenge: { update: challengeUpdate },
+        challengeWinner: {
+          deleteMany: challengeWinnerDeleteMany,
+          createMany: challengeWinnerCreateMany,
+        },
+      } as unknown as ChallengePrismaService);
+    });
+
+    dbLogger = {
+      logAction: jest.fn(),
+    } as unknown as jest.Mocked<AutopilotDbLoggerService>;
+
+    service = new ChallengeApiService(prisma, dbLogger);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('sets the endDate when completing a challenge', async () => {
+    const winners = [
+      { userId: 123, handle: 'winner', placement: 1 },
+      { userId: 456, handle: 'runner-up', placement: 2 },
+    ];
+
+    await service.completeChallenge('challenge-123', winners);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(challengeUpdate).toHaveBeenCalledWith({
+      where: { id: 'challenge-123' },
+      data: {
+        status: ChallengeStatusEnum.COMPLETED,
+        endDate: fixedNow,
+      },
+    });
+    expect(challengeWinnerDeleteMany).toHaveBeenCalledWith({
+      where: { challengeId: 'challenge-123' },
+    });
+    expect(challengeWinnerCreateMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ challengeId: 'challenge-123' }),
+      ]),
+    });
+    expect(dbLogger.logAction).toHaveBeenCalledWith(
+      'challenge.completeChallenge',
+      expect.objectContaining({
+        details: expect.objectContaining({
+          winnersCount: winners.length,
+          endDate: fixedNow.toISOString(),
+        }),
+      }),
+    );
+  });
+
+  it('sets the endDate when cancelling a challenge', async () => {
+    await service.cancelChallenge(
+      'challenge-456',
+      ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(challengeUpdate).toHaveBeenCalledWith({
+      where: { id: 'challenge-456' },
+      data: {
+        status: ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+        endDate: fixedNow,
+      },
+    });
+    expect(challengeWinnerDeleteMany).toHaveBeenCalledWith({
+      where: { challengeId: 'challenge-456' },
+    });
+    expect(challengeWinnerCreateMany).not.toHaveBeenCalled();
+    expect(dbLogger.logAction).toHaveBeenCalledWith(
+      'challenge.cancelChallenge',
+      expect.objectContaining({
+        details: {
+          status: ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+          endDate: fixedNow.toISOString(),
+        },
+      }),
+    );
+  });
+});
