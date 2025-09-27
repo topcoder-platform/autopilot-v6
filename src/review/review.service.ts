@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { ReviewPrismaService } from './review-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
@@ -72,6 +73,24 @@ export class ReviewService {
     private readonly prisma: ReviewPrismaService,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
+
+  private buildPendingReviewLockId(
+    phaseId: string,
+    resourceId: string,
+    submissionId: string | null,
+    scorecardId: string | null,
+  ): bigint {
+    const key = [
+      phaseId?.trim() ?? '',
+      resourceId?.trim() ?? '',
+      submissionId?.trim() ?? 'null',
+      scorecardId?.trim() ?? 'null',
+    ].join('|');
+
+    const hash = createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+    return BigInt.asIntN(64, BigInt(`0x${hash || '0'}`));
+  }
 
   async getTopFinalReviewScores(
     challengeId: string,
@@ -348,8 +367,21 @@ export class ReviewService {
     `;
 
     try {
-      const rowsInserted = await this.prisma.$executeRaw(insert);
-      const created = rowsInserted > 0;
+      const lockId = this.buildPendingReviewLockId(
+        phaseId,
+        resourceId,
+        submissionId,
+        scorecardId,
+      );
+
+      const created = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(${lockId})
+        `);
+
+        const rowsInserted = await tx.$executeRaw(insert);
+        return rowsInserted > 0;
+      });
 
       void this.dbLogger.logAction('review.createPendingReview', {
         challengeId,
