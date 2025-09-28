@@ -206,10 +206,10 @@ export class First2FinishService {
       }
     }
 
-    const assigned = await this.assignNextIterativeReview(
+    const assigned = await this.assignIterativeReviewToReviewers(
       challenge.id,
       activePhase,
-      reviewers[0].id,
+      reviewers,
       scorecardId,
       submissionId,
     );
@@ -336,16 +336,12 @@ export class First2FinishService {
       challengeId,
     );
 
-    const reviewerId = reviewers[0].id;
-
-    const preferredSubmissionId = submissionIds.find((submissionId) => {
-      if (submissionId === lastSubmissionId) {
-        return false;
-      }
-
-      const pairKey = `${reviewerId}:${submissionId}`;
-      return !recentPairs.has(pairKey);
-    });
+    const preferredSubmissionId = this.selectNextIterativeSubmission(
+      reviewers,
+      submissionIds,
+      recentPairs,
+      lastSubmissionId,
+    );
 
     if (!preferredSubmissionId) {
       this.logger.debug(
@@ -375,10 +371,10 @@ export class First2FinishService {
       return;
     }
 
-    const assigned = await this.assignNextIterativeReview(
+    const assigned = await this.assignIterativeReviewToReviewers(
       challengeId,
       nextPhase,
-      reviewers[0].id,
+      reviewers,
       scorecardId,
       preferredSubmissionId,
     );
@@ -434,6 +430,29 @@ export class First2FinishService {
   private getPhaseStartTime(phase: IPhase): number {
     const reference = phase.actualStartDate ?? phase.scheduledStartDate;
     return new Date(reference).getTime();
+  }
+
+  private selectNextIterativeSubmission(
+    reviewers: Array<{ id: string }>,
+    submissionIds: string[],
+    recentPairs: Set<string>,
+    lastSubmissionId?: string,
+  ): string | null {
+    for (const submissionId of submissionIds) {
+      if (submissionId === lastSubmissionId) {
+        continue;
+      }
+
+      const alreadyReviewed = reviewers.some((reviewer) =>
+        recentPairs.has(`${reviewer.id}:${submissionId}`),
+      );
+
+      if (!alreadyReviewed) {
+        return submissionId;
+      }
+    }
+
+    return null;
   }
 
   private async createNextIterativePhase(
@@ -498,5 +517,29 @@ export class First2FinishService {
         err.stack,
       );
     }
+  }
+
+  private async assignIterativeReviewToReviewers(
+    challengeId: string,
+    phase: IPhase,
+    reviewers: Array<{ id: string }>,
+    scorecardId: string,
+    preferredSubmissionId?: string,
+  ): Promise<boolean> {
+    for (const reviewer of reviewers) {
+      const assigned = await this.assignNextIterativeReview(
+        challengeId,
+        phase,
+        reviewer.id,
+        scorecardId,
+        preferredSubmissionId,
+      );
+
+      if (assigned) {
+        return true;
+      }
+    }
+
+    return false;
   }
 }
