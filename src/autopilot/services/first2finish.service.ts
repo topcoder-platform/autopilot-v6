@@ -173,6 +173,16 @@ export class First2FinishService {
       return;
     }
 
+    if (!isActiveStatus(challenge.status)) {
+      this.logger.debug(
+        `Skipping iterative review processing for challenge ${challenge.id}; status ${challenge.status ?? 'UNKNOWN'} is not active.`,
+        {
+          submissionId: submissionId ?? null,
+        },
+      );
+      return;
+    }
+
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
     if (!latestIterativePhase) {
@@ -206,6 +216,25 @@ export class First2FinishService {
       challenge.phases.find(
         (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME && phase.isOpen,
       ) ?? null;
+
+    if (activePhase) {
+      const pendingReviews = await this.reviewService.getPendingReviewCount(
+        activePhase.id,
+        challenge.id,
+      );
+
+      if (pendingReviews > 0) {
+        this.logger.debug(
+          `Iterative review already in progress for challenge ${challenge.id}; deferring submission processing.`,
+          {
+            submissionId: submissionId ?? null,
+            activePhaseId: activePhase.id,
+            pendingReviews,
+          },
+        );
+        return;
+      }
+    }
 
     if (!activePhase) {
       if (!submissionId) {
