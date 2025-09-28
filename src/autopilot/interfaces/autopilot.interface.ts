@@ -101,6 +101,7 @@ export interface ReviewCompletedPayload {
   challengeId: string;
   submissionId: string;
   reviewId: string;
+  phaseId: string;
   scorecardId: string;
   reviewerResourceId: string;
   reviewerHandle: string;

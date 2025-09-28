@@ -246,10 +246,13 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       numOfRegistrants: 0,
     });
 
-    const buildPayload = () => ({
+    const buildPayload = (
+      overrides: Partial<ReviewCompletedPayload> = {},
+    ): ReviewCompletedPayload => ({
       challengeId: 'challenge-1',
       reviewId: 'review-1',
       submissionId: 'sub-1',
+      phaseId: 'phase-review',
       scorecardId: 'scorecard-1',
       reviewerResourceId: 'resource-1',
       reviewerHandle: 'reviewer',
@@ -258,6 +261,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       submitterMemberId: '2',
       completedAt: new Date().toISOString(),
       initialScore: 90,
+      ...overrides,
     });
 
     beforeEach(() => {
@@ -318,6 +322,70 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           phaseId: reviewPhase.id,
           phaseTypeName: reviewPhase.name,
           state: 'END',
+        }),
+      );
+    });
+
+    it('falls back to payload phase id when review record lacks a phase reference', async () => {
+      const reviewPhase = buildReviewPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildReviewChallenge(reviewPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: null,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+
+      await autopilotService.handleReviewCompleted(
+        buildPayload({ phaseId: reviewPhase.id }),
+      );
+
+      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+        reviewPhase.id,
+        'challenge-1',
+      );
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: reviewPhase.id,
+        }),
+      );
+    });
+
+    it('matches challenge phase on template id when review references phase template', async () => {
+      const reviewPhase = buildReviewPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildReviewChallenge(reviewPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.phaseId,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+
+      await autopilotService.handleReviewCompleted(
+        buildPayload({ phaseId: 'unrelated-phase-id' }),
+      );
+
+      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+        reviewPhase.id,
+        'challenge-1',
+      );
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: reviewPhase.id,
         }),
       );
     });
@@ -387,6 +455,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       challengeId: 'challenge-1',
       reviewId: 'review-1',
       submissionId: 'submission-1',
+      phaseId: 'phase-1',
       scorecardId: 'scorecard-1',
       reviewerResourceId: 'resource-1',
       reviewerHandle: 'handle',

@@ -153,9 +153,9 @@ export class AutopilotService {
 
     try {
       const review = await this.reviewService.getReviewById(reviewId);
-      if (!review || !review.phaseId) {
+      if (!review) {
         this.logger.warn(
-          `Review ${reviewId} not found or missing phase reference for challenge ${challengeId}.`,
+          `Review ${reviewId} not found when handling completion for challenge ${challengeId}.`,
         );
         return;
       }
@@ -167,10 +167,33 @@ export class AutopilotService {
         return;
       }
 
-      const phase = challenge.phases.find((p) => p.id === review.phaseId);
+      const candidatePhaseIds = new Set<string>();
+      if (review.phaseId) {
+        candidatePhaseIds.add(review.phaseId);
+      }
+      if (payload.phaseId) {
+        candidatePhaseIds.add(payload.phaseId);
+      }
+
+      if (!candidatePhaseIds.size) {
+        this.logger.warn(
+          `Review ${reviewId} does not provide a phase reference and payload is missing phaseId for challenge ${challengeId}.`,
+        );
+        return;
+      }
+
+      const phase = challenge.phases.find((phaseCandidate) => {
+        if (candidatePhaseIds.has(phaseCandidate.id)) {
+          return true;
+        }
+        if (phaseCandidate.phaseId) {
+          return candidatePhaseIds.has(phaseCandidate.phaseId);
+        }
+        return false;
+      });
       if (!phase) {
         this.logger.warn(
-          `Phase ${review.phaseId} not found on challenge ${challengeId} when handling review completion.`,
+          `Unable to resolve phase for review ${reviewId} on challenge ${challengeId}. Candidates: ${Array.from(candidatePhaseIds).join(', ')}.`,
         );
         return;
       }
