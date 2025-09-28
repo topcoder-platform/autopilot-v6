@@ -86,6 +86,18 @@ export class First2FinishService {
   }
 
   async handleIterativeReviewerAdded(challenge: IChallenge): Promise<void> {
+    const reviewers = await this.resourcesService.getReviewerResources(
+      challenge.id,
+      this.iterativeRoles,
+    );
+
+    if (reviewers.length !== 1) {
+      this.logger.debug(
+        `Skipping iterative reviewer added handling for challenge ${challenge.id}; expected the first reviewer but found ${reviewers.length}.`,
+      );
+      return;
+    }
+
     await this.processFirst2FinishSubmission(challenge);
   }
 
