@@ -35,6 +35,10 @@ export default registerAs('autopilot', () => ({
     process.env.ITERATIVE_REVIEW_DURATION_HOURS,
     24,
   ),
+  iterativeReviewAssignmentRetrySeconds: parseNumber(
+    process.env.ITERATIVE_REVIEW_ASSIGNMENT_RETRY_SECONDS,
+    30,
+  ),
   appealsPhaseNames: parseList(process.env.APPEALS_PHASE_NAMES, ['Appeals']),
   appealsResponsePhaseNames: parseList(
     process.env.APPEALS_RESPONSE_PHASE_NAMES,

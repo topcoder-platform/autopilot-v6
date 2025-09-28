@@ -102,6 +102,8 @@ describe('First2FinishService', () => {
   let service: First2FinishService;
 
   beforeEach(() => {
+    jest.useFakeTimers();
+
     challengeApiService = {
       getChallengeById: jest.fn(),
       createIterativeReviewPhase: jest.fn(),
@@ -124,7 +126,15 @@ describe('First2FinishService', () => {
     } as unknown as jest.Mocked<ResourcesService>;
 
     configService = {
-      get: jest.fn().mockReturnValue(24),
+      get: jest.fn((key: string) => {
+        if (key === 'autopilot.iterativeReviewDurationHours') {
+          return 24;
+        }
+        if (key === 'autopilot.iterativeReviewAssignmentRetrySeconds') {
+          return 30;
+        }
+        return undefined;
+      }),
     } as unknown as jest.Mocked<ConfigService>;
 
     service = new First2FinishService(
@@ -134,6 +144,11 @@ describe('First2FinishService', () => {
       resourcesService,
       configService,
     );
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
   });
 
   it('skips creating a new iterative review phase when no submissions exist', async () => {

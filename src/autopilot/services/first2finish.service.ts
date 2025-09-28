@@ -32,6 +32,11 @@ export class First2FinishService {
   private readonly logger = new Logger(First2FinishService.name);
   private readonly iterativeRoles: string[];
   private readonly iterativeReviewDurationMs: number;
+  private readonly iterativeAssignmentRetryMs: number;
+  private readonly iterativeAssignmentRetryTimers = new Map<
+    string,
+    NodeJS.Timeout
+  >();
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
@@ -53,6 +58,15 @@ export class First2FinishService {
         ? parsedDuration
         : 24;
     this.iterativeReviewDurationMs = normalizedHours * 60 * 60 * 1000;
+
+    const configuredRetrySeconds = this.configService.get<number | string>(
+      'autopilot.iterativeReviewAssignmentRetrySeconds',
+    );
+    const parsedRetrySeconds = Number(configuredRetrySeconds);
+    this.iterativeAssignmentRetryMs =
+      Number.isFinite(parsedRetrySeconds) && parsedRetrySeconds >= 0
+        ? parsedRetrySeconds * 1000
+        : 30_000;
   }
 
   isChallengeActive(status?: string): boolean {
@@ -285,6 +299,102 @@ export class First2FinishService {
     }
 
     await this.scheduleIterativeReviewClosure(challenge, activePhase);
+    this.scheduleIterativeAssignmentVerification(challenge.id);
+  }
+
+  private scheduleIterativeAssignmentVerification(challengeId: string): void {
+    const existingTimer = this.iterativeAssignmentRetryTimers.get(challengeId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const executeVerification = () => {
+      this.iterativeAssignmentRetryTimers.delete(challengeId);
+      void this.verifyIterativeAssignment(challengeId);
+    };
+
+    if (this.iterativeAssignmentRetryMs <= 0) {
+      executeVerification();
+      return;
+    }
+
+    const timer = setTimeout(executeVerification, this.iterativeAssignmentRetryMs);
+    this.iterativeAssignmentRetryTimers.set(challengeId, timer);
+  }
+
+  private async verifyIterativeAssignment(challengeId: string): Promise<void> {
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!this.isFirst2FinishChallenge(challenge.type)) {
+        return;
+      }
+
+      if (!isActiveStatus(challenge.status)) {
+        return;
+      }
+
+      const activePhase =
+        challenge.phases.find(
+          (phase) =>
+            phase.name === ITERATIVE_REVIEW_PHASE_NAME && phase.isOpen,
+        ) ?? null;
+
+      if (!activePhase) {
+        return;
+      }
+
+      const pendingCount = await this.reviewService.getPendingReviewCount(
+        activePhase.id,
+        challengeId,
+      );
+
+      if (pendingCount > 0) {
+        return;
+      }
+
+      const reviewers = await this.resourcesService.getReviewerResources(
+        challengeId,
+        this.iterativeRoles,
+      );
+
+      if (!reviewers.length) {
+        return;
+      }
+
+      const scorecardId = this.pickIterativeScorecard(challenge, activePhase);
+      if (!scorecardId) {
+        return;
+      }
+
+      const assigned = await this.assignIterativeReviewToReviewers(
+        challengeId,
+        activePhase,
+        reviewers,
+        scorecardId,
+      );
+
+      if (!assigned) {
+        this.logger.debug(
+          `Iterative review assignment verification found no eligible submissions for challenge ${challengeId}.`,
+          {
+            phaseId: activePhase.id,
+          },
+        );
+        return;
+      }
+
+      this.logger.log(
+        `Recreated pending iterative review for challenge ${challengeId} after verification retry.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to verify iterative review assignment for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   private async assignNextIterativeReview(
@@ -450,6 +560,7 @@ export class First2FinishService {
     }
 
     await this.scheduleIterativeReviewClosure(challenge, nextPhase);
+    this.scheduleIterativeAssignmentVerification(challengeId);
   }
 
   private pickIterativeScorecard(

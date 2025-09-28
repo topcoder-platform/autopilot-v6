@@ -380,6 +380,10 @@ export class ReviewService {
           AND existing."phaseId" = ${phaseId}
           AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
           AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
+          AND (
+            existing."status" IS NULL
+            OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+          )
       )
     `;
 
