@@ -20,6 +20,8 @@ export default registerAs('autopilot', () => ({
   dbUrl: process.env.AUTOPILOT_DB_URL,
   dbDebug: process.env.DB_DEBUG === 'true',
   postMortemScorecardId: process.env.POST_MORTEM_SCORECARD_ID || null,
+  topgearPostMortemScorecardId:
+    process.env.TOPGEAR_POST_MORTEM_SCORECARD_ID || null,
   postMortemDurationHours: parseNumber(
     process.env.POST_MORTEM_DURATION_HOURS,
     72,

@@ -15,6 +15,7 @@ import {
   ResourceEventPayload,
   ReviewCompletedPayload,
   First2FinishSubmissionPayload,
+  TopgearSubmissionPayload,
 } from '../src/autopilot/interfaces/autopilot.interface';
 import { AutopilotService } from '../src/autopilot/services/autopilot.service';
 import { ReviewService } from '../src/review/review.service';
@@ -113,6 +114,9 @@ let AppModule: AppModuleType;
 
 process.env.POST_MORTEM_SCORECARD_ID =
   process.env.POST_MORTEM_SCORECARD_ID ?? 'post-mortem-scorecard';
+process.env.TOPGEAR_POST_MORTEM_SCORECARD_ID =
+  process.env.TOPGEAR_POST_MORTEM_SCORECARD_ID ??
+  'topgear-post-mortem-scorecard';
 process.env.POST_MORTEM_REVIEW_ROLES =
   process.env.POST_MORTEM_REVIEW_ROLES ?? 'Reviewer,Copilot';
 process.env.SUBMITTER_ROLE_NAMES =
@@ -224,7 +228,7 @@ describe('Autopilot Service (e2e)', () => {
       getAllSubmissionIdsOrdered: jest.fn().mockResolvedValue([]),
       getExistingReviewPairs: jest.fn().mockResolvedValue(new Set()),
       getReviewById: jest.fn().mockResolvedValue(null),
-      getScorecardPassingScore: jest.fn().mockResolvedValue(null),
+      getScorecardPassingScore: jest.fn().mockResolvedValue(50),
       getCompletedReviewCountForPhase: jest.fn().mockResolvedValue(0),
       getPendingAppealCount: jest.fn().mockResolvedValue(0),
       getActiveSubmissionIds: jest.fn().mockResolvedValue([]),
@@ -241,6 +245,7 @@ describe('Autopilot Service (e2e)', () => {
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
       getMemberHandleMap: jest.fn().mockResolvedValue(new Map()),
+      getResourceByMemberHandle: jest.fn(),
     } satisfies Record<string, jest.Mock>;
     resourcesServiceMockFns = resourcesServiceMock;
     mockResourcesService =
@@ -1405,6 +1410,158 @@ describe('Autopilot Service (e2e)', () => {
       );
 
       schedulerAdvanceSpy.mockRestore();
+    });
+  });
+
+  describe('Topgear Task handling', () => {
+    it('processes Topgear submissions through the iterative review flow', async () => {
+      const challengeId = 'topgear-challenge';
+      const iterativePhase = {
+        id: 'iter-phase-id',
+        phaseId: 'iter-template-id',
+        name: 'Iterative Review',
+        isOpen: false,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockFuturePhaseDate1,
+        actualStartDate: null,
+        actualEndDate: null,
+        predecessor: null,
+      };
+      const submissionPhase = {
+        ...iterativePhase,
+        id: 'topgear-submission-phase-id',
+        phaseId: 'topgear-submission-template',
+        name: 'Topgear Submission',
+      };
+      const challenge = {
+        ...mockChallenge,
+        id: challengeId,
+        type: 'Topgear Task',
+        phases: [iterativePhase, submissionPhase],
+        reviewers: [
+          {
+            id: 'rev-config',
+            scorecardId: 'iter-scorecard',
+            isMemberReview: true,
+            memberReviewerCount: 1,
+            phaseId: iterativePhase.phaseId,
+            basePayment: null,
+            incrementalPayment: null,
+            type: null,
+            aiWorkflowId: null,
+          },
+        ],
+      };
+
+      mockChallengeApiService.getChallengeById.mockResolvedValueOnce(challenge);
+      resourcesServiceMockFns.getReviewerResources.mockResolvedValueOnce([
+        { id: 'iter-resource' },
+      ]);
+      reviewServiceMockFns.getAllSubmissionIdsOrdered.mockResolvedValueOnce([
+        'submission-1',
+      ]);
+      reviewServiceMockFns.getExistingReviewPairs.mockResolvedValueOnce(
+        new Set(),
+      );
+      mockChallengeApiService.advancePhase.mockResolvedValueOnce({
+        success: true,
+        message: 'Phase opened',
+        updatedPhases: [
+          {
+            id: iterativePhase.id,
+            name: iterativePhase.name,
+            scheduledEndDate: mockFuturePhaseDate2,
+            isOpen: true,
+            actualStartDate: new Date().toISOString(),
+          },
+        ],
+      });
+
+      await autopilotService.handleTopgearSubmission({
+        challengeId,
+        submissionId: 'submission-1',
+        memberId: 'member-1',
+        memberHandle: 'member-1',
+        submittedAt: new Date().toISOString(),
+      } as TopgearSubmissionPayload);
+
+      expect(mockChallengeApiService.advancePhase).toHaveBeenCalledWith(
+        challengeId,
+        iterativePhase.id,
+        'open',
+      );
+      expect(reviewServiceMockFns.createPendingReview).toHaveBeenCalledWith(
+        'submission-1',
+        'iter-resource',
+        iterativePhase.id,
+        'iter-scorecard',
+        challengeId,
+      );
+    });
+
+    it('keeps Topgear submission phase open when late and prepares creator post-mortem review', async () => {
+      const challengeId = 'topgear-late-challenge';
+      const submissionPhase = {
+        id: 'topgear-submission-phase-id',
+        phaseId: 'topgear-template',
+        name: 'Topgear Submission',
+        isOpen: true,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockPastPhaseDate,
+        actualStartDate: mockPastPhaseDate,
+        actualEndDate: null,
+        predecessor: null,
+      };
+      const postMortemPhase = {
+        id: 'post-mortem-phase-id',
+        phaseId: 'post-mortem-template',
+        name: 'Post-Mortem',
+        isOpen: false,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockFuturePhaseDate1,
+        actualStartDate: null,
+        actualEndDate: null,
+        predecessor: submissionPhase.phaseId,
+      };
+      const topgearChallenge = {
+        ...mockChallenge,
+        id: challengeId,
+        type: 'Topgear Task',
+        createdBy: 'creator',
+        phases: [submissionPhase, postMortemPhase],
+      };
+
+      mockChallengeApiService.getPhaseDetails.mockResolvedValueOnce(
+        submissionPhase,
+      );
+      mockChallengeApiService.getChallengeById.mockResolvedValueOnce(
+        topgearChallenge,
+      );
+      reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
+      resourcesServiceMockFns.getResourceByMemberHandle.mockResolvedValueOnce({
+        id: 'creator-resource-id',
+        roleName: 'Copilot',
+      });
+      reviewServiceMockFns.createPendingReview.mockResolvedValueOnce(true);
+
+      await schedulerService.advancePhase({
+        projectId: topgearChallenge.projectId,
+        challengeId,
+        phaseId: submissionPhase.id,
+        phaseTypeName: submissionPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_SCHEDULER,
+        projectStatus: topgearChallenge.status,
+      });
+
+      expect(mockChallengeApiService.advancePhase).not.toHaveBeenCalled();
+      expect(reviewServiceMockFns.createPendingReview).toHaveBeenCalledWith(
+        null,
+        'creator-resource-id',
+        postMortemPhase.id,
+        'topgear-post-mortem-scorecard',
+        challengeId,
+      );
     });
   });
 });

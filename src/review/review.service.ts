@@ -28,7 +28,7 @@ interface ReviewDetailRecord {
 }
 
 interface ScorecardRecord {
-  passingScore: number | string | null;
+  minimumPassingScore: number | string | null;
 }
 
 interface AppealCountRecord {
@@ -43,7 +43,7 @@ interface SubmissionAggregationRecord {
   aggregateScore: number | string | null;
   scorecardId: string | null;
   scorecardLegacyId: string | null;
-  passingScore: number | string | null;
+  minimumPassingScore: number | string | null;
 }
 
 export interface SubmissionSummary {
@@ -54,7 +54,7 @@ export interface SubmissionSummary {
   aggregateScore: number;
   scorecardId: string | null;
   scorecardLegacyId: string | null;
-  passingScore: number | null;
+  passingScore: number;
   isPassing: boolean;
 }
 
@@ -73,6 +73,19 @@ export class ReviewService {
     private readonly prisma: ReviewPrismaService,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
+
+  private resolvePassingScore(
+    value: number | string | null | undefined,
+  ): number {
+    if (value === null || value === undefined) {
+      return 50;
+    }
+
+    const numericValue =
+      typeof value === 'number' ? value : Number(value);
+
+    return Number.isFinite(numericValue) ? numericValue : 50;
+  }
 
   private buildPendingReviewLockId(
     phaseId: string,
@@ -597,7 +610,7 @@ export class ReviewService {
         COALESCE(AVG(r."finalScore"), 0) AS "aggregateScore",
         MAX(r."scorecardId") AS "scorecardId",
         MAX(sc."legacyId") AS "scorecardLegacyId",
-        MAX(sc."minScore") AS "passingScore"
+        MAX(sc."minimumPassingScore") AS "minimumPassingScore"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       LEFT JOIN ${ReviewService.REVIEW_TABLE} r
         ON r."submissionId" = s."id"
@@ -615,12 +628,8 @@ export class ReviewService {
 
     const summaries: SubmissionSummary[] = aggregationRows.map((row) => {
       const aggregateScore = Number(row.aggregateScore ?? 0);
-      const passingScore =
-        row.passingScore !== null && row.passingScore !== undefined
-          ? Number(row.passingScore)
-          : null;
-      const isPassing =
-        passingScore !== null ? aggregateScore >= passingScore : false;
+      const passingScore = this.resolvePassingScore(row.minimumPassingScore);
+      const isPassing = aggregateScore >= passingScore;
 
       return {
         submissionId: row.submissionId,
@@ -753,13 +762,13 @@ export class ReviewService {
 
   async getScorecardPassingScore(
     scorecardId: string | null,
-  ): Promise<number | null> {
+  ): Promise<number> {
     if (!scorecardId) {
-      return null;
+      return 50;
     }
 
     const query = Prisma.sql`
-      SELECT "passingScore"
+      SELECT "minimumPassingScore"
       FROM "scorecard"
       WHERE "id" = ${scorecardId}
       LIMIT 1
@@ -767,8 +776,9 @@ export class ReviewService {
 
     try {
       const [record] = await this.prisma.$queryRaw<ScorecardRecord[]>(query);
-      const rawScore = Number(record?.passingScore ?? NaN);
-      const passingScore = Number.isFinite(rawScore) ? rawScore : null;
+      const passingScore = this.resolvePassingScore(
+        record?.minimumPassingScore ?? null,
+      );
 
       void this.dbLogger.logAction('review.getScorecardPassingScore', {
         challengeId: null,
@@ -777,6 +787,7 @@ export class ReviewService {
         details: {
           scorecardId,
           passingScore,
+          minimumPassingScore: record?.minimumPassingScore ?? null,
         },
       });
 

@@ -10,6 +10,7 @@ export const KAFKA_TOPICS = {
   REVIEW_COMPLETED: 'review.action.completed',
   REVIEW_APPEAL_RESPONDED: 'review.action.appeal.responded',
   FIRST2FINISH_SUBMISSION_RECEIVED: 'first2finish.submission.received',
+  TOPGEAR_SUBMISSION_RECEIVED: 'topgear.submission.received',
 } as const;
 
 export type KafkaTopic = (typeof KAFKA_TOPICS)[keyof typeof KAFKA_TOPICS];

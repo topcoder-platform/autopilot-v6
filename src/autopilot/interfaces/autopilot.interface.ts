@@ -134,3 +134,5 @@ export interface First2FinishSubmissionPayload {
   memberHandle: string;
   submittedAt: string;
 }
+
+export type TopgearSubmissionPayload = First2FinishSubmissionPayload;

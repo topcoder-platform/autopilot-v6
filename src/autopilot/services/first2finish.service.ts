@@ -16,11 +16,16 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
   SUBMISSION_PHASE_NAME,
+  TOPGEAR_SUBMISSION_PHASE_NAME,
+  isSubmissionPhaseName,
 } from '../constants/review.constants';
+import {
+  describeChallengeType,
+  isFirst2FinishChallenge as isSupportedChallengeType,
+  isTopgearTaskChallenge,
+} from '../constants/challenge.constants';
 import { isActiveStatus } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
-
-const FIRST2FINISH_TYPE = 'first2finish';
 
 @Injectable()
 export class First2FinishService {
@@ -55,7 +60,7 @@ export class First2FinishService {
   }
 
   isFirst2FinishChallenge(type?: string): boolean {
-    return (type ?? '').toLowerCase() === FIRST2FINISH_TYPE;
+    return isSupportedChallengeType(type);
   }
 
   async handleSubmissionByChallengeId(
@@ -67,7 +72,7 @@ export class First2FinishService {
 
     if (!this.isFirst2FinishChallenge(challenge.type)) {
       this.logger.debug(
-        'Skipping submission aggregate for non-First2Finish challenge',
+        'Skipping submission aggregate for unsupported challenge type',
         {
           submissionId,
           challengeId,
@@ -118,13 +123,13 @@ export class First2FinishService {
       projectStatus: challenge.status,
     });
 
-    if (passingScore !== null && finalScore >= passingScore) {
+    if (finalScore >= passingScore) {
       this.logger.log(
         `Iterative review passed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
       );
 
       const submissionPhase = challenge.phases.find(
-        (p) => p.name === SUBMISSION_PHASE_NAME && p.isOpen,
+        (p) => isSubmissionPhaseName(p.name) && p.isOpen,
       );
 
       if (submissionPhase) {
@@ -140,7 +145,7 @@ export class First2FinishService {
       }
     } else {
       this.logger.log(
-        `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore ?? 'N/A'}).`,
+        `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore}).`,
       );
       await this.prepareNextIterativeReview(challenge.id);
     }
@@ -160,7 +165,7 @@ export class First2FinishService {
 
     if (!iterativePhase) {
       this.logger.warn(
-        `No Iterative Review phase configured for First2Finish challenge ${challenge.id}.`,
+        `No Iterative Review phase configured for ${describeChallengeType(challenge.type)} challenge ${challenge.id}.`,
       );
       return;
     }

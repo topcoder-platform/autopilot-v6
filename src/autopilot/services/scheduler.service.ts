@@ -23,8 +23,14 @@ import {
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
   SUBMISSION_PHASE_NAME,
+  TOPGEAR_SUBMISSION_PHASE_NAME,
 } from '../constants/review.constants';
 import { ResourcesService } from '../../resources/resources.service';
+import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -56,6 +62,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
   private readonly postMortemDurationHours: number;
+  private readonly topgearPostMortemScorecardId: string | null;
 
   private redisConnection?: RedisOptions;
   private phaseQueue?: Queue<PhaseTransitionPayload>;
@@ -81,6 +88,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.postMortemScorecardId =
       this.configService.get<string | null>(
         'autopilot.postMortemScorecardId',
+      ) ?? null;
+    this.topgearPostMortemScorecardId =
+      this.configService.get<string | null>(
+        'autopilot.topgearPostMortemScorecardId',
       ) ?? null;
     this.postMortemDurationHours =
       this.configService.get<number>('autopilot.postMortemDurationHours') ?? 72;
@@ -399,13 +410,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (!phaseDetails) {
-        this.logger.error(
-          `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
-        );
-        return;
-      }
+      this.logger.error(
+        `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
+      );
+      return;
+    }
 
-      const phaseName = phaseDetails.name;
+    const phaseName = phaseDetails.name;
+    const isTopgearSubmissionPhase =
+      phaseName === TOPGEAR_SUBMISSION_PHASE_NAME;
+    const isSchedulerInitiated = this.isSchedulerInitiatedOperator(
+      data.operator,
+    );
 
       // Determine operation based on transition state and current phase state
       let operation: 'open' | 'close';
@@ -479,6 +495,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
 
           await this.deferReviewPhaseClosure(data);
+          return;
+        }
+      }
+
+      if (
+        operation === 'close' &&
+        isTopgearSubmissionPhase &&
+        isSchedulerInitiated
+      ) {
+        const handled = await this.handleTopgearSubmissionLate(
+          data,
+          phaseDetails,
+        );
+        if (handled) {
           return;
         }
       }
@@ -756,6 +786,123 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     return fallback;
+  }
+
+  private isSchedulerInitiatedOperator(
+    operator?: AutopilotOperator | string,
+  ): boolean {
+    if (!operator) {
+      return false;
+    }
+
+    const candidate = operator.toString().toLowerCase();
+    return (
+      candidate === AutopilotOperator.SYSTEM_SCHEDULER ||
+      candidate === AutopilotOperator.SYSTEM_PHASE_CHAIN
+    );
+  }
+
+  private async handleTopgearSubmissionLate(
+    data: PhaseTransitionPayload,
+    phase: IPhase,
+  ): Promise<boolean> {
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(data.challengeId);
+
+      if (!isTopgearTaskChallenge(challenge.type)) {
+        return false;
+      }
+
+      this.logger.log(
+        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing submission.`,
+      );
+
+      const submissionCount = await this.reviewService.getActiveSubmissionCount(
+        data.challengeId,
+      );
+
+      if (submissionCount === 0) {
+        await this.ensureTopgearPostMortemReview(challenge);
+      }
+
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[TOPGEAR] Failed to defer submission closure for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+        err.stack,
+      );
+      return true;
+    }
+  }
+
+  private async ensureTopgearPostMortemReview(
+    challenge: IChallenge,
+  ): Promise<void> {
+    if (!this.topgearPostMortemScorecardId) {
+      this.logger.warn(
+        `[TOPGEAR] topgearPostMortemScorecardId is not configured; unable to create creator review for challenge ${challenge.id}.`,
+      );
+      return;
+    }
+
+    const postMortemPhase =
+      challenge.phases?.find((phase) => phase.name === POST_MORTEM_PHASE_NAME) ??
+      null;
+
+    if (!postMortemPhase) {
+      this.logger.warn(
+        `[TOPGEAR] Post-Mortem phase not found on challenge ${challenge.id}; creator review cannot be created.`,
+      );
+      return;
+    }
+
+    const creatorHandle = challenge.createdBy?.trim();
+    if (!creatorHandle) {
+      this.logger.warn(
+        `[TOPGEAR] Challenge ${challenge.id} missing creator handle; post-mortem review not created.`,
+      );
+      return;
+    }
+
+    try {
+      const creatorResource = await this.resourcesService.getResourceByMemberHandle(
+        challenge.id,
+        creatorHandle,
+      );
+
+      if (!creatorResource) {
+        this.logger.warn(
+          `[TOPGEAR] Unable to locate resource for creator ${creatorHandle} on challenge ${challenge.id}; post-mortem review not created.`,
+        );
+        return;
+      }
+
+      const created = await this.reviewService.createPendingReview(
+        null,
+        creatorResource.id,
+        postMortemPhase.id,
+        this.topgearPostMortemScorecardId,
+        challenge.id,
+      );
+
+      if (created) {
+        this.logger.log(
+          `[TOPGEAR] Created post-mortem review for challenge ${challenge.id} assigned to creator ${creatorHandle}.`,
+        );
+      } else {
+        this.logger.debug?.(
+          `[TOPGEAR] Post-mortem review already exists for challenge ${challenge.id}, creator ${creatorHandle}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[TOPGEAR] Failed to create post-mortem review for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   private async handleSubmissionPhaseClosed(

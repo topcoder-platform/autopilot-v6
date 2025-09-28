@@ -176,6 +176,74 @@ export class ResourcesService {
     }
   }
 
+  async getResourceByMemberHandle(
+    challengeId: string,
+    memberHandle: string,
+  ): Promise<ResourceRecord | null> {
+    if (!challengeId || !memberHandle) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        r."id",
+        r."challengeId",
+        r."memberId",
+        r."memberHandle",
+        r."roleId",
+        rr."name" AS "roleName"
+      FROM ${ResourcesService.RESOURCE_TABLE} r
+      INNER JOIN ${ResourcesService.RESOURCE_ROLE_TABLE} rr
+        ON rr."id" = r."roleId"
+      WHERE r."challengeId" = ${challengeId}
+        AND LOWER(r."memberHandle") = LOWER(${memberHandle})
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<ResourceRecord[]>(query);
+
+      if (!record) {
+        void this.dbLogger.logAction('resources.getResourceByMemberHandle', {
+          challengeId,
+          status: 'SUCCESS',
+          source: ResourcesService.name,
+          details: {
+            memberHandle,
+            found: false,
+          },
+        });
+
+        return null;
+      }
+
+      void this.dbLogger.logAction('resources.getResourceByMemberHandle', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ResourcesService.name,
+        details: {
+          memberHandle,
+          resourceId: record.id,
+          roleName: record.roleName,
+        },
+      });
+
+      return record;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('resources.getResourceByMemberHandle', {
+        challengeId,
+        status: 'ERROR',
+        source: ResourcesService.name,
+        details: {
+          memberHandle,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async hasSubmitterResource(
     challengeId: string,
     roleNames: string[],

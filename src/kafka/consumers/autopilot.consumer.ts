@@ -9,6 +9,7 @@ import {
   CommandPayload,
   AppealRespondedPayload,
   First2FinishSubmissionPayload,
+  TopgearSubmissionPayload,
   PhaseTransitionPayload,
   ResourceEventPayload,
   ReviewCompletedPayload,
@@ -73,6 +74,10 @@ export class AutopilotConsumer {
         this.autopilotService.handleFirst2FinishSubmission.bind(
           this.autopilotService,
         ) as (message: First2FinishSubmissionPayload) => Promise<void>,
+      [KAFKA_TOPICS.TOPGEAR_SUBMISSION_RECEIVED]:
+        this.autopilotService.handleTopgearSubmission.bind(
+          this.autopilotService,
+        ) as (message: TopgearSubmissionPayload) => Promise<void>,
     };
   }
 
@@ -132,6 +137,11 @@ export class AutopilotConsumer {
             case KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED:
               await this.autopilotService.handleFirst2FinishSubmission(
                 payload as First2FinishSubmissionPayload,
+              );
+              break;
+            case KAFKA_TOPICS.TOPGEAR_SUBMISSION_RECEIVED:
+              await this.autopilotService.handleTopgearSubmission(
+                payload as TopgearSubmissionPayload,
               );
               break;
             default:

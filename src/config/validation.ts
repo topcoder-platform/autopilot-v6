@@ -56,6 +56,7 @@ export const validationSchema = Joi.object({
     .positive()
     .default(5 * 60 * 1000),
   POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
+  TOPGEAR_POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   POST_MORTEM_DURATION_HOURS: Joi.number().integer().positive().default(72),
   POST_MORTEM_REVIEW_ROLES: Joi.string().default('Reviewer,Copilot'),
   SUBMITTER_ROLE_NAMES: Joi.string().default('Submitter'),

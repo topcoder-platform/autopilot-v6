@@ -14,6 +14,7 @@ import {
   ReviewCompletedPayload,
   AppealRespondedPayload,
   First2FinishSubmissionPayload,
+  TopgearSubmissionPayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
@@ -331,6 +332,19 @@ export class AutopilotService {
   async handleFirst2FinishSubmission(
     payload: First2FinishSubmissionPayload,
   ): Promise<void> {
+    await this.handleRapidSubmission(payload, 'First2Finish');
+  }
+
+  async handleTopgearSubmission(
+    payload: TopgearSubmissionPayload,
+  ): Promise<void> {
+    await this.handleRapidSubmission(payload, 'Topgear Task');
+  }
+
+  private async handleRapidSubmission(
+    payload: First2FinishSubmissionPayload,
+    challengeLabel: string,
+  ): Promise<void> {
     try {
       await this.first2FinishService.handleSubmissionByChallengeId(
         payload.challengeId,
@@ -339,7 +353,7 @@ export class AutopilotService {
     } catch (error) {
       const err = error as Error;
       this.logger.error(
-        `Failed to handle First2Finish submission for challenge ${payload.challengeId}: ${err.message}`,
+        `Failed to handle ${challengeLabel} submission for challenge ${payload.challengeId}: ${err.message}`,
         err.stack,
       );
     }
