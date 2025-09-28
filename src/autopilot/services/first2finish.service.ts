@@ -208,6 +208,18 @@ export class First2FinishService {
       ) ?? null;
 
     if (!activePhase) {
+      if (!submissionId) {
+        const availableSubmissionIds =
+          await this.reviewService.getAllSubmissionIdsOrdered(challenge.id);
+
+        if (!availableSubmissionIds.length) {
+          this.logger.debug(
+            `Skipping iterative review phase creation for challenge ${challenge.id}; no submissions available for iterative review.`,
+          );
+          return;
+        }
+      }
+
       activePhase = await this.createNextIterativePhase(
         challenge,
         latestIterativePhase,
@@ -256,22 +268,22 @@ export class First2FinishService {
     const submissionIds =
       await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
 
-    if (!submissionIds.length) {
-      return false;
-    }
-
     const orderedIds = preferredSubmissionId
       ? [preferredSubmissionId, ...submissionIds]
       : submissionIds;
 
     const seen = new Set<string>();
     const uniqueIds = orderedIds.filter((id) => {
-      if (seen.has(id)) {
+      if (!id || seen.has(id)) {
         return false;
       }
       seen.add(id);
       return true;
     });
+
+    if (!uniqueIds.length) {
+      return false;
+    }
 
     const existingPairs = await this.reviewService.getExistingReviewPairs(
       phase.id,
