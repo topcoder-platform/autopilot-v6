@@ -147,7 +147,9 @@ export class First2FinishService {
       this.logger.log(
         `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore}).`,
       );
-      await this.prepareNextIterativeReview(challenge.id);
+      const lastSubmissionId =
+        payload.submissionId ?? review.submissionId ?? undefined;
+      await this.prepareNextIterativeReview(challenge.id, lastSubmissionId);
     }
   }
 
@@ -159,11 +161,9 @@ export class First2FinishService {
       return;
     }
 
-    const iterativePhase = challenge.phases?.find(
-      (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
-    );
+    const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
-    if (!iterativePhase) {
+    if (!latestIterativePhase) {
       this.logger.warn(
         `No Iterative Review phase configured for ${describeChallengeType(challenge.type)} challenge ${challenge.id}.`,
       );
@@ -182,7 +182,7 @@ export class First2FinishService {
       return;
     }
 
-    const scorecardId = this.pickIterativeScorecard(challenge, iterativePhase);
+    const scorecardId = this.pickIterativeScorecard(challenge, latestIterativePhase);
     if (!scorecardId) {
       this.logger.warn(
         `Unable to determine scorecard for iterative review phase on challenge ${challenge.id}.`,
@@ -190,27 +190,33 @@ export class First2FinishService {
       return;
     }
 
-    const activePhase = await this.ensureIterativePhaseOpen(
-      challenge,
-      iterativePhase,
-    );
+    let activePhase: IPhase | null =
+      challenge.phases.find(
+        (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME && phase.isOpen,
+      ) ?? null;
 
     if (!activePhase) {
-      return;
+      activePhase = await this.createNextIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
+
+      if (!activePhase) {
+        return;
+      }
     }
 
-    const preferredSubmissionId = submissionId;
     const assigned = await this.assignNextIterativeReview(
       challenge.id,
       activePhase,
       reviewers[0].id,
       scorecardId,
-      preferredSubmissionId,
+      submissionId,
     );
 
     if (!assigned) {
       this.logger.debug(
-        `No additional submissions available for iterative review on challenge ${challenge.id}; closing phase.`,
+        `No additional submissions available for iterative review on challenge ${challenge.id}; closing phase ${activePhase.id}.`,
       );
 
       await this.schedulerService.advancePhase({
@@ -285,7 +291,10 @@ export class First2FinishService {
     return false;
   }
 
-  private async prepareNextIterativeReview(challengeId: string): Promise<void> {
+  private async prepareNextIterativeReview(
+    challengeId: string,
+    lastSubmissionId?: string,
+  ): Promise<void> {
     const challenge =
       await this.challengeApiService.getChallengeById(challengeId);
 
@@ -293,11 +302,16 @@ export class First2FinishService {
       return;
     }
 
-    const iterativePhase = challenge.phases?.find(
-      (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
-    );
+    const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
-    if (!iterativePhase) {
+    if (!latestIterativePhase) {
+      return;
+    }
+
+    if (latestIterativePhase.isOpen) {
+      this.logger.debug(
+        `Iterative review phase ${latestIterativePhase.id} already open for challenge ${challengeId}; awaiting additional submissions.`,
+      );
       return;
     }
 
@@ -313,7 +327,38 @@ export class First2FinishService {
       return;
     }
 
-    const scorecardId = this.pickIterativeScorecard(challenge, iterativePhase);
+    const submissionIds = await this.reviewService.getAllSubmissionIdsOrdered(
+      challengeId,
+    );
+
+    const recentPairs = await this.reviewService.getExistingReviewPairs(
+      latestIterativePhase.id,
+      challengeId,
+    );
+
+    const reviewerId = reviewers[0].id;
+
+    const preferredSubmissionId = submissionIds.find((submissionId) => {
+      if (submissionId === lastSubmissionId) {
+        return false;
+      }
+
+      const pairKey = `${reviewerId}:${submissionId}`;
+      return !recentPairs.has(pairKey);
+    });
+
+    if (!preferredSubmissionId) {
+      this.logger.debug(
+        `No pending submissions available for next iterative review on challenge ${challengeId}; will wait for new submissions.`,
+      );
+      return;
+    }
+
+    const scorecardId = this.pickIterativeScorecard(
+      challenge,
+      latestIterativePhase,
+    );
+
     if (!scorecardId) {
       this.logger.warn(
         `Unable to determine scorecard for iterative review phase on challenge ${challengeId}.`,
@@ -321,32 +366,33 @@ export class First2FinishService {
       return;
     }
 
-    const activePhase = await this.ensureIterativePhaseOpen(
+    const nextPhase = await this.createNextIterativePhase(
       challenge,
-      iterativePhase,
+      latestIterativePhase,
     );
 
-    if (!activePhase) {
+    if (!nextPhase) {
       return;
     }
 
     const assigned = await this.assignNextIterativeReview(
       challengeId,
-      activePhase,
+      nextPhase,
       reviewers[0].id,
       scorecardId,
+      preferredSubmissionId,
     );
 
     if (!assigned) {
       this.logger.debug(
-        `No additional submissions available for iterative review on challenge ${challengeId}; closing phase.`,
+        `Unable to assign next iterative review for challenge ${challengeId}; closing phase ${nextPhase.id}.`,
       );
 
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,
         challengeId: challenge.id,
-        phaseId: activePhase.id,
-        phaseTypeName: activePhase.name,
+        phaseId: nextPhase.id,
+        phaseTypeName: nextPhase.name,
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,
@@ -354,7 +400,7 @@ export class First2FinishService {
       return;
     }
 
-    await this.scheduleIterativeReviewClosure(challenge, activePhase);
+    await this.scheduleIterativeReviewClosure(challenge, nextPhase);
   }
 
   private pickIterativeScorecard(
@@ -369,40 +415,53 @@ export class First2FinishService {
     );
   }
 
-  private async ensureIterativePhaseOpen(
-    challenge: IChallenge,
-    phase: IPhase,
-  ): Promise<IPhase | null> {
-    if (phase.isOpen) {
-      return phase;
-    }
-
-    const openResult = await this.challengeApiService.advancePhase(
-      challenge.id,
-      phase.id,
-      'open',
+  private getLatestIterativePhase(challenge: IChallenge): IPhase | null {
+    const phases = challenge.phases?.filter(
+      (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME,
     );
 
-    if (!openResult.success) {
-      this.logger.warn(
-        `Failed to open Iterative Review phase ${phase.id} on challenge ${challenge.id}: ${openResult.message}`,
-      );
+    if (!phases?.length) {
       return null;
     }
 
-    const refreshedPhase =
-      openResult.updatedPhases?.find((current) => current.id === phase.id) ??
-      phase;
+    const sorted = [...phases].sort((a, b) => {
+      return this.getPhaseStartTime(a) - this.getPhaseStartTime(b);
+    });
 
-    return {
-      ...phase,
-      ...refreshedPhase,
-      isOpen: true,
-      actualStartDate:
-        refreshedPhase.actualStartDate ??
-        phase.actualStartDate ??
-        new Date().toISOString(),
-    };
+    return sorted.at(-1) ?? null;
+  }
+
+  private getPhaseStartTime(phase: IPhase): number {
+    const reference = phase.actualStartDate ?? phase.scheduledStartDate;
+    return new Date(reference).getTime();
+  }
+
+  private async createNextIterativePhase(
+    challenge: IChallenge,
+    predecessor: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      const durationSeconds = Math.max(
+        Math.round(this.iterativeReviewDurationMs / 1000),
+        predecessor.duration || 1,
+      );
+
+      return await this.challengeApiService.createIterativeReviewPhase(
+        challenge.id,
+        predecessor.id,
+        predecessor.phaseId,
+        predecessor.name,
+        predecessor.description,
+        durationSeconds,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to create next iterative review phase after ${predecessor.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
   }
 
   private async scheduleIterativeReviewClosure(

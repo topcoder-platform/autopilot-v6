@@ -762,6 +762,117 @@ export class ChallengeApiService {
     }
   }
 
+  async createIterativeReviewPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    phaseTypeId: string,
+    phaseName: string,
+    phaseDescription: string | null,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    const now = new Date();
+    const scheduledEnd = new Date(now.getTime() + durationSeconds * 1000);
+
+    try {
+      const { newPhaseId } = await this.prisma.$transaction(async (tx) => {
+        const challenge = await tx.challenge.findUnique({
+          ...challengeWithRelationsArgs,
+          where: { id: challengeId },
+        });
+
+        if (!challenge) {
+          throw new NotFoundException(
+            `Challenge with ID ${challengeId} not found when creating iterative review phase.`,
+          );
+        }
+
+        const predecessorPhase = challenge.phases.find(
+          (phase) => phase.id === predecessorPhaseId,
+        );
+
+        if (!predecessorPhase) {
+          throw new NotFoundException(
+            `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId}.`,
+          );
+        }
+
+        const created = await tx.challengePhase.create({
+          data: {
+            challengeId,
+            phaseId: phaseTypeId,
+            name: phaseName,
+            description: phaseDescription,
+            predecessor: predecessorPhase.id,
+            duration: Math.max(durationSeconds, 1),
+            scheduledStartDate: now,
+            scheduledEndDate: scheduledEnd,
+            actualStartDate: now,
+            actualEndDate: null,
+            isOpen: true,
+            createdBy: 'Autopilot',
+            updatedBy: 'Autopilot',
+          },
+        });
+
+        const phaseNames = new Set(challenge.currentPhaseNames ?? []);
+        phaseNames.add(phaseName);
+
+        await tx.challenge.update({
+          where: { id: challengeId },
+          data: {
+            currentPhaseNames: Array.from(phaseNames),
+          },
+        });
+
+        return { newPhaseId: created.id };
+      });
+
+      const refreshed = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
+
+      const phaseRecord = refreshed?.phases.find(
+        (phase) => phase.id === newPhaseId,
+      );
+
+      if (!phaseRecord) {
+        throw new Error(
+          `Created iterative review phase ${newPhaseId} not found after insertion for challenge ${challengeId}.`,
+        );
+      }
+
+      const mapped = this.mapPhase(phaseRecord);
+
+      void this.dbLogger.logAction('challenge.createIterativeReviewPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          predecessorPhaseId,
+          phaseId: mapped.id,
+          phaseTypeId,
+          duration: mapped.duration,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.createIterativeReviewPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          predecessorPhaseId,
+          phaseTypeId,
+          error: err.message,
+        },
+      });
+      throw error;
+    }
+  }
+
   async completeChallenge(
     challengeId: string,
     winners: IChallengeWinner[],
