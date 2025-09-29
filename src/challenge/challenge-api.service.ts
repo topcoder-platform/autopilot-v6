@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { ChallengePrismaService } from './challenge-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import {
@@ -7,6 +8,10 @@ import {
   IChallenge,
   IChallengeWinner,
 } from './interfaces/challenge.interface';
+import {
+  DEFAULT_APPEALS_PHASE_NAMES,
+  DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+} from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -53,11 +58,23 @@ type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
 export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
   private readonly defaultPageSize = 50;
+  private readonly appealsPhaseNames: Set<string>;
+  private readonly appealsResponsePhaseNames: Set<string>;
 
   constructor(
     private readonly prisma: ChallengePrismaService,
     private readonly dbLogger: AutopilotDbLoggerService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.appealsPhaseNames = this.buildPhaseNameSet(
+      this.configService.get('autopilot.appealsPhaseNames'),
+      DEFAULT_APPEALS_PHASE_NAMES,
+    );
+    this.appealsResponsePhaseNames = this.buildPhaseNameSet(
+      this.configService.get('autopilot.appealsResponsePhaseNames'),
+      DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+    );
+  }
 
   async getAllActiveChallenges(
     filters: ChallengeFiltersDto = {},
@@ -340,14 +357,32 @@ export class ChallengeApiService {
         ? new Date(targetPhase.scheduledStartDate)
         : null;
       const durationSeconds = this.computePhaseDurationSeconds(targetPhase);
-      const shouldAdjustSchedule =
+      const isAppealsPhase = this.isAppealsPhaseName(targetPhase.name);
+      const isOpeningLateAppeals =
         operation === 'open' &&
-        scheduledStartDate !== null &&
+        isAppealsPhase &&
         durationSeconds !== null &&
+        scheduledStartDate !== null &&
+        now.getTime() - scheduledStartDate.getTime() > 1000;
+      const isOpeningEarly =
+        operation === 'open' &&
+        durationSeconds !== null &&
+        scheduledStartDate !== null &&
         scheduledStartDate.getTime() - now.getTime() > 1000;
-      const adjustedEndDate = shouldAdjustSchedule
-        ? new Date(now.getTime() + durationSeconds * 1000)
-        : null;
+
+      let shouldAdjustSchedule = false;
+      let adjustedEndDate: Date | null = null;
+
+      if (isOpeningEarly || isOpeningLateAppeals) {
+        shouldAdjustSchedule = true;
+        adjustedEndDate = new Date(now.getTime() + durationSeconds! * 1000);
+      }
+
+      if (isOpeningLateAppeals && adjustedEndDate) {
+        this.logger.log(
+          `Extending appeals phase ${targetPhase.id} to preserve duration. New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
 
       try {
         await this.prisma.$transaction(async (tx) => {
@@ -511,6 +546,60 @@ export class ChallengeApiService {
     }
 
     return null;
+  }
+
+  private buildPhaseNameSet(
+    source: unknown,
+    fallback: Set<string>,
+  ): Set<string> {
+    const resolved = this.normalizeStringArray(source, Array.from(fallback));
+    return new Set(
+      resolved
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    );
+  }
+
+  private normalizeStringArray(
+    source: unknown,
+    fallback: string[],
+  ): string[] {
+    if (Array.isArray(source)) {
+      const normalized = source
+        .map((item) =>
+          typeof item === 'string' ? item.trim() : String(item ?? '').trim(),
+        )
+        .filter((item) => item.length > 0);
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    if (typeof source === 'string' && source.length > 0) {
+      const normalized = source
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    return fallback;
+  }
+
+  private isAppealsPhaseName(phaseName?: string | null): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      this.appealsPhaseNames.has(normalized) ||
+      this.appealsResponsePhaseNames.has(normalized)
+    );
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {

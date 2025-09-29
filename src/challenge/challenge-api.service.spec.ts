@@ -2,6 +2,7 @@ import { ChallengeApiService } from './challenge-api.service';
 import type { ChallengePrismaService } from './challenge-prisma.service';
 import type { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import { ChallengeStatusEnum } from '@prisma/client';
+import type { ConfigService } from '@nestjs/config';
 
 describe('ChallengeApiService - advancePhase scheduling', () => {
   const fixedNow = new Date('2025-09-27T06:00:00.000Z');
@@ -15,6 +16,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
   let service: ChallengeApiService;
+  let configService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -45,7 +47,11 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       logAction: jest.fn(),
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
-    service = new ChallengeApiService(prisma, dbLogger);
+    configService = {
+      get: jest.fn().mockReturnValue(undefined),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    service = new ChallengeApiService(prisma, dbLogger, configService);
   });
 
   afterEach(() => {
@@ -149,6 +155,87 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       }),
     });
   });
+
+  it('extends the appeals phase duration when opening late', async () => {
+    const lateNow = new Date('2025-09-27T09:30:00.000Z');
+    jest.setSystemTime(lateNow);
+
+    const appealsPhase = {
+      id: 'appeals-phase',
+      phaseId: 'template-appeals',
+      name: 'Appeals',
+      description: null,
+      isOpen: false,
+      predecessor: 'review-template',
+      duration: 3600,
+      scheduledStartDate: new Date('2025-09-27T08:30:00.000Z'),
+      scheduledEndDate: new Date('2025-09-27T09:30:00.000Z'),
+      actualStartDate: null,
+      actualEndDate: null,
+      constraints: [],
+      createdAt: lateNow,
+      createdBy: 'tester',
+      updatedAt: lateNow,
+      updatedBy: 'tester',
+    };
+
+    const challengeRecord = {
+      id: 'challenge-appeals',
+      name: 'Appeals Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 456,
+      typeId: 'type-appeals',
+      trackId: 'track-appeals',
+      timelineTemplateId: 'timeline-appeals',
+      currentPhaseNames: [],
+      tags: [],
+      groups: [],
+      submissionStartDate: lateNow,
+      submissionEndDate: lateNow,
+      registrationStartDate: lateNow,
+      registrationEndDate: lateNow,
+      startDate: lateNow,
+      endDate: null,
+      legacyId: null,
+      status: ChallengeStatusEnum.ACTIVE,
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: [],
+      phases: [appealsPhase],
+      reviewers: [],
+      winners: [],
+      track: { name: 'DEVELOP' },
+      type: { name: 'Standard' },
+      legacyRecord: null,
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      overview: {},
+      numOfSubmissions: 0,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+      createdAt: lateNow,
+    };
+
+    challengeFindUnique
+      .mockResolvedValueOnce(challengeRecord as any)
+      .mockResolvedValueOnce(challengeRecord as any);
+
+    await service.advancePhase('challenge-appeals', 'appeals-phase', 'open');
+
+    expect(challengePhaseUpdate).toHaveBeenCalledWith({
+      where: { id: appealsPhase.id },
+      data: expect.objectContaining({
+        scheduledStartDate: lateNow,
+        scheduledEndDate: new Date(lateNow.getTime() + 3600 * 1000),
+        duration: appealsPhase.duration,
+      }),
+    });
+  });
 });
 
 describe('ChallengeApiService - end date handling', () => {
@@ -160,6 +247,7 @@ describe('ChallengeApiService - end date handling', () => {
   let challengeUpdate: jest.Mock;
   let challengeWinnerDeleteMany: jest.Mock;
   let challengeWinnerCreateMany: jest.Mock;
+  let configService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -193,7 +281,11 @@ describe('ChallengeApiService - end date handling', () => {
       logAction: jest.fn(),
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
-    service = new ChallengeApiService(prisma, dbLogger);
+    configService = {
+      get: jest.fn().mockReturnValue(undefined),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    service = new ChallengeApiService(prisma, dbLogger, configService);
   });
 
   afterEach(() => {
