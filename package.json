@@ -20,7 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "prisma:generate": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma",
     "postinstall": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma && patch-package",
-    "prisma:pushautopilot": "prisma db push --schema prisma/autopilot.schema.prisma"
+    "prisma:pushautopilot": "prisma db push --schema prisma/autopilot.schema.prisma",
+    "pull:logs": "ts-node scripts/fetch-autopilot-actions.ts"
   },
   "prisma": {
     "schema": "prisma/challenge.schema.prisma"

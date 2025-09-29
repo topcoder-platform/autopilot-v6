@@ -4,6 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
@@ -15,8 +16,21 @@ import {
 } from '../interfaces/autopilot.interface';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { Job, Queue, RedisOptions, Worker } from 'bullmq';
+import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
-import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+import {
+  POST_MORTEM_PHASE_NAME,
+  REGISTRATION_PHASE_NAME,
+  REVIEW_PHASE_NAMES,
+  SUBMISSION_PHASE_NAME,
+  TOPGEAR_SUBMISSION_PHASE_NAME,
+} from '../constants/review.constants';
+import { ResourcesService } from '../../resources/resources.service';
+import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -41,6 +55,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly reviewCloseRetryAttempts = new Map<string, number>();
   private readonly reviewCloseRetryBaseDelayMs = 10 * 60 * 1000;
   private readonly reviewCloseRetryMaxDelayMs = 60 * 60 * 1000;
+  private readonly registrationCloseRetryAttempts = new Map<string, number>();
+  private readonly registrationCloseRetryBaseDelayMs = 5 * 60 * 1000;
+  private readonly registrationCloseRetryMaxDelayMs = 30 * 60 * 1000;
+  private readonly submitterRoles: string[];
+  private readonly postMortemRoles: string[];
+  private readonly postMortemScorecardId: string | null;
+  private readonly postMortemDurationHours: number;
+  private readonly topgearPostMortemScorecardId: string | null;
 
   private redisConnection?: RedisOptions;
   private phaseQueue?: Queue<PhaseTransitionPayload>;
@@ -53,7 +75,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly phaseReviewService: PhaseReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly reviewService: ReviewService,
-  ) {}
+    private readonly resourcesService: ResourcesService,
+    private readonly configService: ConfigService,
+  ) {
+    this.submitterRoles = this.getStringArray('autopilot.submitterRoles', [
+      'Submitter',
+    ]);
+    this.postMortemRoles = this.getStringArray('autopilot.postMortemRoles', [
+      'Reviewer',
+      'Copilot',
+    ]);
+    this.postMortemScorecardId =
+      this.configService.get<string | null>(
+        'autopilot.postMortemScorecardId',
+      ) ?? null;
+    this.topgearPostMortemScorecardId =
+      this.configService.get<string | null>(
+        'autopilot.topgearPostMortemScorecardId',
+      ) ?? null;
+    this.postMortemDurationHours =
+      this.configService.get<number>('autopilot.postMortemDurationHours') ?? 72;
+  }
 
   private async ensureInitialized(): Promise<void> {
     if (!this.initializationPromise) {
@@ -166,7 +208,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     phaseData: PhaseTransitionPayload,
   ): Promise<string> {
     const { challengeId, phaseId, date: endTime } = phaseData;
-    const jobId = `${challengeId}|${phaseId}`; // BullMQ rejects ':' in custom IDs, use pipe instead
+    const jobId = this.buildJobId(challengeId, phaseId); // BullMQ rejects ':' in custom IDs, use pipe instead
 
     if (!endTime || endTime === '' || isNaN(new Date(endTime).getTime())) {
       this.logger.error(
@@ -294,6 +336,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return this.scheduledJobs.get(jobId);
   }
 
+  buildJobId(challengeId: string, phaseId: string): string {
+    return `${challengeId}|${phaseId}`;
+  }
+
   public async triggerKafkaEvent(data: PhaseTransitionPayload) {
     // Validate phase state before sending the event
     const phaseDetails = await this.challengeApiService.getPhaseDetails(
@@ -364,11 +410,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (!phaseDetails) {
-        this.logger.error(
-          `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
-        );
-        return;
-      }
+      this.logger.error(
+        `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
+      );
+      return;
+    }
+
+    const phaseName = phaseDetails.name;
+    const isTopgearSubmissionPhase =
+      phaseName === TOPGEAR_SUBMISSION_PHASE_NAME;
+    const isSchedulerInitiated = this.isSchedulerInitiatedOperator(
+      data.operator,
+    );
 
       // Determine operation based on transition state and current phase state
       let operation: 'open' | 'close';
@@ -398,8 +451,30 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       const isReviewPhase =
-        REVIEW_PHASE_NAMES.has(phaseDetails.name) ||
+        REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
+
+      if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
+        try {
+          const hasSubmitter = await this.resourcesService.hasSubmitterResource(
+            data.challengeId,
+            this.submitterRoles,
+          );
+
+          if (!hasSubmitter) {
+            await this.deferRegistrationPhaseClosure(data);
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[REGISTRATION] Failed to verify submitter resources for challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+          await this.deferRegistrationPhaseClosure(data);
+          return;
+        }
+      }
 
       if (operation === 'close' && isReviewPhase) {
         try {
@@ -424,6 +499,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      if (
+        operation === 'close' &&
+        isTopgearSubmissionPhase &&
+        isSchedulerInitiated
+      ) {
+        const handled = await this.handleTopgearSubmissionLate(
+          data,
+          phaseDetails,
+        );
+        if (handled) {
+          return;
+        }
+      }
+
       this.logger.log(
         `Phase ${data.phaseId} is currently ${phaseDetails.isOpen ? 'open' : 'closed'}, will ${operation} it`,
       );
@@ -439,9 +528,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
 
+        let skipPhaseChain = false;
+        let skipFinalization = false;
+
         if (operation === 'close' && isReviewPhase) {
           this.reviewCloseRetryAttempts.delete(
             this.buildReviewPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+
+        if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
+          this.registrationCloseRetryAttempts.delete(
+            this.buildRegistrationPhaseKey(data.challengeId, data.phaseId),
           );
         }
 
@@ -461,6 +559,33 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
 
         if (operation === 'close') {
+          if (phaseName === SUBMISSION_PHASE_NAME) {
+            try {
+              const handled = await this.handleSubmissionPhaseClosed(data);
+              if (handled) {
+                skipPhaseChain = true;
+                skipFinalization = true;
+              }
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[ZERO SUBMISSIONS] Unable to process post-submission workflow for challenge ${data.challengeId}: ${err.message}`,
+                err.stack,
+              );
+            }
+          } else if (phaseName === POST_MORTEM_PHASE_NAME) {
+            try {
+              await this.handlePostMortemPhaseClosed(data);
+              skipFinalization = true;
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[ZERO SUBMISSIONS] Failed to cancel challenge ${data.challengeId} after post-mortem closure: ${err.message}`,
+                err.stack,
+              );
+            }
+          }
+
           try {
             let phases = result.updatedPhases;
             if (!phases || !phases.length) {
@@ -474,7 +599,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               phases?.some((phase) => !phase.actualEndDate) ?? true;
             const hasNextPhases = Boolean(result.next?.phases?.length);
 
-            if (!hasOpenPhases && !hasNextPhases && !hasIncompletePhases) {
+            if (
+              !skipFinalization &&
+              !hasOpenPhases &&
+              !hasNextPhases &&
+              !hasIncompletePhases
+            ) {
               await this.attemptChallengeFinalization(data.challengeId);
             } else {
               const pendingCount = phases?.reduce((pending, phase) => {
@@ -495,6 +625,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
         // Handle phase transition chain - open and schedule next phases if they exist
         if (
+          !skipPhaseChain &&
           result.next?.operation === 'open' &&
           result.next.phases &&
           result.next.phases.length > 0
@@ -527,9 +658,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               err.stack,
             );
           }
-        } else {
+        } else if (!skipPhaseChain) {
           this.logger.log(
             `[PHASE CHAIN] No next phases to open and schedule for challenge ${data.challengeId}`,
+          );
+        } else {
+          this.logger.log(
+            `[PHASE CHAIN] Skipped automatic phase chaining for challenge ${data.challengeId} due to zero-submission workflow.`,
           );
         }
       } else {
@@ -626,6 +761,328 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       clearTimeout(timer);
     }
     this.finalizationRetryTimers.delete(challengeId);
+  }
+
+  private getStringArray(path: string, fallback: string[]): string[] {
+    const value = this.configService.get<unknown>(path);
+
+    if (Array.isArray(value)) {
+      const normalized = value
+        .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
+        .filter((item) => item.length > 0);
+      if (normalized.length) {
+        return normalized;
+      }
+    }
+
+    if (typeof value === 'string' && value.length > 0) {
+      const normalized = value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      if (normalized.length) {
+        return normalized;
+      }
+    }
+
+    return fallback;
+  }
+
+  private isSchedulerInitiatedOperator(
+    operator?: AutopilotOperator | string,
+  ): boolean {
+    if (!operator) {
+      return false;
+    }
+
+    const candidate = operator.toString().toLowerCase();
+    return (
+      candidate === AutopilotOperator.SYSTEM_SCHEDULER ||
+      candidate === AutopilotOperator.SYSTEM_PHASE_CHAIN
+    );
+  }
+
+  private async handleTopgearSubmissionLate(
+    data: PhaseTransitionPayload,
+    phase: IPhase,
+  ): Promise<boolean> {
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(data.challengeId);
+
+      if (!isTopgearTaskChallenge(challenge.type)) {
+        return false;
+      }
+
+      this.logger.log(
+        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing submission.`,
+      );
+
+      const submissionCount = await this.reviewService.getActiveSubmissionCount(
+        data.challengeId,
+      );
+
+      if (submissionCount === 0) {
+        await this.ensureTopgearPostMortemReview(challenge);
+      }
+
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[TOPGEAR] Failed to defer submission closure for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+        err.stack,
+      );
+      return true;
+    }
+  }
+
+  private async ensureTopgearPostMortemReview(
+    challenge: IChallenge,
+  ): Promise<void> {
+    if (!this.topgearPostMortemScorecardId) {
+      this.logger.warn(
+        `[TOPGEAR] topgearPostMortemScorecardId is not configured; unable to create creator review for challenge ${challenge.id}.`,
+      );
+      return;
+    }
+
+    const postMortemPhase =
+      challenge.phases?.find((phase) => phase.name === POST_MORTEM_PHASE_NAME) ??
+      null;
+
+    if (!postMortemPhase) {
+      this.logger.warn(
+        `[TOPGEAR] Post-Mortem phase not found on challenge ${challenge.id}; creator review cannot be created.`,
+      );
+      return;
+    }
+
+    const creatorHandle = challenge.createdBy?.trim();
+    if (!creatorHandle) {
+      this.logger.warn(
+        `[TOPGEAR] Challenge ${challenge.id} missing creator handle; post-mortem review not created.`,
+      );
+      return;
+    }
+
+    try {
+      const creatorResource = await this.resourcesService.getResourceByMemberHandle(
+        challenge.id,
+        creatorHandle,
+      );
+
+      if (!creatorResource) {
+        this.logger.warn(
+          `[TOPGEAR] Unable to locate resource for creator ${creatorHandle} on challenge ${challenge.id}; post-mortem review not created.`,
+        );
+        return;
+      }
+
+      const created = await this.reviewService.createPendingReview(
+        null,
+        creatorResource.id,
+        postMortemPhase.id,
+        this.topgearPostMortemScorecardId,
+        challenge.id,
+      );
+
+      if (created) {
+        this.logger.log(
+          `[TOPGEAR] Created post-mortem review for challenge ${challenge.id} assigned to creator ${creatorHandle}.`,
+        );
+      } else {
+        this.logger.debug?.(
+          `[TOPGEAR] Post-mortem review already exists for challenge ${challenge.id}, creator ${creatorHandle}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[TOPGEAR] Failed to create post-mortem review for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  private async handleSubmissionPhaseClosed(
+    data: PhaseTransitionPayload,
+  ): Promise<boolean> {
+    try {
+      const submissionCount = await this.reviewService.getActiveSubmissionCount(
+        data.challengeId,
+      );
+
+      if (submissionCount > 0) {
+        return false;
+      }
+
+      this.logger.log(
+        `[ZERO SUBMISSIONS] No active submissions found for challenge ${data.challengeId}; transitioning to Post-Mortem phase.`,
+      );
+
+      const postMortemPhase =
+        await this.challengeApiService.createPostMortemPhase(
+          data.challengeId,
+          data.phaseId,
+          this.postMortemDurationHours,
+        );
+
+      await this.createPostMortemPendingReviews(
+        data.challengeId,
+        postMortemPhase.id,
+      );
+
+      if (!postMortemPhase.scheduledEndDate) {
+        this.logger.warn(
+          `[ZERO SUBMISSIONS] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${data.challengeId} without a scheduled end date. Manual intervention required to close the phase.`,
+        );
+        return true;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: data.projectId,
+        challengeId: data.challengeId,
+        phaseId: postMortemPhase.id,
+        phaseTypeName: postMortemPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+        projectStatus: data.projectStatus,
+        date: postMortemPhase.scheduledEndDate,
+      };
+
+      await this.schedulePhaseTransition(payload);
+      this.logger.log(
+        `[ZERO SUBMISSIONS] Scheduled Post-Mortem phase ${postMortemPhase.id} closure for challenge ${data.challengeId} at ${postMortemPhase.scheduledEndDate}.`,
+      );
+
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[ZERO SUBMISSIONS] Failed to prepare Post-Mortem workflow for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
+  private async createPostMortemPendingReviews(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<void> {
+    if (!this.postMortemScorecardId) {
+      this.logger.warn(
+        `[ZERO SUBMISSIONS] Post-mortem scorecard ID is not configured; skipping review creation for challenge ${challengeId}.`,
+      );
+      return;
+    }
+
+    try {
+      const resources = await this.resourcesService.getResourcesByRoleNames(
+        challengeId,
+        this.postMortemRoles,
+      );
+
+      if (!resources.length) {
+        this.logger.log(
+          `[ZERO SUBMISSIONS] No resources found for post-mortem roles on challenge ${challengeId}; skipping review creation.`,
+        );
+        return;
+      }
+
+      let createdCount = 0;
+      for (const resource of resources) {
+        try {
+          const created = await this.reviewService.createPendingReview(
+            null,
+            resource.id,
+            phaseId,
+            this.postMortemScorecardId,
+            challengeId,
+          );
+
+          if (created) {
+            createdCount++;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[ZERO SUBMISSIONS] Failed to create post-mortem review for challenge ${challengeId}, resource ${resource.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
+      this.logger.log(
+        `[ZERO SUBMISSIONS] Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId}.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[ZERO SUBMISSIONS] Unable to prepare post-mortem reviewers for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
+  private async handlePostMortemPhaseClosed(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    await this.challengeApiService.cancelChallenge(
+      data.challengeId,
+      ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+    );
+
+    this.logger.log(
+      `[ZERO SUBMISSIONS] Marked challenge ${data.challengeId} as CANCELLED_ZERO_SUBMISSIONS after Post-Mortem completion.`,
+    );
+  }
+
+  private async deferRegistrationPhaseClosure(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    const key = this.buildRegistrationPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.registrationCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.registrationCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeRegistrationCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      this.logger.warn(
+        `[REGISTRATION] Deferred closing registration phase ${data.phaseId} for challenge ${data.challengeId}; awaiting first submitter. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.registrationCloseRetryAttempts.delete(key);
+      this.logger.error(
+        `[REGISTRATION] Failed to reschedule registration closure for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
+  private computeRegistrationCloseRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.registrationCloseRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.registrationCloseRetryMaxDelayMs);
+  }
+
+  private buildRegistrationPhaseKey(
+    challengeId: string,
+    phaseId: string,
+  ): string {
+    return `${challengeId}|${phaseId}|registration-close`;
   }
 
   private async deferReviewPhaseClosure(

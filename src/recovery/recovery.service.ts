@@ -47,7 +47,6 @@ export class RecoveryService implements OnApplicationBootstrap {
         if (!challenge.phases || challenge.phases.length === 0) {
           this.logger.warn(
             `Challenge ${challenge.id} has no phases to schedule.`,
-            { projectId: challenge.projectId },
           );
           continue;
         }
@@ -58,7 +57,6 @@ export class RecoveryService implements OnApplicationBootstrap {
         if (phasesToProcess.length === 0) {
           this.logger.log(
             `No phases need to be processed for challenge ${challenge.id}`,
-            { projectId: challenge.projectId },
           );
           continue;
         }

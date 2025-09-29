@@ -5,13 +5,16 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ResourcesService } from '../../resources/resources.service';
 import {
   IChallenge,
-  IChallengeReviewer,
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
 import {
   REVIEW_PHASE_NAMES,
   getRoleNamesForPhase,
 } from '../constants/review.constants';
+import {
+  getMemberReviewerConfigs,
+  getRequiredReviewerCountForPhase,
+} from '../utils/reviewer.utils';
 
 interface PhaseSummary {
   id: string;
@@ -178,6 +181,25 @@ export class ReviewAssignmentService {
     this.pollers.set(key, context);
   }
 
+  async handleReviewerRemoved(
+    challengeId: string,
+    phase: PhaseSummary,
+  ): Promise<void> {
+    const status = await this.evaluateAssignmentStatus(challengeId, phase);
+
+    if (status.phaseMissing || status.phaseOpen || status.ready) {
+      return;
+    }
+
+    this.logger.warn(
+      `Reviewer count below requirement for challenge ${challengeId}, phase ${phase.id}. Monitoring for new assignments.`,
+    );
+
+    if (!this.pollers.has(this.buildKey(challengeId, phase.id))) {
+      this.startPolling(challengeId, phase, () => Promise.resolve(true));
+    }
+  }
+
   private async evaluateAssignmentStatus(
     challengeId: string,
     phase: PhaseSummary,
@@ -223,7 +245,7 @@ export class ReviewAssignmentService {
       };
     }
 
-    const reviewerConfigs = this.getReviewerConfigsForPhase(
+    const reviewerConfigs = getMemberReviewerConfigs(
       challenge.reviewers,
       phaseDetails.phaseId,
     );
@@ -238,10 +260,10 @@ export class ReviewAssignmentService {
       };
     }
 
-    const required = reviewerConfigs.reduce((total, config) => {
-      const count = config.memberReviewerCount ?? 1;
-      return total + Math.max(count, 0);
-    }, 0);
+    const required = getRequiredReviewerCountForPhase(
+      challenge.reviewers,
+      phaseDetails.phaseId,
+    );
 
     if (required === 0) {
       return {
@@ -269,16 +291,6 @@ export class ReviewAssignmentService {
       phaseMissing: false,
       phaseOpen: false,
     };
-  }
-
-  private getReviewerConfigsForPhase(
-    reviewers: IChallengeReviewer[],
-    phaseTemplateId: string,
-  ): IChallengeReviewer[] {
-    return reviewers.filter(
-      (reviewer) =>
-        reviewer.isMemberReview && reviewer.phaseId === phaseTemplateId,
-    );
   }
 
   private buildKey(challengeId: string, phaseId: string): string {

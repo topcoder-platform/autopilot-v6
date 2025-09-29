@@ -3,6 +3,7 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { IChallengeWinner } from '../../challenge/interfaces/challenge.interface';
+import { ChallengeStatusEnum } from '@prisma/client';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -18,70 +19,92 @@ export class ChallengeCompletionService {
     const challenge =
       await this.challengeApiService.getChallengeById(challengeId);
 
-    if (
-      challenge.status === 'COMPLETED' &&
-      challenge.winners &&
-      challenge.winners.length
-    ) {
+    const normalizedStatus = (challenge.status ?? '').toUpperCase();
+    if (normalizedStatus !== ChallengeStatusEnum.ACTIVE) {
       this.logger.log(
-        `Challenge ${challengeId} is already completed with winners; skipping finalization.`,
+        `Challenge ${challengeId} is not ACTIVE (status: ${challenge.status}); skipping finalization attempt.`,
       );
       return true;
     }
 
-    const scoreRows = await this.reviewService.getTopFinalReviewScores(
-      challengeId,
-      3,
-    );
+    const summaries =
+      await this.reviewService.generateReviewSummaries(challengeId);
 
-    if (!scoreRows.length) {
-      if ((challenge.numOfSubmissions ?? 0) > 0) {
-        this.logger.warn(
-          `Final review scores are not yet available for challenge ${challengeId}. Will retry finalization later.`,
+    if (!summaries.length) {
+      if ((challenge.numOfSubmissions ?? 0) === 0) {
+        this.logger.log(
+          `Challenge ${challengeId} has no submissions; marking as CANCELLED_ZERO_SUBMISSIONS if not already handled.`,
         );
-        return false;
+        await this.challengeApiService.cancelChallenge(
+          challengeId,
+          ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+        );
+        return true;
       }
 
       this.logger.warn(
-        `No submissions found for challenge ${challengeId}; marking completed without winners.`,
+        `Review data not yet available for challenge ${challengeId}; will retry finalization later.`,
       );
-      await this.challengeApiService.completeChallenge(challengeId, []);
+      return false;
+    }
+
+    const passingSummaries = summaries.filter((summary) => summary.isPassing);
+
+    if (!passingSummaries.length) {
+      this.logger.log(
+        `No passing submissions detected for challenge ${challengeId}; marking as CANCELLED_FAILED_REVIEW.`,
+      );
+      await this.challengeApiService.cancelChallenge(
+        challengeId,
+        ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+      );
       return true;
     }
 
-    const memberIds = scoreRows.map((row) => row.memberId);
+    const sortedSummaries = [...passingSummaries].sort((a, b) => {
+      if (b.aggregateScore !== a.aggregateScore) {
+        return b.aggregateScore - a.aggregateScore;
+      }
+
+      const timeA = a.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+      const timeB = b.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+      if (timeA === timeB) {
+        return 0;
+      }
+      return timeA - timeB;
+    });
+
+    const memberIds = sortedSummaries
+      .map((summary) => summary.memberId)
+      .filter((id): id is string => Boolean(id));
+
     const handleMap = await this.resourcesService.getMemberHandleMap(
       challengeId,
       memberIds,
     );
 
     const winners: IChallengeWinner[] = [];
-    for (const [index, row] of scoreRows.entries()) {
-      const numericMemberId = Number(row.memberId);
+    for (const summary of sortedSummaries) {
+      if (!summary.memberId) {
+        this.logger.warn(
+          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId is missing.`,
+        );
+        continue;
+      }
+
+      const numericMemberId = Number(summary.memberId);
       if (!Number.isFinite(numericMemberId)) {
         this.logger.warn(
-          `Skipping winner placement ${index + 1} for challenge ${challengeId} because memberId ${row.memberId} is not numeric.`,
+          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId ${summary.memberId} is not numeric.`,
         );
         continue;
       }
 
       winners.push({
         userId: numericMemberId,
-        handle: handleMap.get(row.memberId) ?? row.memberId,
+        handle: handleMap.get(summary.memberId) ?? summary.memberId,
         placement: winners.length + 1,
       });
-
-      if (winners.length >= 3) {
-        break;
-      }
-    }
-
-    if (!winners.length) {
-      this.logger.warn(
-        `Unable to derive any numeric winners for challenge ${challengeId}; marking completed without winners.`,
-      );
-      await this.challengeApiService.completeChallenge(challengeId, []);
-      return true;
     }
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
