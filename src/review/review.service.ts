@@ -727,7 +727,7 @@ export class ReviewService {
         "resourceId",
         "submissionId",
         "scorecardId",
-        "score",
+        "finalScore" AS "score",
         "status"
       FROM ${ReviewService.REVIEW_TABLE}
       WHERE "id" = ${reviewId}
