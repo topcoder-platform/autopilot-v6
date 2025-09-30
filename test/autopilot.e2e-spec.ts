@@ -227,6 +227,7 @@ describe('Autopilot Service (e2e)', () => {
       getActiveSubmissionCount: jest.fn().mockResolvedValue(1),
       getAllSubmissionIdsOrdered: jest.fn().mockResolvedValue([]),
       getExistingReviewPairs: jest.fn().mockResolvedValue(new Set()),
+      getReviewerSubmissionPairs: jest.fn().mockResolvedValue(new Set()),
       getReviewById: jest.fn().mockResolvedValue(null),
       getScorecardPassingScore: jest.fn().mockResolvedValue(50),
       getCompletedReviewCountForPhase: jest.fn().mockResolvedValue(0),
@@ -1216,7 +1217,7 @@ describe('Autopilot Service (e2e)', () => {
       schedulerAdvanceSpy.mockRestore();
     });
 
-    it('should reassign the same submission to the reviewer when iterative review fails', async () => {
+    it('should assign the next available submission when iterative review fails', async () => {
       const challengeId = 'f2f-challenge-fail';
       const iterativePhase = {
         id: 'iter-phase-id',
@@ -1251,7 +1252,15 @@ describe('Autopilot Service (e2e)', () => {
 
       mockChallengeApiService.getChallengeById
         .mockResolvedValueOnce(f2fChallenge)
-        .mockResolvedValueOnce(f2fChallenge);
+        .mockResolvedValueOnce({
+          ...f2fChallenge,
+          phases: [
+            {
+              ...iterativePhase,
+              isOpen: false,
+            },
+          ],
+        });
       reviewServiceMockFns.getReviewById.mockResolvedValueOnce({
         id: 'review-1',
         phaseId: iterativePhase.id,
@@ -1262,13 +1271,15 @@ describe('Autopilot Service (e2e)', () => {
         status: 'COMPLETED',
       } as any);
       reviewServiceMockFns.getScorecardPassingScore.mockResolvedValueOnce(80);
-      reviewServiceMockFns.getAllSubmissionIdsOrdered.mockResolvedValueOnce([
-        'submission-1',
-        'submission-2',
-      ]);
-      reviewServiceMockFns.getExistingReviewPairs.mockResolvedValueOnce(
-        new Set(),
-      );
+      reviewServiceMockFns.getAllSubmissionIdsOrdered
+        .mockResolvedValueOnce(['submission-1', 'submission-2'])
+        .mockResolvedValueOnce(['submission-1', 'submission-2']);
+      reviewServiceMockFns.getExistingReviewPairs
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      reviewServiceMockFns.getReviewerSubmissionPairs
+        .mockResolvedValueOnce(new Set(['iter-resource:submission-1']))
+        .mockResolvedValueOnce(new Set(['iter-resource:submission-1']));
       resourcesServiceMockFns.getReviewerResources.mockResolvedValueOnce([
         { id: 'iter-resource' },
       ]);
@@ -1304,7 +1315,7 @@ describe('Autopilot Service (e2e)', () => {
       } as ReviewCompletedPayload);
 
       expect(reviewServiceMockFns.createPendingReview).toHaveBeenCalledWith(
-        'submission-1',
+        'submission-2',
         'iter-resource',
         iterativePhase.id,
         'iter-scorecard',
@@ -1312,6 +1323,130 @@ describe('Autopilot Service (e2e)', () => {
       );
 
       schedulerAdvanceSpy.mockRestore();
+    });
+
+    it('should skip previously reviewed submissions when selecting the next iterative review', async () => {
+      const challengeId = 'f2f-challenge-history';
+      const iterativePhase = {
+        id: 'iter-phase-1',
+        phaseId: 'iter-template-id',
+        name: 'Iterative Review',
+        isOpen: true,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockFuturePhaseDate1,
+        actualStartDate: mockPastPhaseDate,
+        actualEndDate: null,
+        predecessor: null,
+      };
+      const challengeWithOpenPhase = {
+        ...mockChallenge,
+        id: challengeId,
+        type: 'first2finish',
+        phases: [iterativePhase],
+        reviewers: [
+          {
+            id: 'rev-config',
+            scorecardId: 'iter-scorecard',
+            isMemberReview: true,
+            memberReviewerCount: 1,
+            phaseId: iterativePhase.phaseId,
+            basePayment: null,
+            incrementalPayment: null,
+            type: null,
+            aiWorkflowId: null,
+          },
+        ],
+      };
+      const challengeAfterClose = {
+        ...challengeWithOpenPhase,
+        phases: [
+          {
+            ...iterativePhase,
+            isOpen: false,
+            actualEndDate: new Date().toISOString(),
+          },
+        ],
+      };
+      const nextPhase = {
+        id: 'iter-phase-2',
+        phaseId: 'iter-template-id',
+        name: 'Iterative Review',
+        isOpen: true,
+        scheduledStartDate: mockFuturePhaseDate1,
+        scheduledEndDate: mockFuturePhaseDate2,
+        actualStartDate: new Date().toISOString(),
+        actualEndDate: null,
+        predecessor: iterativePhase.id,
+      };
+
+      mockChallengeApiService.getChallengeById
+        .mockResolvedValueOnce(challengeWithOpenPhase)
+        .mockResolvedValueOnce(challengeAfterClose);
+      reviewServiceMockFns.getReviewById.mockResolvedValueOnce({
+        id: 'review-2',
+        phaseId: iterativePhase.id,
+        resourceId: 'iter-resource',
+        submissionId: 'submission-2',
+        scorecardId: 'iter-scorecard',
+        score: 30,
+        status: 'COMPLETED',
+      } as any);
+      reviewServiceMockFns.getScorecardPassingScore.mockResolvedValueOnce(80);
+      reviewServiceMockFns.getAllSubmissionIdsOrdered
+        .mockResolvedValueOnce([
+          'submission-1',
+          'submission-2',
+          'submission-3',
+        ])
+        .mockResolvedValueOnce([
+          'submission-1',
+          'submission-2',
+          'submission-3',
+        ]);
+      reviewServiceMockFns.getExistingReviewPairs
+        .mockResolvedValueOnce(new Set())
+        .mockResolvedValueOnce(new Set());
+      reviewServiceMockFns.getReviewerSubmissionPairs
+        .mockResolvedValueOnce(
+          new Set([
+            'iter-resource:submission-1',
+            'iter-resource:submission-2',
+          ]),
+        )
+        .mockResolvedValueOnce(
+          new Set([
+            'iter-resource:submission-1',
+            'iter-resource:submission-2',
+          ]),
+        );
+      resourcesServiceMockFns.getReviewerResources.mockResolvedValueOnce([
+        { id: 'iter-resource' },
+      ]);
+      mockChallengeApiService.createIterativeReviewPhase.mockResolvedValueOnce(
+        nextPhase,
+      );
+
+      await autopilotService.handleReviewCompleted({
+        challengeId,
+        submissionId: 'submission-2',
+        reviewId: 'review-2',
+        scorecardId: 'iter-scorecard',
+        reviewerResourceId: 'iter-resource',
+        reviewerHandle: 'iter-reviewer',
+        reviewerMemberId: 'iter-member',
+        submitterHandle: 'submitter',
+        submitterMemberId: 'submitter-id',
+        completedAt: new Date().toISOString(),
+        initialScore: 30,
+      } as ReviewCompletedPayload);
+
+      expect(reviewServiceMockFns.createPendingReview).toHaveBeenCalledWith(
+        'submission-3',
+        'iter-resource',
+        nextPhase.id,
+        'iter-scorecard',
+        challengeId,
+      );
     });
 
     it('should assign the next submission when another pending review exists for the same reviewer', async () => {

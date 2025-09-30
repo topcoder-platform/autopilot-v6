@@ -411,52 +411,47 @@ export class First2FinishService {
     phase: IPhase,
     resourceId: string,
     scorecardId: string,
-    preferredSubmissionId?: string,
+    candidateSubmissionIds: string[],
+    usedPairs: Set<string>,
   ): Promise<boolean> {
-    const submissionIds =
-      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
-
-    const orderedIds = preferredSubmissionId
-      ? [preferredSubmissionId, ...submissionIds]
-      : submissionIds;
-
-    const seen = new Set<string>();
-    const uniqueIds = orderedIds.filter((id) => {
-      if (!id || seen.has(id)) {
-        return false;
-      }
-      seen.add(id);
-      return true;
-    });
-
-    if (!uniqueIds.length) {
-      return false;
-    }
-
-    const existingPairs = await this.reviewService.getExistingReviewPairs(
-      phase.id,
-      challengeId,
-    );
-
-    for (const submissionId of uniqueIds) {
-      const key = `${resourceId}:${submissionId}`;
-      if (existingPairs.has(key)) {
+    for (const submissionId of candidateSubmissionIds) {
+      if (!submissionId) {
         continue;
       }
 
-      const created = await this.reviewService.createPendingReview(
-        submissionId,
-        resourceId,
-        phase.id,
-        scorecardId,
-        challengeId,
-      );
+      const key = `${resourceId}:${submissionId}`;
+      if (usedPairs.has(key)) {
+        continue;
+      }
 
-      if (created) {
-        this.logger.log(
-          `Assigned iterative review for submission ${submissionId} to resource ${resourceId} on challenge ${challengeId}.`,
+      try {
+        const created = await this.reviewService.createPendingReview(
+          submissionId,
+          resourceId,
+          phase.id,
+          scorecardId,
+          challengeId,
         );
-        return true;
+
+        if (created) {
+          usedPairs.add(key);
+          this.logger.log(
+            `Assigned iterative review for submission ${submissionId} to resource ${resourceId} on challenge ${challengeId}.`,
+          );
+          return true;
+        }
+
+        usedPairs.add(key);
+      } catch (error) {
+        if (this.isDuplicateReviewPairError(error)) {
+          usedPairs.add(key);
+          this.logger.debug(
+            `Skipped duplicate iterative review assignment for submission ${submissionId} and resource ${resourceId} on challenge ${challengeId}.`,
+          );
+          continue;
+        }
+
+        throw error;
       }
     }
 
@@ -507,11 +502,17 @@ export class First2FinishService {
       latestIterativePhase.id,
       challengeId,
     );
+    const reviewerHistoryPairs =
+      await this.reviewService.getReviewerSubmissionPairs(challengeId);
+    const exclusionPairs = new Set<string>([
+      ...recentPairs,
+      ...reviewerHistoryPairs,
+    ]);
 
     const preferredSubmissionId = this.selectNextIterativeSubmission(
       reviewers,
       submissionIds,
-      recentPairs,
+      exclusionPairs,
       lastSubmissionId,
     );
 
@@ -669,7 +670,7 @@ export class First2FinishService {
   private selectNextIterativeSubmission(
     reviewers: Array<{ id: string }>,
     submissionIds: string[],
-    recentPairs: Set<string>,
+    exclusionPairs: Set<string>,
     lastSubmissionId?: string,
   ): string | null {
     for (const submissionId of submissionIds) {
@@ -678,7 +679,7 @@ export class First2FinishService {
       }
 
       const alreadyReviewed = reviewers.some((reviewer) =>
-        recentPairs.has(`${reviewer.id}:${submissionId}`),
+        exclusionPairs.has(`${reviewer.id}:${submissionId}`),
       );
 
       if (!alreadyReviewed) {
@@ -760,13 +761,43 @@ export class First2FinishService {
     scorecardId: string,
     preferredSubmissionId?: string,
   ): Promise<boolean> {
+    const submissionIds =
+      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
+
+    const orderedIds = preferredSubmissionId
+      ? [preferredSubmissionId, ...submissionIds]
+      : submissionIds;
+
+    const seen = new Set<string>();
+    const candidateSubmissionIds = orderedIds.filter((id) => {
+      if (!id || seen.has(id)) {
+        return false;
+      }
+      seen.add(id);
+      return true;
+    });
+
+    if (!candidateSubmissionIds.length) {
+      return false;
+    }
+
+    const pendingPairs = await this.reviewService.getExistingReviewPairs(
+      phase.id,
+      challengeId,
+    );
+    const historicalPairs = await this.reviewService.getReviewerSubmissionPairs(
+      challengeId,
+    );
+    const usedPairs = new Set<string>([...pendingPairs, ...historicalPairs]);
+
     for (const reviewer of reviewers) {
       const assigned = await this.assignNextIterativeReview(
         challengeId,
         phase,
         reviewer.id,
         scorecardId,
-        preferredSubmissionId,
+        candidateSubmissionIds,
+        usedPairs,
       );
 
       if (assigned) {
@@ -775,5 +806,28 @@ export class First2FinishService {
     }
 
     return false;
+  }
+
+  private isDuplicateReviewPairError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const candidate = error as { code?: string; message?: string };
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+
+    if (code === 'P2002' || code === 'P2034' || code === '23505') {
+      return true;
+    }
+
+    if (code.toUpperCase().includes('23505')) {
+      return true;
+    }
+
+    const message = typeof candidate.message === 'string' ? candidate.message : '';
+
+    return (
+      message.includes('already exists') || message.includes('duplicate key')
+    );
   }
 }

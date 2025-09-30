@@ -303,6 +303,57 @@ export class ReviewService {
     }
   }
 
+  async getReviewerSubmissionPairs(
+    challengeId: string,
+  ): Promise<Set<string>> {
+    if (!challengeId) {
+      return new Set<string>();
+    }
+
+    const query = Prisma.sql`
+      SELECT review."submissionId", review."resourceId"
+      FROM ${ReviewService.REVIEW_TABLE} AS review
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} AS submission
+        ON submission."id" = review."submissionId"
+      WHERE submission."challengeId" = ${challengeId}
+    `;
+
+    try {
+      const records = await this.prisma.$queryRaw<ReviewRecord[]>(query);
+      const result = new Set<string>();
+
+      for (const record of records) {
+        if (!record.submissionId || !record.resourceId) {
+          continue;
+        }
+
+        result.add(this.composeKey(record.resourceId, record.submissionId));
+      }
+
+      void this.dbLogger.logAction('review.getReviewerSubmissionPairs', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pairCount: result.size,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getReviewerSubmissionPairs', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getPendingReviewCount(
     phaseId: string,
     challengeId?: string,
