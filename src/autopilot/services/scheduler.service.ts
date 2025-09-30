@@ -58,11 +58,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly registrationCloseRetryAttempts = new Map<string, number>();
   private readonly registrationCloseRetryBaseDelayMs = 5 * 60 * 1000;
   private readonly registrationCloseRetryMaxDelayMs = 30 * 60 * 1000;
+  private readonly appealsCloseRetryAttempts = new Map<string, number>();
+  private readonly appealsCloseRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly appealsCloseRetryMaxDelayMs = 60 * 60 * 1000;
   private readonly submitterRoles: string[];
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
   private readonly postMortemDurationHours: number;
   private readonly topgearPostMortemScorecardId: string | null;
+  private readonly appealsPhaseNames: Set<string>;
+  private readonly appealsResponsePhaseNames: Set<string>;
 
   private redisConnection?: RedisOptions;
   private phaseQueue?: Queue<PhaseTransitionPayload>;
@@ -95,6 +100,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       ) ?? null;
     this.postMortemDurationHours =
       this.configService.get<number>('autopilot.postMortemDurationHours') ?? 72;
+    this.appealsPhaseNames = new Set(
+      this.getStringArray('autopilot.appealsPhaseNames', ['Appeals']),
+    );
+    this.appealsResponsePhaseNames = new Set(
+      this.getStringArray('autopilot.appealsResponsePhaseNames', [
+        'Appeals Response',
+      ]),
+    );
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -410,18 +423,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (!phaseDetails) {
-      this.logger.error(
-        `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
-      );
-      return;
-    }
+        this.logger.error(
+          `Phase ${data.phaseId} not found in challenge ${data.challengeId}`,
+        );
+        return;
+      }
 
-    const phaseName = phaseDetails.name;
-    const isTopgearSubmissionPhase =
-      phaseName === TOPGEAR_SUBMISSION_PHASE_NAME;
-    const isSchedulerInitiated = this.isSchedulerInitiatedOperator(
-      data.operator,
-    );
+      const phaseName = phaseDetails.name;
+      const isTopgearSubmissionPhase =
+        phaseName === TOPGEAR_SUBMISSION_PHASE_NAME;
+      const isSchedulerInitiated = this.isSchedulerInitiatedOperator(
+        data.operator,
+      );
+      const isAppealsPhase =
+        this.isAppealsPhaseName(phaseName) ||
+        this.isAppealsPhaseName(data.phaseTypeName);
 
       // Determine operation based on transition state and current phase state
       let operation: 'open' | 'close';
@@ -513,6 +529,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      if (operation === 'close' && isAppealsPhase) {
+        try {
+          const pendingAppeals =
+            await this.reviewService.getPendingAppealCount(data.challengeId);
+
+          if (pendingAppeals > 0) {
+            await this.deferAppealsPhaseClosure(data, pendingAppeals);
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[APPEALS LATE] Unable to verify pending appeals for challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferAppealsPhaseClosure(data);
+          return;
+        }
+      }
+
       this.logger.log(
         `Phase ${data.phaseId} is currently ${phaseDetails.isOpen ? 'open' : 'closed'}, will ${operation} it`,
       );
@@ -534,6 +571,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         if (operation === 'close' && isReviewPhase) {
           this.reviewCloseRetryAttempts.delete(
             this.buildReviewPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+
+        if (operation === 'close' && isAppealsPhase) {
+          this.appealsCloseRetryAttempts.delete(
+            this.buildAppealsPhaseKey(data.challengeId, data.phaseId),
           );
         }
 
@@ -1131,5 +1174,65 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private buildReviewPhaseKey(challengeId: string, phaseId: string): string {
     return `${challengeId}|${phaseId}`;
+  }
+
+  private async deferAppealsPhaseClosure(
+    data: PhaseTransitionPayload,
+    pendingCount?: number,
+  ): Promise<void> {
+    const key = this.buildAppealsPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.appealsCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.appealsCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeAppealsCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
+      this.logger.warn(
+        `[APPEALS LATE] Deferred closing appeals phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} pending appeal response(s). Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[APPEALS LATE] Failed to reschedule close for appeals phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.appealsCloseRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeAppealsCloseRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.appealsCloseRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.appealsCloseRetryMaxDelayMs);
+  }
+
+  private buildAppealsPhaseKey(challengeId: string, phaseId: string): string {
+    return `${challengeId}|${phaseId}|appeals-close`;
+  }
+
+  private isAppealsPhaseName(phaseName?: string | null): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      this.appealsPhaseNames.has(normalized) ||
+      this.appealsResponsePhaseNames.has(normalized)
+    );
   }
 }
