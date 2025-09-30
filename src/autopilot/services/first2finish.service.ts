@@ -263,10 +263,19 @@ export class First2FinishService {
         }
       }
 
-      activePhase = await this.createNextIterativePhase(
-        challenge,
-        latestIterativePhase,
-      );
+      if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
+        activePhase = await this.reopenSeedIterativePhase(
+          challenge,
+          latestIterativePhase,
+        );
+      }
+
+      if (!activePhase) {
+        activePhase = await this.createNextIterativePhase(
+          challenge,
+          latestIterativePhase,
+        );
+      }
 
       if (!activePhase) {
         return;
@@ -525,10 +534,21 @@ export class First2FinishService {
       return;
     }
 
-    const nextPhase = await this.createNextIterativePhase(
-      challenge,
-      latestIterativePhase,
-    );
+    let nextPhase: IPhase | null = null;
+
+    if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
+      nextPhase = await this.reopenSeedIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
+    }
+
+    if (!nextPhase) {
+      nextPhase = await this.createNextIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
+    }
 
     if (!nextPhase) {
       return;
@@ -589,6 +609,56 @@ export class First2FinishService {
     });
 
     return sorted.at(-1) ?? null;
+  }
+
+  private canReuseSeedIterativePhase(phase: IPhase): boolean {
+    return (
+      !phase.isOpen &&
+      !phase.actualStartDate &&
+      !phase.actualEndDate
+    );
+  }
+
+  private async reopenSeedIterativePhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'START',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+
+      const refreshed = await this.challengeApiService.getPhaseDetails(
+        challenge.id,
+        phase.id,
+      );
+
+      if (!refreshed?.isOpen) {
+        this.logger.warn(
+          `Failed to reopen seeded iterative review phase ${phase.id} for challenge ${challenge.id}; proceeding to create a new phase.`,
+        );
+        return null;
+      }
+
+      this.logger.log(
+        `Reopened seeded iterative review phase ${phase.id} for challenge ${challenge.id}.`,
+      );
+
+      return refreshed;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to reopen seeded iterative review phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
   }
 
   private getPhaseStartTime(phase: IPhase): number {

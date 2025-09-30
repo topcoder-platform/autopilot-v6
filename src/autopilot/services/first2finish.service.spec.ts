@@ -107,6 +107,7 @@ describe('First2FinishService', () => {
     challengeApiService = {
       getChallengeById: jest.fn(),
       createIterativeReviewPhase: jest.fn(),
+      getPhaseDetails: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
     schedulerService = {
@@ -174,6 +175,67 @@ describe('First2FinishService', () => {
       challengeApiService.createIterativeReviewPhase,
     ).not.toHaveBeenCalled();
     expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+  });
+
+  it('reopens the seeded iterative review phase when the first submission arrives', async () => {
+    const seedPhase = buildIterativePhase({
+      isOpen: false,
+      actualStartDate: null,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [seedPhase],
+      reviewers: [buildReviewer()],
+    });
+
+    const reopenedPhase: IPhase = {
+      ...seedPhase,
+      isOpen: true,
+      actualStartDate: iso(),
+      actualEndDate: null,
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    challengeApiService.getPhaseDetails.mockResolvedValue(reopenedPhase);
+
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue(['sub-123']);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.createPendingReview.mockResolvedValue(true);
+
+    await service.handleSubmissionByChallengeId(challenge.id, 'sub-123');
+
+    expect(
+      challengeApiService.createIterativeReviewPhase,
+    ).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: challenge.id,
+        phaseId: seedPhase.id,
+        state: 'START',
+      }),
+    );
+    expect(challengeApiService.getPhaseDetails).toHaveBeenCalledWith(
+      challenge.id,
+      seedPhase.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'sub-123',
+      'resource-1',
+      seedPhase.id,
+      'iterative-scorecard',
+      challenge.id,
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalled();
   });
 
   it('assigns the preferred submission when the list snapshot is empty', async () => {
