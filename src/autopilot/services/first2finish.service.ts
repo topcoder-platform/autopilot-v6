@@ -15,6 +15,7 @@ import {
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
+  REGISTRATION_PHASE_NAME,
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
   isSubmissionPhaseName,
@@ -164,6 +165,24 @@ export class First2FinishService {
           challengeId: challenge.id,
           phaseId: submissionPhase.id,
           phaseTypeName: submissionPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+      }
+
+      const openRegistrationPhases = challenge.phases.filter(
+        (phaseCandidate) =>
+          phaseCandidate.isOpen &&
+          phaseCandidate.name === REGISTRATION_PHASE_NAME,
+      );
+
+      for (const registrationPhase of openRegistrationPhases) {
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: registrationPhase.id,
+          phaseTypeName: registrationPhase.name,
           state: 'END',
           operator: AutopilotOperator.SYSTEM,
           projectStatus: challenge.status,
