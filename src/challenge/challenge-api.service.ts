@@ -7,6 +7,7 @@ import {
   IPhase,
   IChallenge,
   IChallengeWinner,
+  IChallengePrizeSet,
 } from './interfaces/challenge.interface';
 import {
   DEFAULT_APPEALS_PHASE_NAMES,
@@ -41,6 +42,9 @@ const challengeWithRelationsArgs =
         orderBy: { scheduledStartDate: 'asc' as const },
       },
       winners: true,
+      prizeSets: {
+        include: { prizes: true },
+      },
       track: true,
       type: true,
       legacyRecord: true,
@@ -53,6 +57,7 @@ type ChallengeWithRelations = Prisma.ChallengeGetPayload<
 >;
 
 type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
+type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
 
 @Injectable()
 export class ChallengeApiService {
@@ -635,7 +640,8 @@ export class ChallengeApiService {
       winners: challenge.winners?.map((winner) => this.mapWinner(winner)) || [],
       discussions: [],
       events: [],
-      prizeSets: [],
+      prizeSets:
+        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
       terms: [],
       skills: [],
       attachments: [],
@@ -720,6 +726,21 @@ export class ChallengeApiService {
       handle: winner.handle,
       placement: winner.placement,
       type: winner.type,
+    };
+  }
+
+  private mapPrizeSet(
+    prizeSet: ChallengePrizeSetWithPrizes,
+  ): IChallengePrizeSet {
+    return {
+      type: prizeSet.type,
+      description: prizeSet.description ?? null,
+      prizes:
+        prizeSet.prizes?.map((prize) => ({
+          type: prize.type,
+          value: prize.value,
+          description: prize.description ?? null,
+        })) ?? [],
     };
   }
 

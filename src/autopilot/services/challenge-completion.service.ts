@@ -2,8 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
-import { IChallengeWinner } from '../../challenge/interfaces/challenge.interface';
-import { ChallengeStatusEnum } from '@prisma/client';
+import {
+  IChallengeWinner,
+  type IChallengePrizeSet,
+} from '../../challenge/interfaces/challenge.interface';
+import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -14,6 +17,21 @@ export class ChallengeCompletionService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
   ) {}
+
+  private countPlacementPrizes(prizeSets: IChallengePrizeSet[]): number {
+    if (!Array.isArray(prizeSets) || prizeSets.length === 0) {
+      return 0;
+    }
+
+    return prizeSets.reduce((total, prizeSet) => {
+      if (!prizeSet || prizeSet.type !== PrizeSetTypeEnum.PLACEMENT) {
+        return total;
+      }
+
+      const prizeCount = prizeSet.prizes?.length ?? 0;
+      return total + prizeCount;
+    }, 0);
+  }
 
   async finalizeChallenge(challengeId: string): Promise<boolean> {
     const challenge =
@@ -84,7 +102,17 @@ export class ChallengeCompletionService {
     );
 
     const winners: IChallengeWinner[] = [];
+    const placementPrizeLimit = this.countPlacementPrizes(
+      challenge.prizeSets ?? [],
+    );
+    const maxWinnerCount =
+      placementPrizeLimit > 0 ? placementPrizeLimit : sortedSummaries.length;
+
     for (const summary of sortedSummaries) {
+      if (winners.length >= maxWinnerCount) {
+        break;
+      }
+
       if (!summary.memberId) {
         this.logger.warn(
           `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId is missing.`,

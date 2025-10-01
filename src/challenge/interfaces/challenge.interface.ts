@@ -3,6 +3,8 @@
  * returned by the external Challenge API, matching the provided JSON response.
  */
 
+import type { PrizeSetTypeEnum } from '@prisma/client';
+
 /**
  * Represents a single phase of a challenge.
  */
@@ -40,6 +42,18 @@ export interface IChallengeWinner {
   type?: string;
 }
 
+export interface IChallengePrize {
+  type: string;
+  value: number;
+  description: string | null;
+}
+
+export interface IChallengePrizeSet {
+  type: PrizeSetTypeEnum;
+  description: string | null;
+  prizes: IChallengePrize[];
+}
+
 /**
  * Represents a full challenge object from the Challenge API.
  */
@@ -71,7 +85,7 @@ export interface IChallenge {
   winners: IChallengeWinner[];
   discussions: any[];
   events: any[];
-  prizeSets: any[];
+  prizeSets: IChallengePrizeSet[];
   terms: any[];
   skills: any[];
   attachments: any[];
