@@ -438,6 +438,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const isAppealsPhase =
         this.isAppealsPhaseName(phaseName) ||
         this.isAppealsPhaseName(data.phaseTypeName);
+      const isAppealsResponsePhase =
+        this.isAppealsResponsePhaseName(phaseName) ||
+        this.isAppealsResponsePhaseName(data.phaseTypeName);
+      const isAppealsRelatedPhase =
+        isAppealsPhase || isAppealsResponsePhase;
 
       // Determine operation based on transition state and current phase state
       let operation: 'open' | 'close';
@@ -529,7 +534,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (operation === 'close' && isAppealsPhase) {
+      if (operation === 'close' && isAppealsResponsePhase) {
         try {
           const pendingAppeals =
             await this.reviewService.getPendingAppealCount(data.challengeId);
@@ -574,7 +579,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
-        if (operation === 'close' && isAppealsPhase) {
+        if (operation === 'close' && isAppealsRelatedPhase) {
           this.appealsCloseRetryAttempts.delete(
             this.buildAppealsPhaseKey(data.challengeId, data.phaseId),
           );
@@ -1230,9 +1235,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
-    return (
-      this.appealsPhaseNames.has(normalized) ||
-      this.appealsResponsePhaseNames.has(normalized)
-    );
+    return this.appealsPhaseNames.has(normalized);
+  }
+
+  private isAppealsResponsePhaseName(
+    phaseName?: string | null,
+  ): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return this.appealsResponsePhaseNames.has(normalized);
   }
 }
