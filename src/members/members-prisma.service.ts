@@ -26,7 +26,7 @@ export class MembersPrismaService
 
     if (!databaseUrl) {
       Logger.warn(
-        'MEMBERS_DB_URL is not configured. Prisma client will rely on the default environment resolution.',
+        'MEMBER_DB_URL is not configured. Prisma client will rely on the default environment resolution.',
         MembersPrismaService.name,
       );
     }

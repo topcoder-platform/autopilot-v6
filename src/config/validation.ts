@@ -47,7 +47,7 @@ export const validationSchema = Joi.object({
       then: Joi.optional().default('postgresql://localhost:5432/resources'),
       otherwise: Joi.required(),
     }),
-  MEMBERS_DB_URL: Joi.string()
+  MEMBER_DB_URL: Joi.string()
     .uri()
     .when('NODE_ENV', {
       is: 'test',
