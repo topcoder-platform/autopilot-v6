@@ -31,6 +31,7 @@ import {
   IChallenge,
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
+import { PhaseChangeNotificationService } from './phase-change-notification.service';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -81,6 +82,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
+    private readonly phaseChangeNotificationService: PhaseChangeNotificationService,
     private readonly configService: ConfigService,
   ) {
     this.submitterRoles = this.getStringArray('autopilot.submitterRoles', [
@@ -569,6 +571,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
+
+        try {
+          await this.phaseChangeNotificationService.sendPhaseChangeNotification({
+            challengeId: data.challengeId,
+            phaseId: data.phaseId,
+            operation,
+          });
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to send phase change notification for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+            err.stack,
+          );
+        }
 
         let skipPhaseChain = false;
         let skipFinalization = false;

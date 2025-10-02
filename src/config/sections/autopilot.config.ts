@@ -44,4 +44,6 @@ export default registerAs('autopilot', () => ({
     process.env.APPEALS_RESPONSE_PHASE_NAMES,
     ['Appeals Response'],
   ),
+  phaseNotificationSendgridTemplateId:
+    process.env.PHASE_NOTIFICATION_SENDGRID_TEMPLATE || null,
 }));

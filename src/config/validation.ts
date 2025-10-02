@@ -16,6 +16,7 @@ export const validationSchema = Joi.object({
   REDIS_URL: Joi.string()
     .uri({ scheme: ['redis', 'rediss'] })
     .default('redis://127.0.0.1:6379'),
+  REVIEW_APP_URL: Joi.string().uri().optional(),
 
   // Kafka Configuration
   KAFKA_BROKERS: Joi.string().required(),
@@ -46,6 +47,13 @@ export const validationSchema = Joi.object({
       then: Joi.optional().default('postgresql://localhost:5432/resources'),
       otherwise: Joi.required(),
     }),
+  MEMBERS_DB_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('postgresql://localhost:5432/members'),
+      otherwise: Joi.required(),
+    }),
   AUTOPILOT_DB_URL: Joi.string().uri().when('DB_DEBUG', {
     is: true,
     then: Joi.required(),
@@ -66,6 +74,7 @@ export const validationSchema = Joi.object({
     .default(24),
   APPEALS_PHASE_NAMES: Joi.string().default('Appeals'),
   APPEALS_RESPONSE_PHASE_NAMES: Joi.string().default('Appeals Response'),
+  PHASE_NOTIFICATION_SENDGRID_TEMPLATE: Joi.string().optional(),
 
   // Auth0 Configuration (optional in test environment)
   AUTH0_URL: Joi.string()
@@ -96,6 +105,17 @@ export const validationSchema = Joi.object({
     otherwise: Joi.required(),
   }),
   AUTH0_PROXY_SEREVR_URL: Joi.string().optional().allow(''),
+
+  // Bus API Configuration
+  BUS_API_URL: Joi.string()
+    .uri()
+    .when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default('http://localhost:4000'),
+      otherwise: Joi.required(),
+    }),
+  BUS_API_TIMEOUT_MS: Joi.number().integer().positive().default(10000),
+  BUS_API_ORIGINATOR: Joi.string().default('autopilot-service'),
 
   // Sync Service Configuration
   SYNC_CRON_SCHEDULE: Joi.string().default(CronExpression.EVERY_5_MINUTES),

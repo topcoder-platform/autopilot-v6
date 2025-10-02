@@ -23,6 +23,8 @@ export interface ResourceRecord extends ReviewerResourceRecord {
 export class ResourcesService {
   private static readonly RESOURCE_TABLE = Prisma.sql`"Resource"`;
   private static readonly RESOURCE_ROLE_TABLE = Prisma.sql`"ResourceRole"`;
+  private static readonly RESOURCE_PROPERTY_TABLE =
+    Prisma.sql`"ResourceProperty"`;
 
   constructor(
     private readonly prisma: ResourcesPrismaService,
@@ -172,6 +174,58 @@ export class ResourcesService {
         source: ResourcesService.name,
         details: { roleCount: roleNames.length, error: err.message },
       });
+      throw err;
+    }
+  }
+
+  async getPhaseChangeNotificationResources(
+    challengeId: string,
+  ): Promise<ReviewerResourceRecord[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        r."id",
+        r."memberId",
+        r."memberHandle",
+        rr."name" AS "roleName"
+      FROM ${ResourcesService.RESOURCE_TABLE} r
+      INNER JOIN ${ResourcesService.RESOURCE_ROLE_TABLE} rr ON rr."id" = r."roleId"
+      INNER JOIN ${ResourcesService.RESOURCE_PROPERTY_TABLE} rp ON rp."resourceId" = r."id"
+      WHERE r."challengeId" = ${challengeId}
+        AND LOWER(rp."name") = 'phasechangenotifications'
+        AND LOWER(CAST(rp."value" AS TEXT)) IN ('true', '1', 'yes', 'on')
+    `;
+
+    try {
+      const recipients = await this.prisma.$queryRaw<
+        ReviewerResourceRecord[]
+      >(query);
+
+      void this.dbLogger.logAction(
+        'resources.getPhaseChangeNotificationResources',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ResourcesService.name,
+          details: { recipientCount: recipients.length },
+        },
+      );
+
+      return recipients;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'resources.getPhaseChangeNotificationResources',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ResourcesService.name,
+          details: { error: err.message },
+        },
+      );
       throw err;
     }
   }
