@@ -1,0 +1,66 @@
+
+> autopilot-service@0.0.1 pull:logs /home/jmgasper/Documents/Git/autopilot-v6
+> ts-node scripts/fetch-autopilot-actions.ts 7bbbd9f3-05c8-4bc6-9f96-4813c8e27999
+
+[
+  {
+    "id": "629f3dfd-0742-4f4d-9d02-701efc62bca1",
+    "challengeId": "7bbbd9f3-05c8-4bc6-9f96-4813c8e27999",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Test Role Fixed - Updated",
+      "resourceId": "71929118-0ab3-45a9-9ad3-9d6ae9a62475"
+    },
+    "createdAt": "2025-10-02T04:21:05.766Z"
+  },
+  {
+    "id": "5ad01aca-c2ff-479d-a262-7fe3df00ec97",
+    "challengeId": "7bbbd9f3-05c8-4bc6-9f96-4813c8e27999",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-02T04:21:05.932Z"
+  },
+  {
+    "id": "f6b6e6e8-e2aa-41ac-956f-63fdbb41eaa2",
+    "challengeId": "7bbbd9f3-05c8-4bc6-9f96-4813c8e27999",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-02T04:21:07.028Z"
+  },
+  {
+    "id": "1f4a3f51-d7b1-48dd-be9b-5398f19a6b12",
+    "challengeId": "7bbbd9f3-05c8-4bc6-9f96-4813c8e27999",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-02T04:21:08.543Z"
+  },
+  {
+    "id": "8071526a-23ae-4991-b01f-4f6a73669481",
+    "challengeId": "7bbbd9f3-05c8-4bc6-9f96-4813c8e27999",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-02T04:21:09.471Z"
+  }
+]
