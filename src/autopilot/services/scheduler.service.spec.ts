@@ -11,6 +11,7 @@ import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
+import { PhaseChangeNotificationService } from './phase-change-notification.service';
 import { ConfigService } from '@nestjs/config';
 import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import {
@@ -83,6 +84,7 @@ describe('SchedulerService (review phase deferral)', () => {
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let reviewService: ReviewServiceMock;
   let resourcesService: jest.Mocked<ResourcesService>;
+  let phaseChangeNotificationService: jest.Mocked<PhaseChangeNotificationService>;
   let configService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
@@ -119,6 +121,10 @@ describe('SchedulerService (review phase deferral)', () => {
       getReviewerResources: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<ResourcesService>;
 
+    phaseChangeNotificationService = {
+      sendPhaseChangeNotification: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<PhaseChangeNotificationService>;
+
     configService = {
       get: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ConfigService>;
@@ -130,6 +136,7 @@ describe('SchedulerService (review phase deferral)', () => {
       challengeCompletionService,
       reviewService as unknown as ReviewService,
       resourcesService,
+      phaseChangeNotificationService,
       configService,
     );
   });

@@ -1,0 +1,796 @@
+
+> autopilot-service@0.0.1 pull:logs /home/jmgasper/Documents/Git/v6/autopilot-v6
+> ts-node scripts/fetch-autopilot-actions.ts 7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8
+
+[
+  {
+    "id": "9d991f09-c1a6-4133-bdab-bdf289dd064a",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Test Role Fixed - Updated",
+      "resourceId": "b0a52ecc-1531-4d3c-9e02-443ee48c29c3"
+    },
+    "createdAt": "2025-10-01T05:53:09.877Z"
+  },
+  {
+    "id": "f8cdd622-8b63-450d-987c-d951e572afc9",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:53:10.093Z"
+  },
+  {
+    "id": "0eef4bda-1e2b-4725-a4a9-236864a7ed57",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:53:31.299Z"
+  },
+  {
+    "id": "137e79c4-bde3-4cf2-89e9-5d94add9329b",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Copilot",
+      "resourceId": "5d9c08c9-4235-46f4-bd26-b35a24872527"
+    },
+    "createdAt": "2025-10-01T05:53:39.255Z"
+  },
+  {
+    "id": "b89ee9f1-bc2d-40a9-84da-427ab220f9e4",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:53:39.264Z"
+  },
+  {
+    "id": "2f3826b3-d935-42bb-870e-3cf5fbaf21f5",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:53:40.709Z"
+  },
+  {
+    "id": "7c557b0b-9fdd-4eef-bff0-bb8523bf6ef1",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:53:47.217Z"
+  },
+  {
+    "id": "0069278c-73a7-4016-8048-cc53763ee4ad",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Submitter",
+      "resourceId": "27cd0f87-9d6e-4fd6-8f72-aaa0c0eb0dd1"
+    },
+    "createdAt": "2025-10-01T05:56:22.330Z"
+  },
+  {
+    "id": "59122fa9-b030-413b-be2c-8ab157bdb982",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Submitter",
+      "resourceId": "f93569c5-53f5-43f1-af08-4a5b4e690ab8"
+    },
+    "createdAt": "2025-10-01T05:57:10.538Z"
+  },
+  {
+    "id": "c2a7221e-0ce3-4f3a-9621-b66254e4b2da",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Submitter",
+      "resourceId": "59d1d2d5-deb1-4d06-91ab-3d7296167bcb"
+    },
+    "createdAt": "2025-10-01T05:58:09.602Z"
+  },
+  {
+    "id": "5442a3a2-943f-44f8-82d1-ca5523b99a26",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getResourceById",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleName": "Reviewer",
+      "resourceId": "579cc1e3-9490-4b3d-8b1d-1b4cf7b7a285"
+    },
+    "createdAt": "2025-10-01T05:59:00.696Z"
+  },
+  {
+    "id": "d03e0fab-19e9-451a-b353-667481952185",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T05:59:00.715Z"
+  },
+  {
+    "id": "0a1b7091-c375-44fb-a04d-37680b52ff86",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:02:14.898Z"
+  },
+  {
+    "id": "28f3372e-513e-4d09-81b9-a4b01c8f4d23",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:46.922Z"
+  },
+  {
+    "id": "df111cd7-ff3d-4e46-834f-40749536f0eb",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8"
+    },
+    "createdAt": "2025-10-01T06:03:46.922Z"
+  },
+  {
+    "id": "2992baf5-8ee0-4d01-8d58-dd0eeb705c34",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:46.922Z"
+  },
+  {
+    "id": "51f35ccb-328f-415e-88a9-dab4cdcd945d",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:46.936Z"
+  },
+  {
+    "id": "f65b6018-b2f2-498c-af55-1beaa2f88d2b",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:46.936Z"
+  },
+  {
+    "id": "29abedf4-0daf-48dc-a6f2-e31f2eccc03b",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8"
+    },
+    "createdAt": "2025-10-01T06:03:46.936Z"
+  },
+  {
+    "id": "e815cb10-01bd-4e25-b694-ccc9a406b39b",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.061Z"
+  },
+  {
+    "id": "c283e27e-d910-40e6-805a-dbe443e6201a",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.061Z"
+  },
+  {
+    "id": "9a066743-cc81-4791-9d58-c30efd6a1c14",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8"
+    },
+    "createdAt": "2025-10-01T06:03:47.062Z"
+  },
+  {
+    "id": "79b7121b-6533-4cb3-ad69-71a30dee3fe6",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8"
+    },
+    "createdAt": "2025-10-01T06:03:47.064Z"
+  },
+  {
+    "id": "1a40a869-542c-48dd-ba77-03de54b8bb51",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.064Z"
+  },
+  {
+    "id": "bcfbb2a0-eb6f-4a65-a74c-383eb413fd8f",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.064Z"
+  },
+  {
+    "id": "c35c8717-dfb8-4086-a0da-5ca8a47a02e1",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.hasSubmitterResource",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleCount": 1,
+      "submitterCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.065Z"
+  },
+  {
+    "id": "a2ded395-00ff-46d3-bf35-719d504dd025",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.hasSubmitterResource",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "roleCount": 1,
+      "submitterCount": 3
+    },
+    "createdAt": "2025-10-01T06:03:47.097Z"
+  },
+  {
+    "id": "c7bad65a-d379-44ff-87e6-405fb9688d7a",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8",
+      "operation": "close",
+      "nextPhaseCount": 0,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:03:47.103Z"
+  },
+  {
+    "id": "05c9fcc7-a3de-4518-aadb-8abaa9519997",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "INFO",
+    "source": "ChallengeApiService",
+    "details": {
+      "result": {
+        "message": "Phase Registration is already closed",
+        "success": false
+      },
+      "phaseId": "a3cf451e-77aa-463f-84b8-c807197ec9a8",
+      "operation": "close"
+    },
+    "createdAt": "2025-10-01T06:03:47.112Z"
+  },
+  {
+    "id": "e1bb5db1-76f8-4a88-97c1-f841d5b1d117",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94"
+    },
+    "createdAt": "2025-10-01T06:04:46.983Z"
+  },
+  {
+    "id": "6311a362-b2b2-4688-b37f-6d614d17adc0",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:46.984Z"
+  },
+  {
+    "id": "98e951af-334c-4c12-91d3-b64ebb2dd3a4",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:46.984Z"
+  },
+  {
+    "id": "30f03f5d-dbd7-4d35-a383-5233d1c7bcfa",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:46.998Z"
+  },
+  {
+    "id": "3c824d21-ca80-46ae-8393-cd7cb23b2371",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:46.998Z"
+  },
+  {
+    "id": "ce6b8b7b-3d30-4ac7-9064-ab563a4e420f",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94"
+    },
+    "createdAt": "2025-10-01T06:04:46.999Z"
+  },
+  {
+    "id": "e8b5112f-75cf-4dfe-8911-286761c962a0",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94"
+    },
+    "createdAt": "2025-10-01T06:04:47.192Z"
+  },
+  {
+    "id": "b8b32985-bd92-474a-a44a-fee1eed89585",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.192Z"
+  },
+  {
+    "id": "8ebe0c38-e11a-4f75-a63d-c14b892c8271",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.193Z"
+  },
+  {
+    "id": "99fffcc2-c278-45b8-8beb-a0f4d9b391a2",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94"
+    },
+    "createdAt": "2025-10-01T06:04:47.198Z"
+  },
+  {
+    "id": "7a616313-60ce-41c8-9852-14edda95228a",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.198Z"
+  },
+  {
+    "id": "1aa03da4-320e-44b3-aa8a-9b3e13062cab",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.198Z"
+  },
+  {
+    "id": "937a9714-a69b-4829-93d7-7d06751455c7",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94",
+      "operation": "close",
+      "nextPhaseCount": 1,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:04:47.236Z"
+  },
+  {
+    "id": "3f8764b4-3a14-40de-bb74-bf3f29bcec16",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "review.getActiveSubmissionCount",
+    "status": "SUCCESS",
+    "source": "ReviewService",
+    "details": {
+      "submissionCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.239Z"
+  },
+  {
+    "id": "3f92e1ab-9c49-4c58-9567-82f3a94a3d10",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "87485bf3-e870-4eed-869b-fba340dd5f94",
+      "operation": "close",
+      "nextPhaseCount": 1,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:04:47.240Z"
+  },
+  {
+    "id": "0b2fd179-9068-45b7-ab00-f516504f5ffe",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "review.getActiveSubmissionCount",
+    "status": "SUCCESS",
+    "source": "ReviewService",
+    "details": {
+      "submissionCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.243Z"
+  },
+  {
+    "id": "40bb77db-0a5c-4e9e-bd2b-3933ef414e4d",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.257Z"
+  },
+  {
+    "id": "d52a432e-08c6-4543-8a47-3bb02118e635",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.260Z"
+  },
+  {
+    "id": "d140b00c-98ab-44d4-9fd9-f7e7bacc09a6",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54",
+      "operation": "open",
+      "nextPhaseCount": 0,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:04:47.305Z"
+  },
+  {
+    "id": "09d414bb-b6e0-4494-8b64-707a2cb6ea2b",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54",
+      "operation": "open",
+      "nextPhaseCount": 0,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:04:47.310Z"
+  },
+  {
+    "id": "1211bfba-0729-40dd-8b2b-a4d0b5061663",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.321Z"
+  },
+  {
+    "id": "36e46e6a-d6c1-42d3-ae28-db6d10a767a9",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:04:47.325Z"
+  },
+  {
+    "id": "53428c05-269b-4237-a16e-6bfe7b55d1c6",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:05:59.516Z"
+  },
+  {
+    "id": "00538414-edb3-40e9-87aa-429cee6f6e22",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "review.getPendingReviewCount",
+    "status": "SUCCESS",
+    "source": "ReviewService",
+    "details": {
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54",
+      "pendingCount": 0
+    },
+    "createdAt": "2025-10-01T06:05:59.518Z"
+  },
+  {
+    "id": "05a70f86-0a43-478f-9d5a-0daab5e4e70d",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:05:59.532Z"
+  },
+  {
+    "id": "b206b3e9-b0a4-45d1-9058-d0053f0b0a69",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:05:59.532Z"
+  },
+  {
+    "id": "30fc50e7-b48a-40cc-a822-f96f7680497a",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54"
+    },
+    "createdAt": "2025-10-01T06:05:59.533Z"
+  },
+  {
+    "id": "5d58535c-ebc7-405a-9e0d-5e428c9c768f",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "review.getPendingReviewCount",
+    "status": "SUCCESS",
+    "source": "ReviewService",
+    "details": {
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54",
+      "pendingCount": 0
+    },
+    "createdAt": "2025-10-01T06:05:59.534Z"
+  },
+  {
+    "id": "e266c9b6-5162-4052-a0ee-6151707bd0c4",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.advancePhase",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54",
+      "operation": "close",
+      "nextPhaseCount": 0,
+      "scheduleAdjusted": false,
+      "hasWinningSubmission": false
+    },
+    "createdAt": "2025-10-01T06:05:59.575Z"
+  },
+  {
+    "id": "1da2e622-ab31-4438-af98-874149876ce8",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-01T06:05:59.589Z"
+  },
+  {
+    "id": "c185628c-0902-4258-9b77-1b48d09af6d6",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "review.generateReviewSummaries",
+    "status": "SUCCESS",
+    "source": "ReviewService",
+    "details": {
+      "passingCount": 1,
+      "submissionCount": 3
+    },
+    "createdAt": "2025-10-01T06:05:59.609Z"
+  },
+  {
+    "id": "8b43ee2f-e975-4b3d-b65e-31d7c7761cef",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "resources.getMemberHandleMap",
+    "status": "SUCCESS",
+    "source": "ResourcesService",
+    "details": {
+      "inputCount": 1,
+      "matchedCount": 1
+    },
+    "createdAt": "2025-10-01T06:05:59.638Z"
+  },
+  {
+    "id": "2491f38e-1e73-4081-8459-e8085998110c",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.completeChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "endDate": "2025-10-01T06:05:59.636Z",
+      "winnersCount": 1
+    },
+    "createdAt": "2025-10-01T06:05:59.652Z"
+  },
+  {
+    "id": "182f49ae-445c-4cd3-a873-39dd02926797",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallenge",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-03T06:04:47.007Z"
+  },
+  {
+    "id": "2be1eca4-8496-4968-bf61-b90c8260f3a5",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getChallengePhases",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "phaseCount": 3
+    },
+    "createdAt": "2025-10-03T06:04:47.007Z"
+  },
+  {
+    "id": "4576ec3d-4ac6-487e-96aa-b231ac3db3d6",
+    "challengeId": "7c2ebe0c-c5cc-488d-8a1e-43efa5f000c8",
+    "action": "challenge.getPhaseDetails",
+    "status": "SUCCESS",
+    "source": "ChallengeApiService",
+    "details": {
+      "found": true,
+      "phaseId": "e641f622-7109-4231-a01b-47b48f0fca54"
+    },
+    "createdAt": "2025-10-03T06:04:47.014Z"
+  }
+]

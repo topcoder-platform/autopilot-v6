@@ -62,6 +62,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly appealsCloseRetryAttempts = new Map<string, number>();
   private readonly appealsCloseRetryBaseDelayMs = 10 * 60 * 1000;
   private readonly appealsCloseRetryMaxDelayMs = 60 * 60 * 1000;
+  private readonly appealsOpenRetryAttempts = new Map<string, number>();
+  private readonly appealsOpenRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly appealsOpenRetryMaxDelayMs = 60 * 60 * 1000;
   private readonly submitterRoles: string[];
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
@@ -553,6 +556,63 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
 
           await this.deferAppealsPhaseClosure(data);
+          return;
+        }
+      }
+
+      // Safety check: do not open Appeals if predecessor review has pending reviews
+      if (operation === 'open' && isAppealsPhase) {
+        try {
+          const challenge =
+            await this.challengeApiService.getChallengeById(data.challengeId);
+
+          const phaseToOpen = challenge.phases?.find(
+            (p) => p.id === data.phaseId,
+          );
+
+          // Identify predecessor phase; if not present, try to find the last review phase
+          let predecessor: IPhase | undefined;
+          if (phaseToOpen?.predecessor) {
+            predecessor = challenge.phases?.find(
+              (p) =>
+                p.phaseId === phaseToOpen.predecessor ||
+                p.id === phaseToOpen.predecessor,
+            );
+          }
+
+          // Fallback: choose the most recent review phase by scheduledEndDate
+          if (!predecessor) {
+            const reviewPhases = (challenge.phases || []).filter((p) =>
+              REVIEW_PHASE_NAMES.has(p.name),
+            );
+            predecessor = reviewPhases
+              .filter((p) => Boolean(p.actualEndDate) || Boolean(p.isOpen))
+              .sort(
+                (a, b) =>
+                  new Date(a.scheduledEndDate).getTime() -
+                  new Date(b.scheduledEndDate).getTime(),
+              )
+              .pop();
+          }
+
+          if (predecessor && REVIEW_PHASE_NAMES.has(predecessor.name)) {
+            const pendingReviews = await this.reviewService.getPendingReviewCount(
+              predecessor.id,
+              data.challengeId,
+            );
+
+            if (pendingReviews > 0) {
+              await this.deferAppealsPhaseOpen(data, pendingReviews);
+              return;
+            }
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[APPEALS OPEN] Unable to verify predecessor reviews before opening appeals for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+            err.stack,
+          );
+          await this.deferAppealsPhaseOpen(data);
           return;
         }
       }
@@ -1263,5 +1323,50 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     return this.appealsResponsePhaseNames.has(normalized);
+  }
+
+  private async deferAppealsPhaseOpen(
+    data: PhaseTransitionPayload,
+    pendingCount?: number,
+  ): Promise<void> {
+    const key = `${data.challengeId}|${data.phaseId}|appeals-open`;
+    const attempt = (this.appealsOpenRetryAttempts.get(key) ?? 0) + 1;
+    this.appealsOpenRetryAttempts.set(key, attempt);
+
+    const delay = this.computeAppealsOpenRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      state: 'START',
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
+      this.logger.warn(
+        `[APPEALS OPEN] Deferred opening appeals phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} pending review(s) in predecessor. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[APPEALS OPEN] Failed to reschedule open for appeals phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.appealsOpenRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeAppealsOpenRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.appealsOpenRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.appealsOpenRetryMaxDelayMs);
   }
 }
