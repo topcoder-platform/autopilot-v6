@@ -22,6 +22,8 @@ import {
   POST_MORTEM_PHASE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
+  APPROVAL_PHASE_NAMES,
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
 } from '../constants/review.constants';
@@ -65,6 +67,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly appealsOpenRetryAttempts = new Map<string, number>();
   private readonly appealsOpenRetryBaseDelayMs = 10 * 60 * 1000;
   private readonly appealsOpenRetryMaxDelayMs = 60 * 60 * 1000;
+  private readonly screeningCloseRetryAttempts = new Map<string, number>();
+  private readonly screeningCloseRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly screeningCloseRetryMaxDelayMs = 60 * 60 * 1000;
+  private readonly approvalCloseRetryAttempts = new Map<string, number>();
+  private readonly approvalCloseRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly approvalCloseRetryMaxDelayMs = 60 * 60 * 1000;
   private readonly submitterRoles: string[];
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
@@ -448,6 +456,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.isAppealsResponsePhaseName(data.phaseTypeName);
       const isAppealsRelatedPhase =
         isAppealsPhase || isAppealsResponsePhase;
+      const isScreeningPhase =
+        SCREENING_PHASE_NAMES.has(phaseName) ||
+        SCREENING_PHASE_NAMES.has(data.phaseTypeName);
+      const isApprovalPhase =
+        APPROVAL_PHASE_NAMES.has(phaseName) ||
+        APPROVAL_PHASE_NAMES.has(data.phaseTypeName);
 
       // Determine operation based on transition state and current phase state
       let operation: 'open' | 'close';
@@ -521,6 +535,64 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
 
           await this.deferReviewPhaseClosure(data);
+          return;
+        }
+      }
+
+      // Block closing Screening until all screening scorecards are submitted
+      if (operation === 'close' && isScreeningPhase) {
+        try {
+          const pendingScreening = await this.reviewService.getPendingReviewCount(
+            data.phaseId,
+            data.challengeId,
+          );
+
+          if (pendingScreening > 0) {
+            await this.deferScreeningPhaseClosure(data, pendingScreening);
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[SCREENING LATE] Unable to verify pending screening reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferScreeningPhaseClosure(data);
+          return;
+        }
+      }
+
+      // Block closing Approval until all approval scorecards are submitted
+      if (operation === 'close' && isApprovalPhase) {
+        try {
+          const pendingApproval = await this.reviewService.getPendingReviewCount(
+            data.phaseId,
+            data.challengeId,
+          );
+
+          if (pendingApproval > 0) {
+            await this.deferApprovalPhaseClosure(data, pendingApproval);
+            return;
+          }
+
+          // If there are zero pending reviews, ensure at least one approval review exists
+          const completedCount =
+            await this.reviewService.getCompletedReviewCountForPhase(
+              data.phaseId,
+            );
+          if (completedCount === 0) {
+            await this.deferApprovalPhaseClosure(data, 0);
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[APPROVAL LATE] Unable to verify pending approval reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferApprovalPhaseClosure(data);
           return;
         }
       }
@@ -658,6 +730,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         if (operation === 'close' && isAppealsRelatedPhase) {
           this.appealsCloseRetryAttempts.delete(
             this.buildAppealsPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+
+        if (operation === 'close' && isScreeningPhase) {
+          this.screeningCloseRetryAttempts.delete(
+            this.buildScreeningPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+        if (operation === 'close' && isApprovalPhase) {
+          this.approvalCloseRetryAttempts.delete(
+            this.buildApprovalPhaseKey(data.challengeId, data.phaseId),
           );
         }
 
@@ -1255,6 +1338,108 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private buildReviewPhaseKey(challengeId: string, phaseId: string): string {
     return `${challengeId}|${phaseId}`;
+  }
+
+  private async deferScreeningPhaseClosure(
+    data: PhaseTransitionPayload,
+    pendingCount?: number,
+  ): Promise<void> {
+    const key = this.buildScreeningPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.screeningCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.screeningCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeScreeningCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
+      this.logger.warn(
+        `[SCREENING LATE] Deferred closing screening phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete screening review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[SCREENING LATE] Failed to reschedule close for screening phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.screeningCloseRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeScreeningCloseRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.screeningCloseRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.screeningCloseRetryMaxDelayMs);
+  }
+
+  private buildScreeningPhaseKey(
+    challengeId: string,
+    phaseId: string,
+  ): string {
+    return `${challengeId}|${phaseId}|screening-close`;
+  }
+
+  private async deferApprovalPhaseClosure(
+    data: PhaseTransitionPayload,
+    pendingCount?: number,
+  ): Promise<void> {
+    const key = this.buildApprovalPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.approvalCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.approvalCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeApprovalCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
+      this.logger.warn(
+        `[APPROVAL LATE] Deferred closing approval phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete approval review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[APPROVAL LATE] Failed to reschedule close for approval phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.approvalCloseRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeApprovalCloseRetryDelay(attempt: number): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = this.approvalCloseRetryBaseDelayMs * multiplier;
+    return Math.min(delay, this.approvalCloseRetryMaxDelayMs);
+  }
+
+  private buildApprovalPhaseKey(
+    challengeId: string,
+    phaseId: string,
+  ): string {
+    return `${challengeId}|${phaseId}|approval-close`;
   }
 
   private async deferAppealsPhaseClosure(

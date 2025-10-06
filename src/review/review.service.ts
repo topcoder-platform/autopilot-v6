@@ -252,6 +252,91 @@ export class ReviewService {
     }
   }
 
+  async getActiveContestSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SUBMISSION_TABLE}
+      WHERE "challengeId" = ${challengeId}
+        AND ("status" = 'ACTIVE' OR "status" IS NULL)
+        AND (
+          "type" IS NULL
+          OR UPPER(("type")::text) = 'CONTEST_SUBMISSION'
+        )
+    `;
+
+    try {
+      const submissions =
+        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = submissions
+        .map((record) => record.id)
+        .filter(Boolean);
+
+      void this.dbLogger.logAction('review.getActiveContestSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: submissionIds.length },
+      });
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveContestSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveCheckpointSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SUBMISSION_TABLE}
+      WHERE "challengeId" = ${challengeId}
+        AND ("status" = 'ACTIVE' OR "status" IS NULL)
+        AND UPPER(("type")::text) = 'CHECKPOINT_SUBMISSION'
+    `;
+
+    try {
+      const submissions =
+        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = submissions
+        .map((record) => record.id)
+        .filter(Boolean);
+
+      void this.dbLogger.logAction(
+        'review.getActiveCheckpointSubmissionIds',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: { submissionCount: submissionIds.length },
+        },
+      );
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'review.getActiveCheckpointSubmissionIds',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: { error: err.message },
+        },
+      );
+      throw err;
+    }
+  }
+
   async getExistingReviewPairs(
     phaseId: string,
     challengeId?: string,

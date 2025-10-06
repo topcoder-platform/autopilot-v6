@@ -5,6 +5,8 @@ import { ResourcesService } from '../../resources/resources.service';
 import {
   getRoleNamesForPhase,
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
+  APPROVAL_PHASE_NAMES,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
@@ -33,7 +35,11 @@ export class PhaseReviewService {
       return;
     }
 
-    if (!REVIEW_PHASE_NAMES.has(phase.name)) {
+    const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
+    const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
+    const isApprovalPhase = APPROVAL_PHASE_NAMES.has(phase.name);
+
+    if (!isReviewPhase && !isScreeningPhase && !isApprovalPhase) {
       return;
     }
 
@@ -77,8 +83,24 @@ export class PhaseReviewService {
       return;
     }
 
-    const submissionIds =
-      await this.reviewService.getActiveSubmissionIds(challengeId);
+    let submissionIds: string[] = [];
+    if (isApprovalPhase) {
+      // Only the top final-scoring submission (winner) should be reviewed
+      const winners = await this.reviewService.getTopFinalReviewScores(
+        challengeId,
+        1,
+      );
+      submissionIds = winners.map((w) => w.submissionId);
+    } else if (phase.name === 'Checkpoint Review' || phase.name === 'Checkpoint Screening') {
+      submissionIds = await this.reviewService.getActiveCheckpointSubmissionIds(
+        challengeId,
+      );
+    } else {
+      // Default to contest submissions for standard Review/Screening
+      submissionIds = await this.reviewService.getActiveContestSubmissionIds(
+        challengeId,
+      );
+    }
     if (!submissionIds.length) {
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,

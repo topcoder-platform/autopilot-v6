@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service';
+import { PhaseReviewService } from './phase-review.service';
 import { PhaseScheduleManager } from './phase-schedule-manager.service';
 import { ResourceEventHandler } from './resource-event-handler.service';
 import { First2FinishService } from './first2finish.service';
@@ -25,6 +26,8 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
   POST_MORTEM_PHASE_NAME,
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
+  APPROVAL_PHASE_NAMES,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
 import {
@@ -47,6 +50,7 @@ export class AutopilotService {
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
+    private readonly phaseReviewService: PhaseReviewService,
     private readonly configService: ConfigService,
   ) {
     this.appealsPhaseNames = new Set(
@@ -242,7 +246,66 @@ export class AutopilotService {
         return;
       }
 
-      if (!REVIEW_PHASE_NAMES.has(phase.name)) {
+      // Special handling: Approval phase pass/fail adds additional Approval if failed
+      if (APPROVAL_PHASE_NAMES.has(phase.name)) {
+        const passingScore = await this.reviewService.getScorecardPassingScore(
+          review.scorecardId,
+        );
+        const rawScore =
+          typeof review.score === 'number'
+            ? review.score
+            : Number(review.score ?? payload.initialScore ?? 0);
+        const finalScore = Number.isFinite(rawScore)
+          ? Number(rawScore)
+          : Number(payload.initialScore ?? 0);
+
+        // Close current approval phase
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+
+        if (finalScore >= passingScore) {
+          this.logger.log(
+            `Approval review passed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
+          );
+        } else {
+          this.logger.log(
+            `Approval review failed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}). Creating another Approval phase.`,
+          );
+          try {
+            const nextApproval =
+              await this.challengeApiService.createIterativeReviewPhase(
+                challenge.id,
+                phase.id,
+                phase.phaseId!,
+                phase.name,
+                phase.description ?? null,
+                Math.max(phase.duration || 0, 1),
+              );
+
+            // Create pending reviews for the newly opened Approval
+            await this.phaseReviewService.handlePhaseOpened(
+              challenge.id,
+              nextApproval.id,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to create next Approval phase for challenge ${challenge.id}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+        return;
+      }
+
+      if (!REVIEW_PHASE_NAMES.has(phase.name) && !SCREENING_PHASE_NAMES.has(phase.name)) {
         return;
       }
 
@@ -259,7 +322,9 @@ export class AutopilotService {
       }
 
       this.logger.log(
-        `All reviews completed for phase ${phase.id} on challenge ${challengeId}. Closing Review phase early.`,
+        `All reviews completed for phase ${phase.id} on challenge ${challengeId}. Closing ${
+          SCREENING_PHASE_NAMES.has(phase.name) ? 'Screening' : 'Review'
+        } phase early.`,
       );
 
       await this.schedulerService.advancePhase({
