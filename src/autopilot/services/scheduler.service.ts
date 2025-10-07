@@ -803,6 +803,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             }
           }
 
+          // For Topgear tasks, finalize immediately after Topgear Submission closes,
+          // even if Post-Mortem was opened and remains active.
+          if (phaseName === TOPGEAR_SUBMISSION_PHASE_NAME) {
+            try {
+              await this.attemptChallengeFinalization(data.challengeId);
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[TOPGEAR] Failed to attempt finalization for challenge ${data.challengeId} after closing Topgear Submission phase ${data.phaseId}: ${err.message}`,
+                err.stack,
+              );
+            }
+          }
+
           try {
             let phases = result.updatedPhases;
             if (!phases || !phases.length) {

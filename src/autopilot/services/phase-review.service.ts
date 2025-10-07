@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
@@ -7,11 +8,13 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  POST_MORTEM_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
   selectScorecardId,
 } from '../utils/reviewer.utils';
+import { isTopgearTaskChallenge } from '../constants/challenge.constants';
 
 @Injectable()
 export class PhaseReviewService {
@@ -21,6 +24,7 @@ export class PhaseReviewService {
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
@@ -40,6 +44,81 @@ export class PhaseReviewService {
     const isApprovalPhase = APPROVAL_PHASE_NAMES.has(phase.name);
 
     if (!isReviewPhase && !isScreeningPhase && !isApprovalPhase) {
+      return;
+    }
+
+    // Special handling for Post-Mortem: create challenge-level pending reviews (no submissions)
+    if (phase.name === POST_MORTEM_PHASE_NAME) {
+      // Determine scorecard
+      let scorecardId: string | null = null;
+      if (isTopgearTaskChallenge(challenge.type)) {
+        scorecardId =
+          this.configService.get<string | null>(
+            'autopilot.topgearPostMortemScorecardId',
+          ) ?? null;
+        if (!scorecardId) {
+          try {
+            scorecardId = await this.reviewService.getScorecardIdByName(
+              'Topgear Task Post Mortem',
+            );
+          } catch (_) {
+            // Logged inside review service; continue with null
+          }
+        }
+      } else {
+        scorecardId =
+          this.configService.get<string | null>(
+            'autopilot.postMortemScorecardId',
+          ) ?? null;
+      }
+
+      if (!scorecardId) {
+        this.logger.warn(
+          `Post-mortem scorecard is not configured; skipping review creation for challenge ${challengeId}, phase ${phase.id}.`,
+        );
+        return;
+      }
+
+      const roleNames = getRoleNamesForPhase(phase.name);
+      const reviewerResources = await this.resourcesService.getReviewerResources(
+        challengeId,
+        roleNames,
+      );
+
+      if (!reviewerResources.length) {
+        this.logger.log(
+          `No resources found for post-mortem roles on challenge ${challengeId}; skipping review creation for phase ${phase.id}.`,
+        );
+        return;
+      }
+
+      let createdCount = 0;
+      for (const resource of reviewerResources) {
+        try {
+          const created = await this.reviewService.createPendingReview(
+            null,
+            resource.id,
+            phase.id,
+            scorecardId,
+            challengeId,
+          );
+          if (created) {
+            createdCount++;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to create post-mortem review for challenge ${challengeId}, phase ${phase.id}, resource ${resource.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
+      if (createdCount > 0) {
+        this.logger.log(
+          `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId}, phase ${phase.id}.`,
+        );
+      }
       return;
     }
 
