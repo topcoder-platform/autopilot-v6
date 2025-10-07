@@ -41,6 +41,7 @@ const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
+  private topgearPostMortemLocks = new Set<string>();
   private scheduledJobs = new Map<string, PhaseTransitionPayload>();
   private phaseChainCallback:
     | ((
@@ -1054,6 +1055,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     submissionPhase: IPhase,
     data: PhaseTransitionPayload,
   ): Promise<void> {
+    // Prevent concurrent duplicate creations for the same challenge within this process
+    this.topgearPostMortemLocks = this.topgearPostMortemLocks || new Set<string>();
+    if (this.topgearPostMortemLocks.has(challenge.id)) {
+      this.logger.debug?.(
+        `[TOPGEAR] Post-Mortem creation already in progress for challenge ${challenge.id}; skipping.`,
+      );
+      return;
+    }
+    this.topgearPostMortemLocks.add(challenge.id);
+    try {
     // Determine scorecard to use: env var or fallback by name
     let scorecardId = this.topgearPostMortemScorecardId;
     if (!scorecardId) {
@@ -1078,12 +1089,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     if (!postMortemPhase) {
       try {
-        // Create a Post-Mortem phase chained after the submission phase
-        postMortemPhase = await this.challengeApiService.createPostMortemPhase(
-          challenge.id,
-          submissionPhase.id,
-          this.postMortemDurationHours,
-        );
+        // Create a Post-Mortem phase chained after the submission phase, but keep it closed.
+        // We preserve future phases (e.g., Iterative Review) and let phase chain open Post-Mortem
+        // only after the submission phase is closed (which will happen after a successful IR).
+        postMortemPhase =
+          await this.challengeApiService.createPostMortemPhasePreserving(
+            challenge.id,
+            submissionPhase.id,
+            this.postMortemDurationHours,
+            false,
+          );
         this.logger.log(
           `[TOPGEAR] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${challenge.id} due to late submission.`,
         );
@@ -1097,74 +1112,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Assign pending post-mortem review to the challenge's reviewer (Iterative Reviewer preferred)
-    try {
-      const reviewers = await this.resourcesService.getReviewerResources(
-        challenge.id,
-        ['Iterative Reviewer', 'Reviewer'],
-      );
-
-      if (!reviewers.length) {
-        this.logger.warn(
-          `[TOPGEAR] No reviewer found (Iterative Reviewer/Reviewer) for challenge ${challenge.id}; post-mortem review not created.`,
-        );
-      } else {
-        const assignee = reviewers[0];
-        const created = await this.reviewService.createPendingReview(
-          null,
-          assignee.id,
-          postMortemPhase.id,
-          scorecardId,
-          challenge.id,
-        );
-
-        if (created) {
-          this.logger.log(
-            `[TOPGEAR] Created post-mortem review for challenge ${challenge.id} assigned to ${assignee.memberHandle || assignee.id}.`,
-          );
-        } else {
-          this.logger.debug?.(
-            `[TOPGEAR] Post-mortem review already exists for challenge ${challenge.id} and assignee ${assignee.memberHandle || assignee.id}.`,
-          );
-        }
-      }
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `[TOPGEAR] Failed to create post-mortem review for challenge ${challenge.id}: ${err.message}`,
-        err.stack,
-      );
-    }
-
-    // Schedule Post-Mortem closure if it has a scheduled end
-    if (postMortemPhase?.scheduledEndDate) {
-      try {
-        const payload: PhaseTransitionPayload = {
-          projectId: data.projectId,
-          challengeId: challenge.id,
-          phaseId: postMortemPhase.id,
-          phaseTypeName: postMortemPhase.name,
-          state: 'END',
-          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
-          projectStatus: data.projectStatus,
-          date: postMortemPhase.scheduledEndDate,
-        };
-
-        await this.schedulePhaseTransition(payload);
-        this.logger.log(
-          `[TOPGEAR] Scheduled Post-Mortem phase ${postMortemPhase.id} closure for challenge ${challenge.id} at ${postMortemPhase.scheduledEndDate}.`,
-        );
-      } catch (error) {
-        const err = error as Error;
-        this.logger.error(
-          `[TOPGEAR] Failed to schedule Post-Mortem closure for challenge ${challenge.id}: ${err.message}`,
-          err.stack,
-        );
-      }
-    } else {
-      this.logger.warn(
-        `[TOPGEAR] Post-Mortem phase ${postMortemPhase?.id ?? 'unknown'} on challenge ${challenge.id} has no scheduled end date; manual closure may be required.`,
-      );
+    // Do NOT pre-create pending reviews or schedule closure here.
+    // The phase chain will open Post-Mortem only after submission closes (after successful IR),
+    // and standard open-phase handling will create pending reviews and schedule closure.
+    } finally {
+      this.topgearPostMortemLocks.delete(challenge.id);
     }
   }
 

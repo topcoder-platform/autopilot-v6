@@ -267,6 +267,23 @@ export class First2FinishService {
         );
         return;
       }
+
+      // Safety: if any non-completed review exists for this phase, do not close or reassign
+      const existingPairs = await this.reviewService.getExistingReviewPairs(
+        activePhase.id,
+        challenge.id,
+      );
+      if (existingPairs.size > 0) {
+        this.logger.debug(
+          `Iterative review work detected for challenge ${challenge.id}; deferring.`,
+          {
+            submissionId: submissionId ?? null,
+            activePhaseId: activePhase.id,
+            existingPairs: existingPairs.size,
+          },
+        );
+        return;
+      }
     }
 
     if (!activePhase) {

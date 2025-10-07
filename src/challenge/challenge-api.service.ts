@@ -872,6 +872,139 @@ export class ChallengeApiService {
     }
   }
 
+  /**
+   * Create a Post-Mortem phase without deleting any subsequent phases and without forcing it open.
+   * Used for Topgear late submission flow where Post-Mortem must exist but only open later.
+   */
+  async createPostMortemPhasePreserving(
+    challengeId: string,
+    predecessorPhaseId: string,
+    durationHours: number,
+    openImmediately = false,
+  ): Promise<IPhase> {
+    const now = new Date();
+    const end = new Date(now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000);
+
+    try {
+      const { createdPhaseId } = await this.prisma.$transaction(async (tx) => {
+        const challenge = await tx.challenge.findUnique({
+          ...challengeWithRelationsArgs,
+          where: { id: challengeId },
+        });
+
+        if (!challenge) {
+          throw new NotFoundException(
+            `Challenge with ID ${challengeId} not found when creating post-mortem phase (preserving).`,
+          );
+        }
+
+        const predecessorPhase = challenge.phases.find(
+          (phase) => phase.id === predecessorPhaseId,
+        );
+
+        if (!predecessorPhase) {
+          throw new NotFoundException(
+            `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId}.`,
+          );
+        }
+
+        // If a Post-Mortem already exists, return it idempotently.
+        const existing = challenge.phases.find(
+          (phase) => phase.name === 'Post-Mortem',
+        );
+        if (existing) {
+          return { createdPhaseId: existing.id };
+        }
+
+        const postMortemPhaseType = await tx.phase.findUnique({
+          where: { name: 'Post-Mortem' },
+        });
+
+        if (!postMortemPhaseType) {
+          throw new NotFoundException(
+            'Phase type "Post-Mortem" is not configured in the system.',
+          );
+        }
+
+        const created = await tx.challengePhase.create({
+          data: {
+            challengeId,
+            phaseId: postMortemPhaseType.id,
+            name: postMortemPhaseType.name,
+            description: postMortemPhaseType.description,
+            predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
+            duration: Math.max(Math.round((end.getTime() - now.getTime()) / 1000), 1),
+            scheduledStartDate: now,
+            scheduledEndDate: end,
+            actualStartDate: openImmediately ? now : null,
+            isOpen: !!openImmediately,
+            createdBy: 'Autopilot',
+            updatedBy: 'Autopilot',
+          },
+        });
+
+        // Maintain currentPhaseNames only if opening immediately
+        if (openImmediately) {
+          const phaseNames = new Set(challenge.currentPhaseNames ?? []);
+          phaseNames.add(postMortemPhaseType.name);
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: { currentPhaseNames: Array.from(phaseNames) },
+          });
+        }
+
+        return { createdPhaseId: created.id };
+      });
+
+      const refreshed = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
+
+      const phaseRecord = refreshed?.phases.find(
+        (phase) => phase.id === createdPhaseId,
+      );
+
+      if (!phaseRecord) {
+        throw new Error(
+          `Created post-mortem phase ${createdPhaseId} not found after insertion for challenge ${challengeId}.`,
+        );
+      }
+
+      const mapped = this.mapPhase(phaseRecord);
+
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          postMortemPhaseId: mapped.id,
+          durationHours,
+          preserveFuturePhases: true,
+          openImmediately,
+          predecessorPhaseId,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          predecessorPhaseId,
+          durationHours,
+          preserveFuturePhases: true,
+          openImmediately,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async createIterativeReviewPhase(
     challengeId: string,
     predecessorPhaseId: string,
