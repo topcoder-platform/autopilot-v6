@@ -15,10 +15,8 @@
 /* eslint-disable no-console */
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Use Node's CommonJS globals for path resolution under tsconfig module=commonjs
+// (Avoid import.meta which requires ESM module settings.)
 
 type StepRequestLog = {
   id: string;
@@ -225,4 +223,3 @@ async function main() {
 
 // Run
 void main();
-
