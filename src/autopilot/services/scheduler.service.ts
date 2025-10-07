@@ -1022,16 +1022,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(
-        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing submission.`,
+        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing iterative review.`,
       );
 
-      const submissionCount = await this.reviewService.getActiveSubmissionCount(
-        data.challengeId,
-      );
-
-      if (submissionCount === 0) {
-        await this.ensureTopgearPostMortemReview(challenge);
-      }
+      // Ensure a Post-Mortem phase and pending review for the challenge reviewer
+      await this.ensureTopgearPostMortemReview(challenge, phase, data);
 
       return true;
     } catch (error) {
@@ -1046,68 +1041,119 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async ensureTopgearPostMortemReview(
     challenge: IChallenge,
+    submissionPhase: IPhase,
+    data: PhaseTransitionPayload,
   ): Promise<void> {
-    if (!this.topgearPostMortemScorecardId) {
+    // Determine scorecard to use: env var or fallback by name
+    let scorecardId = this.topgearPostMortemScorecardId;
+    if (!scorecardId) {
+      try {
+        scorecardId = await this.reviewService.getScorecardIdByName(
+          'Topgear Task Post Mortem',
+        );
+      } catch (err) {
+        // Already logged in review service
+      }
+    }
+
+    if (!scorecardId) {
       this.logger.warn(
-        `[TOPGEAR] topgearPostMortemScorecardId is not configured; unable to create creator review for challenge ${challenge.id}.`,
+        `[TOPGEAR] Post-mortem scorecard is not configured or found by name; skipping creation for challenge ${challenge.id}.`,
       );
       return;
     }
 
-    const postMortemPhase =
-      challenge.phases?.find((phase) => phase.name === POST_MORTEM_PHASE_NAME) ??
-      null;
+    let postMortemPhase =
+      challenge.phases?.find((p) => p.name === POST_MORTEM_PHASE_NAME) ?? null;
 
     if (!postMortemPhase) {
-      this.logger.warn(
-        `[TOPGEAR] Post-Mortem phase not found on challenge ${challenge.id}; creator review cannot be created.`,
-      );
-      return;
-    }
-
-    const creatorHandle = challenge.createdBy?.trim();
-    if (!creatorHandle) {
-      this.logger.warn(
-        `[TOPGEAR] Challenge ${challenge.id} missing creator handle; post-mortem review not created.`,
-      );
-      return;
-    }
-
-    try {
-      const creatorResource = await this.resourcesService.getResourceByMemberHandle(
-        challenge.id,
-        creatorHandle,
-      );
-
-      if (!creatorResource) {
-        this.logger.warn(
-          `[TOPGEAR] Unable to locate resource for creator ${creatorHandle} on challenge ${challenge.id}; post-mortem review not created.`,
+      try {
+        // Create a Post-Mortem phase chained after the submission phase
+        postMortemPhase = await this.challengeApiService.createPostMortemPhase(
+          challenge.id,
+          submissionPhase.id,
+          this.postMortemDurationHours,
+        );
+        this.logger.log(
+          `[TOPGEAR] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${challenge.id} due to late submission.`,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[TOPGEAR] Failed to create Post-Mortem phase for challenge ${challenge.id}: ${err.message}`,
+          err.stack,
         );
         return;
       }
+    }
 
-      const created = await this.reviewService.createPendingReview(
-        null,
-        creatorResource.id,
-        postMortemPhase.id,
-        this.topgearPostMortemScorecardId,
+    // Assign pending post-mortem review to the challenge's reviewer (Iterative Reviewer preferred)
+    try {
+      const reviewers = await this.resourcesService.getReviewerResources(
         challenge.id,
+        ['Iterative Reviewer', 'Reviewer'],
       );
 
-      if (created) {
-        this.logger.log(
-          `[TOPGEAR] Created post-mortem review for challenge ${challenge.id} assigned to creator ${creatorHandle}.`,
+      if (!reviewers.length) {
+        this.logger.warn(
+          `[TOPGEAR] No reviewer found (Iterative Reviewer/Reviewer) for challenge ${challenge.id}; post-mortem review not created.`,
         );
       } else {
-        this.logger.debug?.(
-          `[TOPGEAR] Post-mortem review already exists for challenge ${challenge.id}, creator ${creatorHandle}.`,
+        const assignee = reviewers[0];
+        const created = await this.reviewService.createPendingReview(
+          null,
+          assignee.id,
+          postMortemPhase.id,
+          scorecardId,
+          challenge.id,
         );
+
+        if (created) {
+          this.logger.log(
+            `[TOPGEAR] Created post-mortem review for challenge ${challenge.id} assigned to ${assignee.memberHandle || assignee.id}.`,
+          );
+        } else {
+          this.logger.debug?.(
+            `[TOPGEAR] Post-mortem review already exists for challenge ${challenge.id} and assignee ${assignee.memberHandle || assignee.id}.`,
+          );
+        }
       }
     } catch (error) {
       const err = error as Error;
       this.logger.error(
         `[TOPGEAR] Failed to create post-mortem review for challenge ${challenge.id}: ${err.message}`,
         err.stack,
+      );
+    }
+
+    // Schedule Post-Mortem closure if it has a scheduled end
+    if (postMortemPhase?.scheduledEndDate) {
+      try {
+        const payload: PhaseTransitionPayload = {
+          projectId: data.projectId,
+          challengeId: challenge.id,
+          phaseId: postMortemPhase.id,
+          phaseTypeName: postMortemPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+          projectStatus: data.projectStatus,
+          date: postMortemPhase.scheduledEndDate,
+        };
+
+        await this.schedulePhaseTransition(payload);
+        this.logger.log(
+          `[TOPGEAR] Scheduled Post-Mortem phase ${postMortemPhase.id} closure for challenge ${challenge.id} at ${postMortemPhase.scheduledEndDate}.`,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[TOPGEAR] Failed to schedule Post-Mortem closure for challenge ${challenge.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    } else {
+      this.logger.warn(
+        `[TOPGEAR] Post-Mortem phase ${postMortemPhase?.id ?? 'unknown'} on challenge ${challenge.id} has no scheduled end date; manual closure may be required.`,
       );
     }
   }

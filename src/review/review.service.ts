@@ -947,6 +947,51 @@ export class ReviewService {
     }
   }
 
+  async getScorecardIdByName(name: string): Promise<string | null> {
+    if (!name) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SCORECARD_TABLE}
+      WHERE "name" = ${name}
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<{ id: string | null }[]>(
+        query,
+      );
+
+      const id = record?.id ?? null;
+
+      void this.dbLogger.logAction('review.getScorecardIdByName', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          name,
+          scorecardId: id,
+        },
+      });
+
+      return id;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getScorecardIdByName', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          name,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getPendingAppealCount(challengeId: string): Promise<number> {
     const query = Prisma.sql`
       SELECT COUNT(*)::int AS count
