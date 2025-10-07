@@ -1003,10 +1003,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     const candidate = operator.toString().toLowerCase();
-    return (
-      candidate === AutopilotOperator.SYSTEM_SCHEDULER ||
-      candidate === AutopilotOperator.SYSTEM_PHASE_CHAIN
-    );
+    // Treat all system-scheduled operators as scheduler-initiated.
+    // Includes: system-scheduler, system-phase-chain, system-new-challenge,
+    // system-sync, system-recovery (and other future system-* operators).
+    // Intentionally excludes bare 'system' to allow explicit closes (e.g., after passing review).
+    return candidate.startsWith('system-');
   }
 
   private async handleTopgearSubmissionLate(

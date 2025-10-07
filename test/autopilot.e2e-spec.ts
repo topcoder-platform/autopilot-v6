@@ -1698,5 +1698,63 @@ describe('Autopilot Service (e2e)', () => {
         challengeId,
       );
     });
+
+    it('keeps Topgear submission phase open when scheduled via system-new-challenge operator', async () => {
+      const challengeId = 'topgear-late-new-challenge';
+      const submissionPhase = {
+        id: 'topgear-submission-phase-id',
+        phaseId: 'topgear-template',
+        name: 'Topgear Submission',
+        isOpen: true,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockPastPhaseDate,
+        actualStartDate: mockPastPhaseDate,
+        actualEndDate: null,
+        predecessor: null,
+      };
+      const postMortemPhase = {
+        id: 'post-mortem-phase-id',
+        phaseId: 'post-mortem-template',
+        name: 'Post-Mortem',
+        isOpen: false,
+        scheduledStartDate: mockPastPhaseDate,
+        scheduledEndDate: mockFuturePhaseDate1,
+        actualStartDate: null,
+        actualEndDate: null,
+        predecessor: submissionPhase.phaseId,
+      };
+      const topgearChallenge = {
+        ...mockChallenge,
+        id: challengeId,
+        type: 'Topgear Task',
+        createdBy: 'creator',
+        phases: [submissionPhase, postMortemPhase],
+      };
+
+      mockChallengeApiService.getPhaseDetails.mockResolvedValueOnce(
+        submissionPhase,
+      );
+      mockChallengeApiService.getChallengeById.mockResolvedValueOnce(
+        topgearChallenge,
+      );
+      reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
+      resourcesServiceMockFns.getResourceByMemberHandle.mockResolvedValueOnce({
+        id: 'creator-resource-id',
+        roleName: 'Copilot',
+      });
+      reviewServiceMockFns.createPendingReview.mockResolvedValueOnce(true);
+
+      await schedulerService.advancePhase({
+        projectId: topgearChallenge.projectId,
+        challengeId,
+        phaseId: submissionPhase.id,
+        phaseTypeName: submissionPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_NEW_CHALLENGE,
+        projectStatus: topgearChallenge.status,
+      });
+
+      expect(mockChallengeApiService.advancePhase).not.toHaveBeenCalled();
+    });
   });
 });
