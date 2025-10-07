@@ -70,6 +70,17 @@ export class PhaseReviewService {
           this.configService.get<string | null>(
             'autopilot.postMortemScorecardId',
           ) ?? null;
+
+        // Fallback to the standard Topcoder Post Mortem scorecard by name
+        if (!scorecardId) {
+          try {
+            scorecardId = await this.reviewService.getScorecardIdByName(
+              'Topcoder Post Mortem',
+            );
+          } catch (_) {
+            // Logged inside review service; continue with null
+          }
+        }
       }
 
       if (!scorecardId) {

@@ -7,6 +7,7 @@ import {
   type IChallengePrizeSet,
 } from '../../challenge/interfaces/challenge.interface';
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
+import { IPhase } from '../../challenge/interfaces/challenge.interface';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -17,6 +18,101 @@ export class ChallengeCompletionService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
   ) {}
+
+  private async ensureCancelledPostMortem(
+    challengeId: string,
+  ): Promise<void> {
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      // Resolve scorecard for post-mortem: prefer env var; fallback to name
+      let scorecardId: string | null = null;
+      try {
+        scorecardId = await this.reviewService.getScorecardIdByName(
+          'Topcoder Post Mortem',
+        );
+      } catch (_) {
+        // Already logged inside review service; leave as null
+      }
+
+      if (!scorecardId) {
+        this.logger.warn(
+          `Post-mortem scorecard 'Topcoder Post Mortem' not found; skipping post-mortem review creation for challenge ${challengeId}.`,
+        );
+      }
+
+      // Determine a reasonable predecessor: last phase that has actually ended, else last phase in list
+      const phases = challenge.phases ?? [];
+      let predecessor: IPhase | undefined = phases
+        .filter((p) => Boolean(p.actualEndDate))
+        .sort((a, b) =>
+          (a.actualEndDate ?? '').localeCompare(b.actualEndDate ?? ''),
+        )
+        .at(-1);
+      if (!predecessor && phases.length) {
+        predecessor = phases[phases.length - 1];
+      }
+
+      if (!predecessor) {
+        this.logger.warn(
+          `Unable to determine predecessor phase when creating post-mortem for challenge ${challengeId}; skipping creation.`,
+        );
+        return;
+      }
+
+      // Create or reuse Post-Mortem, open immediately
+      const postMortem =
+        await this.challengeApiService.createPostMortemPhasePreserving(
+          challengeId,
+          predecessor.id,
+          72,
+          true,
+        );
+
+      // Assign to Copilot(s) if scorecard is available
+      if (scorecardId) {
+        const copilots = await this.resourcesService.getResourcesByRoleNames(
+          challengeId,
+          ['Copilot'],
+        );
+
+        let createdCount = 0;
+        for (const resource of copilots) {
+          try {
+            const created = await this.reviewService.createPendingReview(
+              null,
+              resource.id,
+              postMortem.id,
+              scorecardId,
+              challengeId,
+            );
+            if (created) {
+              createdCount++;
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to create post-mortem review for challenge ${challengeId}, resource ${resource.id}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
+        if (createdCount > 0) {
+          this.logger.log(
+            `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Copilot).`,
+          );
+        }
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Unable to create post-mortem phase for cancelled challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
 
   private countPlacementPrizes(prizeSets: IChallengePrizeSet[]): number {
     if (!Array.isArray(prizeSets) || prizeSets.length === 0) {
@@ -57,6 +153,8 @@ export class ChallengeCompletionService {
           challengeId,
           ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
         );
+        // Ensure a Post-Mortem exists for the cancelled challenge and assign to Copilot
+        await this.ensureCancelledPostMortem(challengeId);
         return true;
       }
 
@@ -76,6 +174,8 @@ export class ChallengeCompletionService {
         challengeId,
         ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
       );
+      // Ensure a Post-Mortem exists for the cancelled challenge and assign to Copilot
+      await this.ensureCancelledPostMortem(challengeId);
       return true;
     }
 

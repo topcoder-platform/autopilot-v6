@@ -14,6 +14,9 @@ lerna-debug.log*
 # IDE
 .vscode/
 
+# E2E tests
+secrets/m2m.json
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
