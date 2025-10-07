@@ -307,10 +307,19 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      await this.triggerKafkaEvent(phaseData);
+      // Normalize the payload to reflect a scheduler-initiated transition
+      const effectiveData: PhaseTransitionPayload = {
+        ...phaseData,
+        state: phaseData.state || 'END',
+        operator: AutopilotOperator.SYSTEM_SCHEDULER,
+        date: new Date().toISOString(),
+      };
+
+      await this.triggerKafkaEvent(effectiveData);
 
       // Call advancePhase method when phase transition is triggered
-      await this.advancePhase(phaseData);
+      // Use the normalized operator so scheduler-specific rules apply
+      await this.advancePhase(effectiveData);
     } catch (error) {
       this.logger.error(
         `Failed to trigger Kafka event for job ${jobId}`,
