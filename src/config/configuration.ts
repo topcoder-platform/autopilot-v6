@@ -7,6 +7,7 @@ import membersConfig from './sections/members.config';
 import busConfig from './sections/bus.config';
 import auth0Config from './sections/auth0.config';
 import autopilotConfig from './sections/autopilot.config';
+import financeConfig from './sections/finance.config';
 
 export default () => ({
   app: appConfig(),
@@ -18,4 +19,5 @@ export default () => ({
   bus: busConfig(),
   auth0: auth0Config(),
   autopilot: autopilotConfig(),
+  finance: financeConfig(),
 });

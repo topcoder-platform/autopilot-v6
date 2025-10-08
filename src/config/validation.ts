@@ -117,6 +117,10 @@ export const validationSchema = Joi.object({
   BUS_API_TIMEOUT_MS: Joi.number().integer().positive().default(10000),
   BUS_API_ORIGINATOR: Joi.string().default('autopilot-service'),
 
+  // Finance API (optional but recommended)
+  FINANCE_API_URL: Joi.string().uri().optional(),
+  FINANCE_API_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
+
   // Sync Service Configuration
   // Default sync cadence set to every 3 minutes
   SYNC_CRON_SCHEDULE: Joi.string().default('*/3 * * * *'),

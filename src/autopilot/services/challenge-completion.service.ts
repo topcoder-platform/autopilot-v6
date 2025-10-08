@@ -8,6 +8,7 @@ import {
 } from '../../challenge/interfaces/challenge.interface';
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
+import { FinanceApiService } from '../../finance/finance-api.service';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -17,6 +18,7 @@ export class ChallengeCompletionService {
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
+    private readonly financeApiService: FinanceApiService,
   ) {}
 
   private async ensureCancelledPostMortem(
@@ -176,6 +178,8 @@ export class ChallengeCompletionService {
       );
       // Ensure a Post-Mortem exists for the cancelled challenge and assign to Copilot
       await this.ensureCancelledPostMortem(challengeId);
+      // Trigger finance payments generation for reviewer payments on failed review cancellation
+      void this.financeApiService.generateChallengePayments(challengeId);
       return true;
     }
 
@@ -236,6 +240,8 @@ export class ChallengeCompletionService {
     }
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
+    // Trigger finance payments generation after marking the challenge as completed
+    void this.financeApiService.generateChallengePayments(challengeId);
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s).`,
     );

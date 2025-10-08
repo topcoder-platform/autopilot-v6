@@ -3,6 +3,7 @@ import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { ReviewService, SubmissionSummary } from '../../review/review.service';
 import type { ResourcesService } from '../../resources/resources.service';
+import type { FinanceApiService } from '../../finance/finance-api.service';
 import type {
   IChallenge,
   IChallengePrizeSet,
@@ -19,6 +20,9 @@ describe('ChallengeCompletionService', () => {
   };
   let resourcesService: {
     getMemberHandleMap: jest.MockedFunction<ResourcesService['getMemberHandleMap']>;
+  };
+  let financeApiService: {
+    generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
   };
   let service: ChallengeCompletionService;
 
@@ -138,10 +142,17 @@ describe('ChallengeCompletionService', () => {
         ),
     };
 
+    financeApiService = {
+      generateChallengePayments: jest.fn().mockResolvedValue(true),
+    } as unknown as {
+      generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
+    };
+
     service = new ChallengeCompletionService(
       challengeApiService as unknown as ChallengeApiService,
       reviewService as unknown as ReviewService,
       resourcesService as unknown as ResourcesService,
+      financeApiService as unknown as FinanceApiService,
     );
   });
 
@@ -164,6 +175,9 @@ describe('ChallengeCompletionService', () => {
 
     expect(result).toBe(true);
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
 
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
     expect(winners).toHaveLength(2);
@@ -191,9 +205,40 @@ describe('ChallengeCompletionService', () => {
 
     expect(result).toBe(true);
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
 
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
     expect(winners).toHaveLength(summaries.length);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
+  });
+
+  it('triggers finance payments on CANCELLED_FAILED_REVIEW', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildPlacementPrizeSet(2)],
+      numOfSubmissions: 2,
+    });
+
+    // All summaries are failing
+    const failingSummaries = summaries.map((s) => ({
+      ...s,
+      isPassing: false as const,
+    }));
+    reviewService.generateReviewSummaries.mockResolvedValueOnce(
+      failingSummaries,
+    );
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+    );
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
   });
 });

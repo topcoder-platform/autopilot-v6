@@ -16,6 +16,7 @@ import { First2FinishService } from './services/first2finish.service';
 import { MembersModule } from '../members/members.module';
 import { Auth0Module } from '../auth/auth0.module';
 import { PhaseChangeNotificationService } from './services/phase-change-notification.service';
+import { FinanceModule } from '../finance/finance.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { PhaseChangeNotificationService } from './services/phase-change-notifica
     ResourcesModule,
     MembersModule,
     Auth0Module,
+    FinanceModule,
   ],
   providers: [
     AutopilotService,
