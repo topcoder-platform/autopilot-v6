@@ -14,6 +14,19 @@ export function getMemberReviewerConfigs(
   );
 }
 
+// For screening phases (including Checkpoint Screening), reviewer configs may not be flagged as member reviews.
+// This helper returns all reviewer configs for the given phase template regardless of isMemberReview.
+export function getReviewerConfigsForPhase(
+  reviewers: IChallengeReviewer[] | undefined,
+  phaseTemplateId: string,
+): IChallengeReviewer[] {
+  if (!reviewers?.length) {
+    return [];
+  }
+
+  return reviewers.filter((reviewer) => reviewer.phaseId === phaseTemplateId);
+}
+
 export function getRequiredReviewerCountForPhase(
   reviewers: IChallengeReviewer[] | undefined,
   phaseTemplateId: string,

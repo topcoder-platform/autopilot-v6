@@ -40,7 +40,8 @@ export const PHASE_ROLE_MAP: Record<string, string[]> = {
   'Post-Mortem': ['Reviewer', 'Copilot'],
   'Checkpoint Review': ['Reviewer'],
   Screening: ['Screener'],
-  'Checkpoint Screening': ['Screener'],
+  // Use the specific Checkpoint Screener role for checkpoint screening phases
+  'Checkpoint Screening': ['Checkpoint Screener'],
   Approval: ['Approver'],
 };
 

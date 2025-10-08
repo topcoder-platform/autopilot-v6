@@ -12,6 +12,7 @@ import {
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
+  getReviewerConfigsForPhase,
   selectScorecardId,
 } from '../utils/reviewer.utils';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
@@ -133,9 +134,12 @@ export class PhaseReviewService {
       return;
     }
 
-    const reviewerConfigs = getMemberReviewerConfigs(
-      challenge.reviewers,
-      phase.phaseId,
+    // Determine reviewer configs for scorecard selection.
+    // For screening phases, configs may not be marked isMemberReview, so include all for the phase.
+    const reviewerConfigs = (
+      isScreeningPhase
+        ? getReviewerConfigsForPhase(challenge.reviewers, phase.phaseId)
+        : getMemberReviewerConfigs(challenge.reviewers, phase.phaseId)
     ).filter((config) => Boolean(config.scorecardId));
 
     if (!reviewerConfigs.length) {
