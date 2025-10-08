@@ -14,6 +14,7 @@ import type { First2FinishService } from './first2finish.service';
 import type { SchedulerService } from './scheduler.service';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { ReviewService } from '../../review/review.service';
+import type { PhaseReviewService } from './phase-review.service';
 import type { ConfigService } from '@nestjs/config';
 import type {
   IChallenge,
@@ -51,6 +52,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
+  let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let configService: jest.Mocked<ConfigService>;
   let autopilotService: AutopilotService;
 
@@ -111,6 +113,10 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getPendingReviewCount: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
+    phaseReviewService = {
+      handlePhaseOpened: jest.fn(),
+    } as unknown as jest.Mocked<PhaseReviewService>;
+
     configService = {
       get: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ConfigService>;
@@ -122,6 +128,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       schedulerService,
       challengeApiService,
       reviewService,
+      phaseReviewService,
       configService,
     );
 

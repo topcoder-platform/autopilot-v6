@@ -149,17 +149,46 @@ export class PhaseReviewService {
       return;
     }
 
-    const scorecardId = selectScorecardId(
-      reviewerConfigs,
-      () =>
-        this.logger.warn(
-          `Member reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phase.id}`,
+    // Select scorecard
+    // For screening phases, reviewer configs may not be flagged as member reviews.
+    // Use any configured scorecard IDs for the phase as-is (without re-filtering by isMemberReview).
+    let scorecardId: string | null;
+    if (isScreeningPhase) {
+      const uniqueScorecards = Array.from(
+        new Set(
+          reviewerConfigs
+            .map((config) => config.scorecardId)
+            .filter((id): id is string => Boolean(id)),
         ),
-      (choices) =>
+      );
+
+      if (uniqueScorecards.length === 0) {
         this.logger.warn(
-          `Multiple scorecard IDs detected for challenge ${challengeId}, phase ${phase.id}. Using ${choices[0]} for pending reviews`,
-        ),
-    );
+          `Reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phase.id}`,
+        );
+        return;
+      }
+
+      if (uniqueScorecards.length > 1) {
+        this.logger.warn(
+          `Multiple scorecard IDs detected for challenge ${challengeId}, phase ${phase.id}. Using ${uniqueScorecards[0]} for pending reviews`,
+        );
+      }
+
+      scorecardId = uniqueScorecards[0] ?? null;
+    } else {
+      scorecardId = selectScorecardId(
+        reviewerConfigs,
+        () =>
+          this.logger.warn(
+            `Member reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phase.id}`,
+          ),
+        (choices) =>
+          this.logger.warn(
+            `Multiple scorecard IDs detected for challenge ${challengeId}, phase ${phase.id}. Using ${choices[0]} for pending reviews`,
+          ),
+      );
+    }
     if (!scorecardId) {
       return;
     }

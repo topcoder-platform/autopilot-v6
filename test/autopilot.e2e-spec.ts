@@ -225,6 +225,7 @@ describe('Autopilot Service (e2e)', () => {
       deletePendingReviewsForResource: jest.fn().mockResolvedValue(0),
       createPendingReview: jest.fn().mockResolvedValue(true),
       getActiveSubmissionCount: jest.fn().mockResolvedValue(1),
+      getActiveContestSubmissionIds: jest.fn().mockResolvedValue([]),
       getAllSubmissionIdsOrdered: jest.fn().mockResolvedValue([]),
       getExistingReviewPairs: jest.fn().mockResolvedValue(new Set()),
       getReviewerSubmissionPairs: jest.fn().mockResolvedValue(new Set()),
@@ -1012,7 +1013,9 @@ describe('Autopilot Service (e2e)', () => {
       mockChallengeApiService.getChallengeById.mockResolvedValueOnce(
         challengeWithZeroSubmissions,
       );
-      reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
+      reviewServiceMockFns.getActiveContestSubmissionIds.mockResolvedValueOnce(
+        [],
+      );
       resourcesServiceMockFns.getResourcesByRoleNames.mockResolvedValue([
         { id: 'postmortem-reviewer' },
         { id: 'postmortem-copilot' },
@@ -1672,7 +1675,9 @@ describe('Autopilot Service (e2e)', () => {
       mockChallengeApiService.getChallengeById.mockResolvedValueOnce(
         topgearChallenge,
       );
-      reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
+      reviewServiceMockFns.getActiveContestSubmissionIds.mockResolvedValueOnce(
+        [],
+      );
 
       await schedulerService.advancePhase({
         projectId: topgearChallenge.projectId,
@@ -1726,7 +1731,9 @@ describe('Autopilot Service (e2e)', () => {
       mockChallengeApiService.getChallengeById.mockResolvedValueOnce(
         topgearChallenge,
       );
-      reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
+      reviewServiceMockFns.getActiveContestSubmissionIds.mockResolvedValueOnce(
+        [],
+      );
       resourcesServiceMockFns.getResourceByMemberHandle.mockResolvedValueOnce({
         id: 'creator-resource-id',
         roleName: 'Copilot',

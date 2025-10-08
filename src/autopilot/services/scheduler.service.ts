@@ -1183,11 +1183,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     data: PhaseTransitionPayload,
   ): Promise<boolean> {
     try {
-      const submissionCount = await this.reviewService.getActiveSubmissionCount(
-        data.challengeId,
-      );
+      // Only consider active contest submissions (include null type as contest)
+      const contestSubmissionIds =
+        await this.reviewService.getActiveContestSubmissionIds(
+          data.challengeId,
+        );
 
-      if (submissionCount > 0) {
+      if (contestSubmissionIds.length > 0) {
         return false;
       }
 
