@@ -504,7 +504,28 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
 
+      // Keep Topgear Task registration open until a passing iterative review.
       if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
+        try {
+          // Only defer scheduler-initiated closes for Topgear tasks
+          if (isSchedulerInitiated) {
+            const regChallenge = await this.challengeApiService.getChallengeById(
+              data.challengeId,
+            );
+            if (isTopgearTaskChallenge(regChallenge.type)) {
+              await this.deferTopgearRegistrationPhaseClosure(data);
+              return;
+            }
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[REGISTRATION] Failed Topgear registration check for challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+          // Fall through to legacy behavior below on error
+        }
+
         try {
           const hasSubmitter = await this.resourcesService.hasSubmitterResource(
             data.challengeId,
@@ -607,15 +628,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (
-        operation === 'close' &&
-        isTopgearSubmissionPhase &&
-        isSchedulerInitiated
-      ) {
-        const handled = await this.handleTopgearSubmissionLate(
-          data,
-          phaseDetails,
-        );
+      if (operation === 'close' && isTopgearSubmissionPhase && isSchedulerInitiated) {
+        const handled = await this.handleTopgearSubmissionLate(data, phaseDetails);
         if (handled) {
           return;
         }
@@ -1047,11 +1061,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(
-        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing iterative review.`,
+        `[TOPGEAR] Keeping submission phase ${phase.id} open for challenge ${data.challengeId}; awaiting passing iterative review. No post-mortem will be created.`,
       );
-
-      // Ensure a Post-Mortem phase and pending review for the challenge reviewer
-      await this.ensureTopgearPostMortemReview(challenge, phase, data);
 
       return true;
     } catch (error) {
@@ -1061,6 +1072,40 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         err.stack,
       );
       return true;
+    }
+  }
+
+  private async deferTopgearRegistrationPhaseClosure(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    const key = this.buildRegistrationPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.registrationCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.registrationCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeRegistrationCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      this.logger.warn(
+        `[TOPGEAR][REGISTRATION] Deferred closing registration phase ${data.phaseId} for challenge ${data.challengeId}; awaiting passing iterative review. Retrying in ${Math.round(
+          delay / 60000,
+        )} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.registrationCloseRetryAttempts.delete(key);
+      this.logger.error(
+        `[TOPGEAR][REGISTRATION] Failed to reschedule registration closure for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
     }
   }
 

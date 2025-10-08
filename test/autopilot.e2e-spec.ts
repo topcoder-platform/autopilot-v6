@@ -1634,7 +1634,7 @@ describe('Autopilot Service (e2e)', () => {
       );
     });
 
-    it('keeps Topgear submission phase open when late and prepares creator post-mortem review', async () => {
+    it('keeps Topgear submission phase open when late and does not create post-mortem review', async () => {
       const challengeId = 'topgear-late-challenge';
       const submissionPhase = {
         id: 'topgear-submission-phase-id',
@@ -1673,11 +1673,6 @@ describe('Autopilot Service (e2e)', () => {
         topgearChallenge,
       );
       reviewServiceMockFns.getActiveSubmissionCount.mockResolvedValueOnce(0);
-      resourcesServiceMockFns.getResourceByMemberHandle.mockResolvedValueOnce({
-        id: 'creator-resource-id',
-        roleName: 'Copilot',
-      });
-      reviewServiceMockFns.createPendingReview.mockResolvedValueOnce(true);
 
       await schedulerService.advancePhase({
         projectId: topgearChallenge.projectId,
@@ -1690,13 +1685,7 @@ describe('Autopilot Service (e2e)', () => {
       });
 
       expect(mockChallengeApiService.advancePhase).not.toHaveBeenCalled();
-      expect(reviewServiceMockFns.createPendingReview).toHaveBeenCalledWith(
-        null,
-        'creator-resource-id',
-        postMortemPhase.id,
-        'topgear-post-mortem-scorecard',
-        challengeId,
-      );
+      expect(reviewServiceMockFns.createPendingReview).not.toHaveBeenCalled();
     });
 
     it('keeps Topgear submission phase open when scheduled via system-new-challenge operator', async () => {
