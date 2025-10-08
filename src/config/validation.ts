@@ -1,5 +1,5 @@
 import * as Joi from 'joi';
-import { CronExpression } from '@nestjs/schedule';
+// Note: CronExpression enum is not required for string-based defaults
 
 export const validationSchema = Joi.object({
   // App Configuration
@@ -118,5 +118,6 @@ export const validationSchema = Joi.object({
   BUS_API_ORIGINATOR: Joi.string().default('autopilot-service'),
 
   // Sync Service Configuration
-  SYNC_CRON_SCHEDULE: Joi.string().default(CronExpression.EVERY_5_MINUTES),
+  // Default sync cadence set to every 3 minutes
+  SYNC_CRON_SCHEDULE: Joi.string().default('*/3 * * * *'),
 });
