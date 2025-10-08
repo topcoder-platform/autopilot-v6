@@ -34,6 +34,7 @@ import {
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
 import { PhaseChangeNotificationService } from './phase-change-notification.service';
+import { getNormalizedStringArray } from '../utils/config.utils';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -97,13 +98,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly phaseChangeNotificationService: PhaseChangeNotificationService,
     private readonly configService: ConfigService,
   ) {
-    this.submitterRoles = this.getStringArray('autopilot.submitterRoles', [
-      'Submitter',
-    ]);
-    this.postMortemRoles = this.getStringArray('autopilot.postMortemRoles', [
-      'Reviewer',
-      'Copilot',
-    ]);
+    this.submitterRoles = getNormalizedStringArray(
+      this.configService.get('autopilot.submitterRoles'),
+      ['Submitter'],
+    );
+    this.postMortemRoles = getNormalizedStringArray(
+      this.configService.get('autopilot.postMortemRoles'),
+      ['Reviewer', 'Copilot'],
+    );
     this.postMortemScorecardId =
       this.configService.get<string | null>(
         'autopilot.postMortemScorecardId',
@@ -115,12 +117,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.postMortemDurationHours =
       this.configService.get<number>('autopilot.postMortemDurationHours') ?? 72;
     this.appealsPhaseNames = new Set(
-      this.getStringArray('autopilot.appealsPhaseNames', ['Appeals']),
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsPhaseNames'),
+        ['Appeals'],
+      ),
     );
     this.appealsResponsePhaseNames = new Set(
-      this.getStringArray('autopilot.appealsResponsePhaseNames', [
-        'Appeals Response',
-      ]),
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsResponsePhaseNames'),
+        ['Appeals Response'],
+      ),
     );
   }
 
@@ -995,9 +1001,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeFinalizationDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.finalizationRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.finalizationRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.finalizationRetryBaseDelayMs,
+      this.finalizationRetryMaxDelayMs,
+    );
   }
 
   private clearFinalizationRetry(challengeId: string): void {
@@ -1008,29 +1016,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.finalizationRetryTimers.delete(challengeId);
   }
 
-  private getStringArray(path: string, fallback: string[]): string[] {
-    const value = this.configService.get<unknown>(path);
-
-    if (Array.isArray(value)) {
-      const normalized = value
-        .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    if (typeof value === 'string' && value.length > 0) {
-      const normalized = value
-        .split(',')
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    return fallback;
+  // Centralized linear backoff helper used by various deferral strategies
+  private computeBackoffDelay(
+    attempt: number,
+    baseDelayMs: number,
+    maxDelayMs: number,
+  ): number {
+    const multiplier = Math.max(attempt, 1);
+    const delay = baseDelayMs * multiplier;
+    return Math.min(delay, maxDelayMs);
   }
 
   private isSchedulerInitiatedOperator(
@@ -1349,9 +1343,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeRegistrationCloseRetryDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.registrationCloseRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.registrationCloseRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.registrationCloseRetryBaseDelayMs,
+      this.registrationCloseRetryMaxDelayMs,
+    );
   }
 
   private buildRegistrationPhaseKey(
@@ -1448,9 +1444,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeScreeningCloseRetryDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.screeningCloseRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.screeningCloseRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.screeningCloseRetryBaseDelayMs,
+      this.screeningCloseRetryMaxDelayMs,
+    );
   }
 
   private buildScreeningPhaseKey(
@@ -1499,9 +1497,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeApprovalCloseRetryDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.approvalCloseRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.approvalCloseRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.approvalCloseRetryBaseDelayMs,
+      this.approvalCloseRetryMaxDelayMs,
+    );
   }
 
   private buildApprovalPhaseKey(
@@ -1550,9 +1550,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeAppealsCloseRetryDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.appealsCloseRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.appealsCloseRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.appealsCloseRetryBaseDelayMs,
+      this.appealsCloseRetryMaxDelayMs,
+    );
   }
 
   private buildAppealsPhaseKey(challengeId: string, phaseId: string): string {
@@ -1619,8 +1621,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private computeAppealsOpenRetryDelay(attempt: number): number {
-    const multiplier = Math.max(attempt, 1);
-    const delay = this.appealsOpenRetryBaseDelayMs * multiplier;
-    return Math.min(delay, this.appealsOpenRetryMaxDelayMs);
+    return this.computeBackoffDelay(
+      attempt,
+      this.appealsOpenRetryBaseDelayMs,
+      this.appealsOpenRetryMaxDelayMs,
+    );
   }
 }

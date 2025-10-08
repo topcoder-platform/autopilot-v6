@@ -13,6 +13,7 @@ import {
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
 import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+import { isActiveStatus } from '../utils/config.utils';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -145,7 +146,7 @@ export class PhaseScheduleManager {
       `Consumed phase transition event: ${JSON.stringify(message)}`,
     );
 
-    if (!this.isChallengeActive(message.projectStatus)) {
+    if (!isActiveStatus(message.projectStatus)) {
       this.logger.log(
         `Ignoring phase transition for challenge ${message.challengeId} with status ${message.projectStatus}; only ACTIVE challenges are processed.`,
       );
@@ -188,7 +189,7 @@ export class PhaseScheduleManager {
         challenge.id,
       );
 
-      if (!this.isChallengeActive(challengeDetails.status)) {
+      if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
           `Skipping challenge ${challenge.id} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -239,7 +240,7 @@ export class PhaseScheduleManager {
         message.id,
       );
 
-      if (!this.isChallengeActive(challengeDetails.status)) {
+      if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
           `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -476,7 +477,7 @@ export class PhaseScheduleManager {
     projectStatus: string,
     nextPhases: IPhase[],
   ): Promise<void> {
-    if (!this.isChallengeActive(projectStatus)) {
+    if (!isActiveStatus(projectStatus)) {
       this.logger.log(
         `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}), skipping phase chain processing.`,
       );
@@ -552,7 +553,7 @@ export class PhaseScheduleManager {
     projectStatus: string,
     phase: IPhase,
   ): Promise<boolean> {
-    if (!this.isChallengeActive(projectStatus)) {
+    if (!isActiveStatus(projectStatus)) {
       this.logger.log(
         `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}); skipping phase ${phase.name} (${phase.id}).`,
       );
@@ -633,7 +634,5 @@ export class PhaseScheduleManager {
     return true;
   }
 
-  private isChallengeActive(status?: string): boolean {
-    return (status ?? '').toUpperCase() === 'ACTIVE';
-  }
+  // isActiveStatus utility now centralizes active-status checks
 }

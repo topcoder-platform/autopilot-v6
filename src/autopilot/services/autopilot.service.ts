@@ -572,30 +572,7 @@ export class AutopilotService {
     }
   }
 
-  private getStringArray(path: string, fallback: string[]): string[] {
-    const value = this.configService.get<unknown>(path);
-
-    if (Array.isArray(value)) {
-      const normalized = value
-        .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    if (typeof value === 'string' && value.length > 0) {
-      const normalized = value
-        .split(',')
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-      if (normalized.length) {
-        return normalized;
-      }
-    }
-
-    return fallback;
-  }
+  
 
   async openAndScheduleNextPhases(
     challengeId: string,
