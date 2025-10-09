@@ -715,6 +715,8 @@ export class ChallengeApiService {
       incrementalPayment: reviewer.incrementalPayment ?? null,
       type: reviewer.type ?? null,
       aiWorkflowId: reviewer.aiWorkflowId ?? null,
+      shouldOpenOpportunity:
+        reviewer.shouldOpenOpportunity === false ? false : true,
     };
   }
 

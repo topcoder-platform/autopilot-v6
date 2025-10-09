@@ -33,6 +33,7 @@ export interface IChallengeReviewer {
   incrementalPayment: number | null;
   type: string | null;
   aiWorkflowId: string | null;
+  shouldOpenOpportunity: boolean;
 }
 
 export interface IChallengeWinner {
