@@ -510,7 +510,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
 
-      // Keep Topgear Task registration open until a passing iterative review.
+      // Registration close handling
       if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
         try {
           // Only defer scheduler-initiated closes for Topgear tasks
@@ -531,7 +531,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
           // Fall through to legacy behavior below on error
         }
-
+        // Do NOT defer closing Registration when there are no submitters.
+        // We will close Registration now and trigger the zero-registrations Post-Mortem workflow after close.
         try {
           const hasSubmitter = await this.resourcesService.hasSubmitterResource(
             data.challengeId,
@@ -539,8 +540,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
 
           if (!hasSubmitter) {
-            await this.deferRegistrationPhaseClosure(data);
-            return;
+            this.logger.log(
+              `[ZERO REGISTRATIONS] No registered submitters detected for challenge ${data.challengeId} at Registration close; will create Post-Mortem and cancel after completion.`,
+            );
           }
         } catch (error) {
           const err = error as Error;
@@ -548,8 +550,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             `[REGISTRATION] Failed to verify submitter resources for challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
-          await this.deferRegistrationPhaseClosure(data);
-          return;
+          // Proceed with close; post-close handler will attempt the zero-registrations flow.
         }
       }
 
@@ -810,6 +811,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 err.stack,
               );
             }
+          } else if (phaseName === REGISTRATION_PHASE_NAME) {
+            try {
+              const handled = await this.handleRegistrationPhaseClosed(data);
+              if (handled) {
+                skipPhaseChain = true;
+                skipFinalization = true;
+              }
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[ZERO REGISTRATIONS] Unable to process post-registration workflow for challenge ${data.challengeId}: ${err.message}`,
+                err.stack,
+              );
+            }
           } else if (phaseName === POST_MORTEM_PHASE_NAME) {
             try {
               await this.handlePostMortemPhaseClosed(data);
@@ -817,7 +832,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             } catch (error) {
               const err = error as Error;
               this.logger.error(
-                `[ZERO SUBMISSIONS] Failed to cancel challenge ${data.challengeId} after post-mortem closure: ${err.message}`,
+                `Failed to cancel challenge ${data.challengeId} after post-mortem closure: ${err.message}`,
                 err.stack,
               );
             }
@@ -1237,6 +1252,69 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async handleRegistrationPhaseClosed(
+    data: PhaseTransitionPayload,
+  ): Promise<boolean> {
+    try {
+      const hasSubmitter = await this.resourcesService.hasSubmitterResource(
+        data.challengeId,
+        this.submitterRoles,
+      );
+
+      if (hasSubmitter) {
+        // Nothing to do; proceed with normal chain.
+        return false;
+      }
+
+      this.logger.log(
+        `[ZERO REGISTRATIONS] No registered submitters found for challenge ${data.challengeId}; transitioning to Post-Mortem phase.`,
+      );
+
+      const postMortemPhase = await this.challengeApiService.createPostMortemPhase(
+        data.challengeId,
+        data.phaseId,
+        this.postMortemDurationHours,
+      );
+
+      await this.createPostMortemPendingReviewsForCopilot(
+        data.challengeId,
+        postMortemPhase.id,
+      );
+
+      if (!postMortemPhase.scheduledEndDate) {
+        this.logger.warn(
+          `[ZERO REGISTRATIONS] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${data.challengeId} without a scheduled end date. Manual intervention required to close the phase.`,
+        );
+        return true;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: data.projectId,
+        challengeId: data.challengeId,
+        phaseId: postMortemPhase.id,
+        phaseTypeName: postMortemPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+        projectStatus: data.projectStatus,
+        date: postMortemPhase.scheduledEndDate,
+      };
+
+      await this.schedulePhaseTransition(payload);
+      this.logger.log(
+        `[ZERO REGISTRATIONS] Scheduled Post-Mortem phase ${postMortemPhase.id} closure for challenge ${data.challengeId} at ${postMortemPhase.scheduledEndDate}.`,
+      );
+
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[ZERO REGISTRATIONS] Failed to prepare Post-Mortem workflow for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
   private async createPostMortemPendingReviews(
     challengeId: string,
     phaseId: string,
@@ -1297,17 +1375,92 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async createPostMortemPendingReviewsForCopilot(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<void> {
+    if (!this.postMortemScorecardId) {
+      this.logger.warn(
+        `[ZERO REGISTRATIONS] Post-mortem scorecard ID is not configured; skipping review creation for challenge ${challengeId}.`,
+      );
+      return;
+    }
+
+    try {
+      const copilots = await this.resourcesService.getResourcesByRoleNames(
+        challengeId,
+        ['Copilot'],
+      );
+
+      if (!copilots.length) {
+        this.logger.log(
+          `[ZERO REGISTRATIONS] No Copilot resource found on challenge ${challengeId}; skipping review creation.`,
+        );
+        return;
+      }
+
+      let createdCount = 0;
+      for (const resource of copilots) {
+        try {
+          const created = await this.reviewService.createPendingReview(
+            null,
+            resource.id,
+            phaseId,
+            this.postMortemScorecardId,
+            challengeId,
+          );
+
+          if (created) {
+            createdCount++;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[ZERO REGISTRATIONS] Failed to create post-mortem review for challenge ${challengeId}, resource ${resource.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
+      this.logger.log(
+        `[ZERO REGISTRATIONS] Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Copilot).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[ZERO REGISTRATIONS] Unable to prepare Copilot post-mortem reviewers for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
   private async handlePostMortemPhaseClosed(
     data: PhaseTransitionPayload,
   ): Promise<void> {
-    await this.challengeApiService.cancelChallenge(
-      data.challengeId,
-      ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
-    );
+    try {
+      const hasSubmitter = await this.resourcesService.hasSubmitterResource(
+        data.challengeId,
+        this.submitterRoles,
+      );
 
-    this.logger.log(
-      `[ZERO SUBMISSIONS] Marked challenge ${data.challengeId} as CANCELLED_ZERO_SUBMISSIONS after Post-Mortem completion.`,
-    );
+      const status = hasSubmitter
+        ? ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS
+        : ChallengeStatusEnum.CANCELLED_ZERO_REGISTRATIONS;
+
+      await this.challengeApiService.cancelChallenge(data.challengeId, status);
+
+      this.logger.log(
+        `${hasSubmitter ? '[ZERO SUBMISSIONS]' : '[ZERO REGISTRATIONS]'} Marked challenge ${data.challengeId} as ${status} after Post-Mortem completion.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to cancel challenge ${data.challengeId} after Post-Mortem completion: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
   }
 
   private async deferRegistrationPhaseClosure(

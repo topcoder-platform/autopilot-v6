@@ -583,16 +583,16 @@ export class PhaseScheduleManager {
       `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
 
-    if (REVIEW_PHASE_NAMES.has(phase.name)) {
-      try {
-        await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
-      } catch (error) {
-        const err = error as Error;
-        this.logger.error(
-          `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
-          err.stack,
-        );
-      }
+    // Create pending reviews for any review-related phases (Review, Screening, Approval).
+    // PhaseReviewService will ignore non review phases.
+    try {
+      await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
     }
 
     const updatedPhase =
