@@ -337,6 +337,63 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Returns checkpoint submission IDs that have a COMPLETED review for the provided screening scorecard
+   * with a final score greater than or equal to the scorecard's minimumPassingScore.
+   */
+  async getCheckpointPassedSubmissionIds(
+    challengeId: string,
+    screeningScorecardId: string,
+  ): Promise<string[]> {
+    if (!challengeId || !screeningScorecardId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      SELECT s."id"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."submissionId" = s."id"
+      INNER JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+        AND r."scorecardId" = ${screeningScorecardId}
+        AND UPPER((r."status")::text) = 'COMPLETED'
+        AND COALESCE(r."finalScore", 0) >= COALESCE(sc."minimumPassingScore", 50)
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = rows.map((r) => r.id).filter(Boolean);
+
+      void this.dbLogger.logAction('review.getCheckpointPassedSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardId,
+          submissionCount: submissionIds.length,
+        },
+      });
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getCheckpointPassedSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getExistingReviewPairs(
     phaseId: string,
     challengeId?: string,

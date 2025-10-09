@@ -214,9 +214,49 @@ export class PhaseReviewService {
         1,
       );
       submissionIds = winners.map((w) => w.submissionId);
-    } else if (phase.name === 'Checkpoint Review' || phase.name === 'Checkpoint Screening') {
+    } else if (phase.name === 'Checkpoint Screening') {
+      // For checkpoint screening, review all active checkpoint submissions
       submissionIds = await this.reviewService.getActiveCheckpointSubmissionIds(
         challengeId,
+      );
+    } else if (phase.name === 'Checkpoint Review') {
+      // For checkpoint review, only review submissions that PASSED checkpoint screening
+      // Find the screening phase template and its configured scorecard
+      const screeningPhase = (challenge.phases ?? []).find(
+        (p) => p.name === 'Checkpoint Screening',
+      );
+
+      if (!screeningPhase?.phaseId) {
+        this.logger.warn(
+          `Checkpoint Review opened, but no Checkpoint Screening phase found for challenge ${challengeId}; skipping review creation for phase ${phase.id}`,
+        );
+        return;
+      }
+
+      const screeningConfigs = getReviewerConfigsForPhase(
+        challenge.reviewers,
+        screeningPhase.phaseId,
+      ).filter((c) => Boolean(c.scorecardId));
+
+      // Unique screening scorecard(s) configured
+      const screeningScorecardId = Array.from(
+        new Set(
+          screeningConfigs
+            .map((c) => c.scorecardId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      )[0];
+
+      if (!screeningScorecardId) {
+        this.logger.warn(
+          `Checkpoint Review opened, but no screening scorecard configured for challenge ${challengeId}; skipping review creation for phase ${phase.id}`,
+        );
+        return;
+      }
+
+      submissionIds = await this.reviewService.getCheckpointPassedSubmissionIds(
+        challengeId,
+        screeningScorecardId,
       );
     } else {
       // Default to contest submissions for standard Review/Screening

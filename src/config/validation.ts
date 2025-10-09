@@ -72,6 +72,8 @@ export const validationSchema = Joi.object({
     .integer()
     .positive()
     .default(24),
+  // Optional default scorecard to use for First2Finish iterative reviews
+  ITERATIVE_REVIEW_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   APPEALS_PHASE_NAMES: Joi.string().default('Appeals'),
   APPEALS_RESPONSE_PHASE_NAMES: Joi.string().default('Appeals Response'),
   PHASE_NOTIFICATION_SENDGRID_TEMPLATE: Joi.string().optional(),

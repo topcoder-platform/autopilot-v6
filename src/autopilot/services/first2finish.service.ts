@@ -624,12 +624,31 @@ export class First2FinishService {
     challenge: IChallenge,
     phase: IPhase,
   ): string | null {
-    return selectScorecardId(
+    // Prefer configured scorecard(s) on the challenge for the Iterative Review phase
+    const selected = selectScorecardId(
       challenge.reviewers ?? [],
       () => null,
       () => null,
       phase.phaseId,
     );
+
+    if (selected) {
+      return selected;
+    }
+
+    // Fallback: use a default iterative review scorecard if provided via config
+    const fallback = this.configService.get<string | null>(
+      'autopilot.iterativeReviewScorecardId',
+    );
+
+    if (fallback && typeof fallback === 'string' && fallback.trim().length) {
+      this.logger.warn(
+        `Using fallback iterative review scorecard ${fallback} for challenge ${challenge.id} (no phase-specific scorecard configured).`,
+      );
+      return fallback.trim();
+    }
+
+    return null;
   }
 
   private getLatestIterativePhase(challenge: IChallenge): IPhase | null {
