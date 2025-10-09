@@ -142,6 +142,54 @@ export class AutopilotService {
         err.stack,
       );
     }
+
+    // Ensure screening/review records exist when a submission arrives during an open phase
+    try {
+      const challenge = await this.challengeApiService.getChallengeById(
+        challengeId,
+      );
+
+      if (!isActiveStatus(challenge.status)) {
+        return;
+      }
+
+      const submissionType = (payload.type || '').toString().trim().toUpperCase();
+
+      // Map submission types to relevant open phases to sync
+      const targetPhaseNames = new Set<string>();
+      if (submissionType === 'CHECKPOINT_SUBMISSION') {
+        targetPhaseNames.add('Checkpoint Screening');
+      } else if (submissionType === 'CONTEST_SUBMISSION' || !submissionType) {
+        // Fallback: standard contest submission or unspecified type
+        targetPhaseNames.add('Screening');
+      }
+
+      if (!targetPhaseNames.size) {
+        return;
+      }
+
+      const openTargets = (challenge.phases ?? []).filter(
+        (p) => p.isOpen && (SCREENING_PHASE_NAMES.has(p.name) || REVIEW_PHASE_NAMES.has(p.name)) && targetPhaseNames.has(p.name),
+      );
+
+      for (const phase of openTargets) {
+        try {
+          await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to synchronize pending reviews for challenge ${challengeId}, phase ${phase.id} on submission ${submissionId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to synchronize review records after submission for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   async handleResourceCreated(payload: ResourceEventPayload): Promise<void> {
