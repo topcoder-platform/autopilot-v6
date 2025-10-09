@@ -52,8 +52,9 @@ export class FinanceApiService {
       return false;
     }
 
+    let token: string | undefined;
     try {
-      const token = await this.auth0Service.getAccessToken();
+      token = await this.auth0Service.getAccessToken();
       const response = await firstValueFrom(
         this.httpService.post(url, undefined, {
           headers: {
@@ -69,7 +70,7 @@ export class FinanceApiService {
         challengeId,
         status: 'SUCCESS',
         source: FinanceApiService.name,
-        details: { url, status },
+        details: { url, status, token },
       });
       this.logger.log(
         `Triggered finance payments for challenge ${challengeId} (status ${status}).`,
@@ -89,10 +90,9 @@ export class FinanceApiService {
         challengeId,
         status: 'ERROR',
         source: FinanceApiService.name,
-        details: { url, error: message, status, response: data },
+        details: { url, error: message, status, response: data, token },
       });
       return false;
     }
   }
 }
-

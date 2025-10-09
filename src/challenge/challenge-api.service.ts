@@ -361,6 +361,9 @@ export class ChallengeApiService {
       const scheduledStartDate = targetPhase.scheduledStartDate
         ? new Date(targetPhase.scheduledStartDate)
         : null;
+      const scheduledEndDate = targetPhase.scheduledEndDate
+        ? new Date(targetPhase.scheduledEndDate)
+        : null;
       const durationSeconds = this.computePhaseDurationSeconds(targetPhase);
       const isAppealsPhase = this.isAppealsPhaseName(targetPhase.name);
       const isOpeningLateAppeals =
@@ -374,11 +377,20 @@ export class ChallengeApiService {
         durationSeconds !== null &&
         scheduledStartDate !== null &&
         scheduledStartDate.getTime() - now.getTime() > 1000;
+      const isOpeningAfterScheduledEnd =
+        operation === 'open' &&
+        durationSeconds !== null &&
+        scheduledEndDate !== null &&
+        now.getTime() - scheduledEndDate.getTime() > 1000;
 
       let shouldAdjustSchedule = false;
       let adjustedEndDate: Date | null = null;
 
-      if (isOpeningEarly || isOpeningLateAppeals) {
+      if (
+        isOpeningEarly ||
+        isOpeningLateAppeals ||
+        isOpeningAfterScheduledEnd
+      ) {
         shouldAdjustSchedule = true;
         adjustedEndDate = new Date(now.getTime() + durationSeconds! * 1000);
       }
@@ -386,6 +398,12 @@ export class ChallengeApiService {
       if (isOpeningLateAppeals && adjustedEndDate) {
         this.logger.log(
           `Extending appeals phase ${targetPhase.id} to preserve duration. New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
+
+      if (isOpeningAfterScheduledEnd && adjustedEndDate && !isAppealsPhase) {
+        this.logger.log(
+          `Extending phase ${targetPhase.id} (${targetPhase.name}) opened after its scheduled end. New end: ${adjustedEndDate.toISOString()}.`,
         );
       }
 
