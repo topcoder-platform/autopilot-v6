@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
@@ -19,6 +20,7 @@ export class ChallengeCompletionService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly financeApiService: FinanceApiService,
+    private readonly configService: ConfigService,
   ) {}
 
   private async ensureCancelledPostMortem(
@@ -29,13 +31,21 @@ export class ChallengeCompletionService {
         await this.challengeApiService.getChallengeById(challengeId);
 
       // Resolve scorecard for post-mortem: prefer env var; fallback to name
-      let scorecardId: string | null = null;
-      try {
-        scorecardId = await this.reviewService.getScorecardIdByName(
-          'Topcoder Post Mortem',
-        );
-      } catch (_) {
-        // Already logged inside review service; leave as null
+      const configuredScorecardId =
+        this.configService.get<string | null>(
+          'autopilot.postMortemScorecardId',
+        ) ?? null;
+
+      let scorecardId: string | null = configuredScorecardId;
+
+      if (!scorecardId) {
+        try {
+          scorecardId = await this.reviewService.getScorecardIdByName(
+            'Topcoder Post Mortem',
+          );
+        } catch (_) {
+          // Already logged inside review service; leave as null
+        }
       }
 
       if (!scorecardId) {

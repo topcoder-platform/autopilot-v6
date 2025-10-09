@@ -143,7 +143,7 @@ export class ReviewService {
           AND s."memberId" IS NOT NULL
           AND (
             s."type" IS NULL
-            OR upper(s."type") = 'CONTEST_SUBMISSION'
+            OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
           )
         ORDER BY rs."aggregateScore" DESC, s."submittedDate" ASC, s."id" ASC
         ${limitClause}
@@ -578,6 +578,7 @@ export class ReviewService {
             OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
           )
       )
+      RETURNING "id"
     `;
 
     try {
@@ -588,14 +589,47 @@ export class ReviewService {
         scorecardId,
       );
 
-      const created = await this.prisma.$transaction(async (tx) => {
-        await tx.$executeRaw(Prisma.sql`
-          SELECT pg_advisory_xact_lock(${lockId})
-        `);
+      const { created, reviewId, pendingReviewIds } =
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw(Prisma.sql`
+            SELECT pg_advisory_xact_lock(${lockId})
+          `);
 
-        const rowsInserted = await tx.$executeRaw(insert);
-        return rowsInserted > 0;
-      });
+          const insertedReviews = await tx.$queryRaw<
+            Array<{ id: string }>
+          >(insert);
+
+          if (insertedReviews.length > 0) {
+            return {
+              created: true,
+              reviewId: insertedReviews[0]?.id ?? null,
+              pendingReviewIds: insertedReviews.map((row) => row.id),
+            };
+          }
+
+          const existingPendingReviews = await tx.$queryRaw<
+            Array<{ id: string }>
+          >(Prisma.sql`
+            SELECT existing."id"
+            FROM ${ReviewService.REVIEW_TABLE} existing
+            WHERE existing."resourceId" = ${resourceId}
+              AND existing."phaseId" = ${phaseId}
+              AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
+              AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
+              AND (
+                existing."status" IS NULL
+                OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+              )
+            ORDER BY existing."createdAt" DESC, existing."id" DESC
+            LIMIT 10
+          `);
+
+          return {
+            created: false,
+            reviewId: existingPendingReviews[0]?.id ?? null,
+            pendingReviewIds: existingPendingReviews.map((row) => row.id),
+          };
+        });
 
       void this.dbLogger.logAction('review.createPendingReview', {
         challengeId,
@@ -605,7 +639,10 @@ export class ReviewService {
           resourceId,
           submissionId,
           phaseId,
+          scorecardId,
           created,
+          reviewId,
+          pendingReviewIds,
         },
       });
 
@@ -620,7 +657,9 @@ export class ReviewService {
           resourceId,
           submissionId,
           phaseId,
+          scorecardId,
           error: err.message,
+          errorStack: err.stack ?? null,
         },
       });
       throw err;

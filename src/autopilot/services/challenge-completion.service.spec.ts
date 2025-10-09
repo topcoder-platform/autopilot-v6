@@ -8,21 +8,29 @@ import type {
   IChallenge,
   IChallengePrizeSet,
 } from '../../challenge/interfaces/challenge.interface';
+import type { ConfigService } from '@nestjs/config';
 
 describe('ChallengeCompletionService', () => {
   let challengeApiService: {
     getChallengeById: jest.MockedFunction<ChallengeApiService['getChallengeById']>;
     cancelChallenge: jest.MockedFunction<ChallengeApiService['cancelChallenge']>;
     completeChallenge: jest.MockedFunction<ChallengeApiService['completeChallenge']>;
+    createPostMortemPhasePreserving: jest.MockedFunction<ChallengeApiService['createPostMortemPhasePreserving']>;
   };
   let reviewService: {
     generateReviewSummaries: jest.MockedFunction<ReviewService['generateReviewSummaries']>;
+    getScorecardIdByName: jest.MockedFunction<ReviewService['getScorecardIdByName']>;
+    createPendingReview: jest.MockedFunction<ReviewService['createPendingReview']>;
   };
   let resourcesService: {
     getMemberHandleMap: jest.MockedFunction<ResourcesService['getMemberHandleMap']>;
+    getResourcesByRoleNames: jest.MockedFunction<ResourcesService['getResourcesByRoleNames']>;
   };
   let financeApiService: {
     generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
+  };
+  let configService: {
+    get: jest.MockedFunction<ConfigService['get']>;
   };
   let service: ChallengeCompletionService;
 
@@ -124,10 +132,28 @@ describe('ChallengeCompletionService', () => {
       getChallengeById: jest.fn(),
       cancelChallenge: jest.fn().mockResolvedValue(undefined),
       completeChallenge: jest.fn().mockResolvedValue(undefined),
+      createPostMortemPhasePreserving: jest
+        .fn()
+        .mockResolvedValue({
+          id: 'post-mortem-phase-id',
+          phaseId: 'post-mortem-template',
+          name: 'Post-Mortem',
+          description: null,
+          isOpen: true,
+          duration: 0,
+          scheduledStartDate: baseTimestamp,
+          scheduledEndDate: baseTimestamp,
+          actualStartDate: baseTimestamp,
+          actualEndDate: null,
+          predecessor: null,
+          constraints: [],
+        }),
     };
 
     reviewService = {
       generateReviewSummaries: jest.fn().mockResolvedValue(summaries),
+      getScorecardIdByName: jest.fn().mockResolvedValue(null),
+      createPendingReview: jest.fn().mockResolvedValue(true),
     };
 
     resourcesService = {
@@ -140,6 +166,7 @@ describe('ChallengeCompletionService', () => {
             ['103', 'user103'],
           ]),
         ),
+      getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
     };
 
     financeApiService = {
@@ -148,11 +175,16 @@ describe('ChallengeCompletionService', () => {
       generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
     };
 
+    configService = {
+      get: jest.fn().mockReturnValue(null),
+    };
+
     service = new ChallengeCompletionService(
       challengeApiService as unknown as ChallengeApiService,
       reviewService as unknown as ReviewService,
       resourcesService as unknown as ResourcesService,
       financeApiService as unknown as FinanceApiService,
+      configService as unknown as ConfigService,
     );
   });
 
@@ -212,6 +244,95 @@ describe('ChallengeCompletionService', () => {
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
     expect(winners).toHaveLength(summaries.length);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
+  });
+
+  it('creates post-mortem reviews for copilots when zero submissions trigger cancellation', async () => {
+    const challenge = buildChallenge({
+      numOfSubmissions: 0,
+      phases: [
+        {
+          id: 'submission-phase-id',
+          phaseId: 'submission-template',
+          name: 'Submission',
+          description: null,
+          isOpen: false,
+          duration: 0,
+          scheduledStartDate: baseTimestamp,
+          scheduledEndDate: baseTimestamp,
+          actualStartDate: baseTimestamp,
+          actualEndDate: baseTimestamp,
+          predecessor: null,
+          constraints: [],
+        },
+      ],
+    });
+
+    const postMortemPhase = {
+      id: 'post-mortem-phase-id',
+      phaseId: 'post-mortem-template',
+      name: 'Post-Mortem',
+      description: null,
+      isOpen: true,
+      duration: 0,
+      scheduledStartDate: baseTimestamp,
+      scheduledEndDate: baseTimestamp,
+      actualStartDate: baseTimestamp,
+      actualEndDate: null,
+      predecessor: 'submission-template',
+      constraints: [],
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    challengeApiService.createPostMortemPhasePreserving.mockResolvedValueOnce(
+      postMortemPhase,
+    );
+
+    reviewService.generateReviewSummaries.mockResolvedValueOnce([]);
+    reviewService.getScorecardIdByName.mockResolvedValueOnce('scorecard-id');
+
+    resourcesService.getResourcesByRoleNames.mockResolvedValueOnce([
+      {
+        id: 'copilot-resource-1',
+        memberId: '201',
+        memberHandle: 'copilot1',
+        roleName: 'Copilot',
+      },
+      {
+        id: 'copilot-resource-2',
+        memberId: '202',
+        memberHandle: 'copilot2',
+        roleName: 'Copilot',
+      },
+    ]);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+    );
+    expect(challengeApiService.createPostMortemPhasePreserving).toHaveBeenCalledWith(
+      challenge.id,
+      'submission-phase-id',
+      expect.any(Number),
+      true,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(2);
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'copilot-resource-1',
+      postMortemPhase.id,
+      'scorecard-id',
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'copilot-resource-2',
+      postMortemPhase.id,
+      'scorecard-id',
+      challenge.id,
+    );
   });
 
   it('triggers finance payments on CANCELLED_FAILED_REVIEW', async () => {
