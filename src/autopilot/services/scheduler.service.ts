@@ -26,6 +26,7 @@ import {
   APPROVAL_PHASE_NAMES,
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
+  getRoleNamesForPhase,
 } from '../constants/review.constants';
 import { ResourcesService } from '../../resources/resources.service';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
@@ -35,6 +36,10 @@ import {
 } from '../../challenge/interfaces/challenge.interface';
 import { PhaseChangeNotificationService } from './phase-change-notification.service';
 import { getNormalizedStringArray } from '../utils/config.utils';
+import {
+  getMemberReviewerConfigs,
+  getReviewerConfigsForPhase,
+} from '../utils/reviewer.utils';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -556,6 +561,22 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       if (operation === 'close' && isReviewPhase) {
         try {
+          const coverage = await this.verifyReviewerCoverage(
+            data.challengeId,
+            data.phaseId,
+            phaseName,
+            true,
+          );
+
+          if (!coverage.satisfied) {
+            await this.deferReviewPhaseClosure(
+              data,
+              undefined,
+              `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
+            );
+            return;
+          }
+
           const pendingReviews = await this.reviewService.getPendingReviewCount(
             data.phaseId,
             data.challengeId,
@@ -568,11 +589,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         } catch (error) {
           const err = error as Error;
           this.logger.error(
-            `[REVIEW LATE] Unable to verify pending reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            `[REVIEW LATE] Unable to verify review readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
 
-          await this.deferReviewPhaseClosure(data);
+          await this.deferReviewPhaseClosure(
+            data,
+            undefined,
+            'unable to verify review readiness',
+          );
           return;
         }
       }
@@ -580,6 +605,22 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // Block closing Screening until all screening scorecards are submitted
       if (operation === 'close' && isScreeningPhase) {
         try {
+          const coverage = await this.verifyReviewerCoverage(
+            data.challengeId,
+            data.phaseId,
+            phaseName,
+            false,
+          );
+
+          if (!coverage.satisfied) {
+            await this.deferScreeningPhaseClosure(
+              data,
+              undefined,
+              `insufficient screening coverage (${coverage.actual}/${coverage.expected} assigned)`,
+            );
+            return;
+          }
+
           const pendingScreening = await this.reviewService.getPendingReviewCount(
             data.phaseId,
             data.challengeId,
@@ -592,11 +633,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         } catch (error) {
           const err = error as Error;
           this.logger.error(
-            `[SCREENING LATE] Unable to verify pending screening reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            `[SCREENING LATE] Unable to verify screening readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
 
-          await this.deferScreeningPhaseClosure(data);
+          await this.deferScreeningPhaseClosure(
+            data,
+            undefined,
+            'unable to verify screening readiness',
+          );
           return;
         }
       }
@@ -604,6 +649,22 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // Block closing Approval until all approval scorecards are submitted
       if (operation === 'close' && isApprovalPhase) {
         try {
+          const coverage = await this.verifyReviewerCoverage(
+            data.challengeId,
+            data.phaseId,
+            phaseName,
+            true,
+          );
+
+          if (!coverage.satisfied) {
+            await this.deferApprovalPhaseClosure(
+              data,
+              undefined,
+              `insufficient approval coverage (${coverage.actual}/${coverage.expected} assigned)`,
+            );
+            return;
+          }
+
           const pendingApproval = await this.reviewService.getPendingReviewCount(
             data.phaseId,
             data.challengeId,
@@ -620,17 +681,25 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               data.phaseId,
             );
           if (completedCount === 0) {
-            await this.deferApprovalPhaseClosure(data, 0);
+            await this.deferApprovalPhaseClosure(
+              data,
+              0,
+              'no completed approval reviews detected',
+            );
             return;
           }
         } catch (error) {
           const err = error as Error;
           this.logger.error(
-            `[APPROVAL LATE] Unable to verify pending approval reviews for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            `[APPROVAL LATE] Unable to verify approval readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
 
-          await this.deferApprovalPhaseClosure(data);
+          await this.deferApprovalPhaseClosure(
+            data,
+            undefined,
+            'unable to verify approval readiness',
+          );
           return;
         }
       }
@@ -1510,9 +1579,71 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return `${challengeId}|${phaseId}|registration-close`;
   }
 
+  private async verifyReviewerCoverage(
+    challengeId: string,
+    phaseId: string,
+    phaseName: string,
+    useMemberConfigs: boolean,
+  ): Promise<{ satisfied: boolean; expected: number; actual: number }> {
+    try {
+      const challenge = await this.challengeApiService.getChallengeById(
+        challengeId,
+      );
+
+      const phase = challenge?.phases?.find((p) => p.id === phaseId);
+
+      if (!phase?.phaseId) {
+        this.logger.warn(
+          `[REVIEW COVERAGE] Unable to locate phase ${phaseId} in challenge ${challengeId} when validating reviewer coverage.`,
+        );
+        return { satisfied: true, expected: 0, actual: 0 };
+      }
+
+      const reviewerConfigs = useMemberConfigs
+        ? getMemberReviewerConfigs(challenge.reviewers, phase.phaseId)
+        : getReviewerConfigsForPhase(challenge.reviewers, phase.phaseId);
+
+      const expected = reviewerConfigs.reduce<number>((total, config) => {
+        const count = Math.max(config.memberReviewerCount ?? 1, 0);
+        return total + count;
+      }, 0);
+
+      if (expected <= 0) {
+        return { satisfied: true, expected, actual: 0 };
+      }
+
+      const roleNames =
+        phaseName === POST_MORTEM_PHASE_NAME && this.postMortemRoles.length
+          ? this.postMortemRoles
+          : getRoleNamesForPhase(phaseName);
+
+      const effectiveRoles = roleNames.length ? roleNames : ['Reviewer'];
+
+      const reviewers =
+        await this.resourcesService.getReviewerResources(
+          challengeId,
+          effectiveRoles,
+        );
+
+      return {
+        satisfied: reviewers.length >= expected,
+        expected,
+        actual: reviewers.length,
+      };
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[REVIEW COVERAGE] Failed to verify reviewer coverage for challenge ${challengeId}, phase ${phaseId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
   private async deferReviewPhaseClosure(
     data: PhaseTransitionPayload,
     pendingCount?: number,
+    reason?: string,
   ): Promise<void> {
     const key = this.buildReviewPhaseKey(data.challengeId, data.phaseId);
     const attempt = (this.reviewCloseRetryAttempts.get(key) ?? 0) + 1;
@@ -1534,8 +1665,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           ? pendingCount
           : 'unknown';
 
+      const reasonMessage =
+        reason ?? `${pendingDescription} incomplete review(s) detected`;
+
       this.logger.warn(
-        `[REVIEW LATE] Deferred closing review phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+        `[REVIEW LATE] Deferred closing review phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
       );
     } catch (error) {
       const err = error as Error;
@@ -1561,6 +1695,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private async deferScreeningPhaseClosure(
     data: PhaseTransitionPayload,
     pendingCount?: number,
+    reason?: string,
   ): Promise<void> {
     const key = this.buildScreeningPhaseKey(data.challengeId, data.phaseId);
     const attempt = (this.screeningCloseRetryAttempts.get(key) ?? 0) + 1;
@@ -1582,8 +1717,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           ? pendingCount
           : 'unknown';
 
+      const reasonMessage =
+        reason ?? `${pendingDescription} incomplete screening review(s) detected`;
+
       this.logger.warn(
-        `[SCREENING LATE] Deferred closing screening phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete screening review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+        `[SCREENING LATE] Deferred closing screening phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
       );
     } catch (error) {
       const err = error as Error;
@@ -1614,6 +1752,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private async deferApprovalPhaseClosure(
     data: PhaseTransitionPayload,
     pendingCount?: number,
+    reason?: string,
   ): Promise<void> {
     const key = this.buildApprovalPhaseKey(data.challengeId, data.phaseId);
     const attempt = (this.approvalCloseRetryAttempts.get(key) ?? 0) + 1;
@@ -1635,8 +1774,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           ? pendingCount
           : 'unknown';
 
+      const reasonMessage =
+        reason ?? `${pendingDescription} incomplete approval review(s) detected`;
+
       this.logger.warn(
-        `[APPROVAL LATE] Deferred closing approval phase ${data.phaseId} for challenge ${data.challengeId}; ${pendingDescription} incomplete approval review(s) detected. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+        `[APPROVAL LATE] Deferred closing approval phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
       );
     } catch (error) {
       const err = error as Error;
