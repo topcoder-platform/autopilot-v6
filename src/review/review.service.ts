@@ -149,47 +149,16 @@ export class ReviewService {
         ${limitClause}
       `);
 
-      if (!rows.length) {
-        void this.dbLogger.logAction('review.getTopFinalReviewScores', {
-          challengeId,
-          status: 'SUCCESS',
-          source: ReviewService.name,
-          details: { limit, rowsExamined: 0, winnersCount: 0 },
-        });
-        return [];
-      }
+      const winnersFromSummations =
+        this.selectUniqueMemberScoresFromSummations(rows, limit);
 
-      const seenMembers = new Set<string>();
-      const winners: Array<{
-        memberId: string;
-        submissionId: string;
-        aggregateScore: number;
-      }> = [];
+      let winners = winnersFromSummations;
+      let dataSource: 'reviewSummation' | 'reviewSummaries' = 'reviewSummation';
 
-      for (const row of rows) {
-        const memberId = row.memberId?.trim();
-        if (!memberId || seenMembers.has(memberId)) {
-          continue;
-        }
-
-        const aggregateScore =
-          typeof row.aggregateScore === 'string'
-            ? Number(row.aggregateScore)
-            : (row.aggregateScore ?? 0);
-
-        if (Number.isNaN(aggregateScore)) {
-          continue;
-        }
-
-        winners.push({
-          memberId,
-          submissionId: row.submissionId,
-          aggregateScore,
-        });
-        seenMembers.add(memberId);
-
-        if (winners.length >= limit) {
-          break;
+      if (!winners.length) {
+        winners = await this.deriveTopScoresFromSummaries(challengeId, limit);
+        if (winners.length) {
+          dataSource = 'reviewSummaries';
         }
       }
 
@@ -201,6 +170,7 @@ export class ReviewService {
           limit,
           rowsExamined: rows.length,
           winnersCount: winners.length,
+          dataSource,
         },
       });
 
@@ -215,6 +185,106 @@ export class ReviewService {
       });
       throw err;
     }
+  }
+
+  private selectUniqueMemberScoresFromSummations(
+    rows: Array<{
+      memberId: string | null;
+      submissionId: string;
+      aggregateScore: number | string | null;
+    }>,
+    limit: number,
+  ): Array<{ memberId: string; submissionId: string; aggregateScore: number }> {
+    const winners: Array<{
+      memberId: string;
+      submissionId: string;
+      aggregateScore: number;
+    }> = [];
+    const seenMembers = new Set<string>();
+
+    for (const row of rows) {
+      const memberId = row.memberId?.trim();
+      if (!memberId || seenMembers.has(memberId)) {
+        continue;
+      }
+
+      const aggregateScore =
+        typeof row.aggregateScore === 'string'
+          ? Number(row.aggregateScore)
+          : (row.aggregateScore ?? 0);
+
+      if (Number.isNaN(aggregateScore)) {
+        continue;
+      }
+
+      winners.push({
+        memberId,
+        submissionId: row.submissionId,
+        aggregateScore,
+      });
+      seenMembers.add(memberId);
+
+      if (winners.length >= limit) {
+        break;
+      }
+    }
+
+    return winners;
+  }
+
+  private async deriveTopScoresFromSummaries(
+    challengeId: string,
+    limit: number,
+  ): Promise<
+    Array<{ memberId: string; submissionId: string; aggregateScore: number }>
+  > {
+    const summaries = await this.generateReviewSummaries(challengeId);
+    if (!summaries.length) {
+      return [];
+    }
+
+    const seenMembers = new Set<string>();
+    const sortedSummaries = summaries
+      .filter((summary) => summary.isPassing)
+      .sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) {
+          return b.aggregateScore - a.aggregateScore;
+        }
+
+        const timeA = a.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+        const timeB = b.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+        if (timeA !== timeB) {
+          return timeA - timeB;
+        }
+
+        return a.submissionId.localeCompare(b.submissionId);
+      });
+
+    const winners: Array<{
+      memberId: string;
+      submissionId: string;
+      aggregateScore: number;
+    }> = [];
+
+    for (const summary of sortedSummaries) {
+      const memberId = summary.memberId?.trim();
+      if (!memberId || seenMembers.has(memberId)) {
+        continue;
+      }
+
+      winners.push({
+        memberId,
+        submissionId: summary.submissionId,
+        aggregateScore: summary.aggregateScore,
+      });
+      seenMembers.add(memberId);
+
+      if (winners.length >= limit) {
+        break;
+      }
+    }
+
+    return winners;
   }
 
   async getActiveSubmissionIds(challengeId: string): Promise<string[]> {
