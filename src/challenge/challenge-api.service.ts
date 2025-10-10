@@ -383,16 +383,36 @@ export class ChallengeApiService {
         scheduledEndDate !== null &&
         now.getTime() - scheduledEndDate.getTime() > 1000;
 
+      const minimumEndTime =
+        durationSeconds !== null
+          ? now.getTime() + durationSeconds * 1000
+          : null;
+      const openedLate =
+        operation === 'open' &&
+        scheduledStartDate !== null &&
+        now.getTime() - scheduledStartDate.getTime() > 1000;
+      const hasInsufficientRemainingDuration =
+        openedLate &&
+        minimumEndTime !== null &&
+        (scheduledEndDate === null ||
+          scheduledEndDate.getTime() < minimumEndTime);
+
       let shouldAdjustSchedule = false;
       let adjustedEndDate: Date | null = null;
 
       if (
-        isOpeningEarly ||
-        isOpeningLateAppeals ||
-        isOpeningAfterScheduledEnd
+        minimumEndTime !== null &&
+        (isOpeningEarly || isOpeningLateAppeals || isOpeningAfterScheduledEnd)
       ) {
         shouldAdjustSchedule = true;
-        adjustedEndDate = new Date(now.getTime() + durationSeconds! * 1000);
+        adjustedEndDate = new Date(minimumEndTime);
+      }
+
+      if (minimumEndTime !== null && hasInsufficientRemainingDuration) {
+        shouldAdjustSchedule = true;
+        if (!adjustedEndDate || adjustedEndDate.getTime() < minimumEndTime) {
+          adjustedEndDate = new Date(minimumEndTime);
+        }
       }
 
       if (isOpeningLateAppeals && adjustedEndDate) {
@@ -404,6 +424,17 @@ export class ChallengeApiService {
       if (isOpeningAfterScheduledEnd && adjustedEndDate && !isAppealsPhase) {
         this.logger.log(
           `Extending phase ${targetPhase.id} (${targetPhase.name}) opened after its scheduled end. New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
+
+      if (
+        hasInsufficientRemainingDuration &&
+        adjustedEndDate &&
+        !isOpeningLateAppeals &&
+        !isOpeningAfterScheduledEnd
+      ) {
+        this.logger.log(
+          `Extending phase ${targetPhase.id} (${targetPhase.name}) opened late to preserve configured duration (${durationSeconds}s). New end: ${adjustedEndDate.toISOString()}.`,
         );
       }
 

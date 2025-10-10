@@ -236,6 +236,87 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       }),
     });
   });
+
+  it('extends a non-appeals phase opened late when remaining time is shorter than the configured duration', async () => {
+    const lateNow = new Date('2025-09-27T10:00:00.000Z');
+    jest.setSystemTime(lateNow);
+
+    const submissionPhase = {
+      id: 'phase-submission',
+      phaseId: 'template-submission',
+      name: 'Submission',
+      description: null,
+      isOpen: false,
+      predecessor: null,
+      duration: 7200,
+      scheduledStartDate: new Date('2025-09-27T06:00:00.000Z'),
+      scheduledEndDate: new Date('2025-09-27T10:05:00.000Z'),
+      actualStartDate: null,
+      actualEndDate: null,
+      constraints: [],
+      createdAt: lateNow,
+      createdBy: 'tester',
+      updatedAt: lateNow,
+      updatedBy: 'tester',
+    };
+
+    const challengeRecord = {
+      id: 'challenge-late-phase',
+      name: 'Late Phase Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 789,
+      typeId: 'type-late',
+      trackId: 'track-late',
+      timelineTemplateId: 'timeline-late',
+      currentPhaseNames: [],
+      tags: [],
+      groups: [],
+      submissionStartDate: lateNow,
+      submissionEndDate: lateNow,
+      registrationStartDate: lateNow,
+      registrationEndDate: lateNow,
+      startDate: lateNow,
+      endDate: null,
+      legacyId: null,
+      status: ChallengeStatusEnum.ACTIVE,
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: [],
+      phases: [submissionPhase],
+      reviewers: [],
+      winners: [],
+      track: { name: 'DEVELOP' },
+      type: { name: 'Standard' },
+      legacyRecord: null,
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      overview: {},
+      numOfSubmissions: 0,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+      createdAt: lateNow,
+    };
+
+    challengeFindUnique
+      .mockResolvedValueOnce(challengeRecord as any)
+      .mockResolvedValueOnce(challengeRecord as any);
+
+    await service.advancePhase('challenge-late-phase', submissionPhase.id, 'open');
+
+    expect(challengePhaseUpdate).toHaveBeenCalledWith({
+      where: { id: submissionPhase.id },
+      data: expect.objectContaining({
+        scheduledStartDate: lateNow,
+        scheduledEndDate: new Date(lateNow.getTime() + submissionPhase.duration * 1000),
+        duration: submissionPhase.duration,
+      }),
+    });
+  });
 });
 
 describe('ChallengeApiService - end date handling', () => {
