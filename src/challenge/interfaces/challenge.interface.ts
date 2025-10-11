@@ -80,7 +80,7 @@ export interface IChallenge {
   status: string;
   createdBy: string;
   updatedBy: string;
-  metadata: any[];
+  metadata: Record<string, string>;
   phases: IPhase[];
   reviewers: IChallengeReviewer[];
   winners: IChallengeWinner[];

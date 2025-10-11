@@ -74,7 +74,7 @@ const buildChallenge = (overrides: Partial<IChallenge> = {}): IChallenge => ({
   status: 'ACTIVE',
   createdBy: 'tester',
   updatedBy: 'tester',
-  metadata: [],
+  metadata: {},
   phases: [],
   reviewers: [],
   winners: [],

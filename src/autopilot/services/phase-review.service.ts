@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
 import { ReviewService } from '../../review/review.service';
+import type { ActiveContestSubmission } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import {
   getRoleNamesForPhase,
@@ -39,6 +41,8 @@ export class PhaseReviewService {
       );
       return;
     }
+
+    const hasSubmissionLimit = this.challengeHasSubmissionLimit(challenge);
 
     const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
     const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
@@ -259,9 +263,33 @@ export class PhaseReviewService {
         screeningScorecardId,
       );
     } else {
-      // Default to contest submissions for standard Review/Screening
-      submissionIds = await this.reviewService.getActiveContestSubmissionIds(
-        challengeId,
+      const activeSubmissions =
+        await this.reviewService.getActiveContestSubmissions(challengeId);
+
+      let filteredSubmissions: ActiveContestSubmission[];
+      if (hasSubmissionLimit) {
+        filteredSubmissions = activeSubmissions;
+      } else {
+        filteredSubmissions =
+          this.selectLatestSubmissions(activeSubmissions);
+      }
+
+      if (!filteredSubmissions.length && activeSubmissions.length) {
+        filteredSubmissions = activeSubmissions;
+      }
+
+      if (!hasSubmissionLimit) {
+        const skipped =
+          activeSubmissions.length - filteredSubmissions.length;
+        if (skipped > 0) {
+          this.logger.log(
+            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} due to unlimited submissions.`,
+          );
+        }
+      }
+
+      submissionIds = Array.from(
+        new Set(filteredSubmissions.map((submission) => submission.id)),
       );
     }
     if (!submissionIds.length) {
@@ -311,5 +339,145 @@ export class PhaseReviewService {
         `Created ${createdCount} pending review(s) for challenge ${challengeId}, phase ${phase.id}`,
       );
     }
+  }
+
+  private selectLatestSubmissions(
+    submissions: ActiveContestSubmission[],
+  ): ActiveContestSubmission[] {
+    if (!submissions.length) {
+      return [];
+    }
+
+    const selected: ActiveContestSubmission[] = [];
+    const addedKeys = new Set<string>();
+
+    for (const submission of submissions) {
+      if (!submission.isLatest && submission.memberId !== null) {
+        continue;
+      }
+
+      const key = submission.memberId ?? submission.id;
+      if (addedKeys.has(key)) {
+        continue;
+      }
+
+      selected.push(submission);
+      addedKeys.add(key);
+    }
+
+    return selected;
+  }
+
+  private challengeHasSubmissionLimit(challenge: IChallenge): boolean {
+    const metadata = challenge.metadata ?? {};
+    const rawValue = metadata['submissionLimit'];
+
+    if (rawValue == null) {
+      return false;
+    }
+
+    let parsed: unknown = rawValue;
+
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
+        return false;
+      }
+
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        const numericValue = Number(trimmed);
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+          return true;
+        }
+        const normalized = trimmed.toLowerCase();
+        if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
+          return false;
+        }
+        return false;
+      }
+    }
+
+    if (typeof parsed === 'number') {
+      return Number.isFinite(parsed) && parsed > 0;
+    }
+
+    if (typeof parsed === 'string') {
+      const numericValue = Number(parsed);
+      if (Number.isFinite(numericValue) && numericValue > 0) {
+        return true;
+      }
+      const normalized = parsed.trim().toLowerCase();
+      if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
+        return false;
+      }
+      return false;
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>;
+
+      const unlimited = this.parseBooleanFlag(record.unlimited);
+      if (unlimited === true) {
+        return false;
+      }
+
+      const candidates = [
+        record.count,
+        record.max,
+        record.maximum,
+        record.limitCount,
+        record.value,
+      ];
+
+      for (const candidate of candidates) {
+        if (candidate === undefined || candidate === null) {
+          continue;
+        }
+        const numericValue = Number(candidate);
+        if (Number.isFinite(numericValue) && numericValue > 0) {
+          return true;
+        }
+      }
+
+      const limitFlag = this.parseBooleanFlag(record.limit);
+      if (limitFlag === true) {
+        return true;
+      }
+
+      return false;
+    }
+
+    return false;
+  }
+
+  private parseBooleanFlag(value: unknown): boolean | null {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', 'yes', '1'].includes(normalized)) {
+        return true;
+      }
+      if (['false', 'no', '0'].includes(normalized)) {
+        return false;
+      }
+      return null;
+    }
+
+    if (typeof value === 'number') {
+      if (value === 1) {
+        return true;
+      }
+      if (value === 0) {
+        return false;
+      }
+      return null;
+    }
+
+    return null;
   }
 }

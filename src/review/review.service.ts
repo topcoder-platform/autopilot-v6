@@ -8,6 +8,12 @@ interface SubmissionRecord {
   id: string;
 }
 
+export interface ActiveContestSubmission {
+  id: string;
+  memberId: string | null;
+  isLatest: boolean;
+}
+
 interface ReviewRecord {
   submissionId: string | null;
   resourceId: string;
@@ -322,26 +328,73 @@ export class ReviewService {
     }
   }
 
-  async getActiveContestSubmissionIds(
+  async getActiveContestSubmissions(
     challengeId: string,
-  ): Promise<string[]> {
+  ): Promise<ActiveContestSubmission[]> {
     const query = Prisma.sql`
-      SELECT "id"
-      FROM ${ReviewService.SUBMISSION_TABLE}
-      WHERE "challengeId" = ${challengeId}
-        AND ("status" = 'ACTIVE' OR "status" IS NULL)
+      SELECT
+        s."id",
+        s."memberId",
+        CASE
+          WHEN ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(s."memberId", s."id")
+            ORDER BY
+              s."submittedDate" DESC NULLS LAST,
+              s."createdAt" DESC NULLS LAST,
+              s."updatedAt" DESC NULLS LAST,
+              s."id" DESC
+          ) = 1 THEN TRUE
+          ELSE FALSE
+        END AS "isLatest"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
         AND (
-          "type" IS NULL
-          OR UPPER(("type")::text) = 'CONTEST_SUBMISSION'
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
         )
     `;
 
     try {
       const submissions =
-        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
-      const submissionIds = submissions
-        .map((record) => record.id)
-        .filter(Boolean);
+        await this.prisma.$queryRaw<
+          Array<{ id: string; memberId: string | null; isLatest: boolean }>
+        >(query);
+
+      const sanitized = submissions
+        .filter((record) => Boolean(record?.id))
+        .map((record) => ({
+          id: record.id,
+          memberId: record.memberId ?? null,
+          isLatest: Boolean(record.isLatest),
+        }));
+
+      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: sanitized.length },
+      });
+
+      return sanitized;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveContestSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    try {
+      const submissions = await this.getActiveContestSubmissions(challengeId);
+      const submissionIds = submissions.map((record) => record.id);
 
       void this.dbLogger.logAction('review.getActiveContestSubmissionIds', {
         challengeId,

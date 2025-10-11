@@ -19,6 +19,7 @@ import {
 } from '../src/autopilot/interfaces/autopilot.interface';
 import { AutopilotService } from '../src/autopilot/services/autopilot.service';
 import { ReviewService } from '../src/review/review.service';
+import type { ActiveContestSubmission } from '../src/review/review.service';
 import { ResourcesService } from '../src/resources/resources.service';
 import { PhaseReviewService } from '../src/autopilot/services/phase-review.service';
 import { ReviewAssignmentService } from '../src/autopilot/services/review-assignment.service';
@@ -225,6 +226,9 @@ describe('Autopilot Service (e2e)', () => {
       deletePendingReviewsForResource: jest.fn().mockResolvedValue(0),
       createPendingReview: jest.fn().mockResolvedValue(true),
       getActiveSubmissionCount: jest.fn().mockResolvedValue(1),
+      getActiveContestSubmissions: jest
+        .fn()
+        .mockResolvedValue([] as ActiveContestSubmission[]),
       getActiveContestSubmissionIds: jest.fn().mockResolvedValue([]),
       getAllSubmissionIdsOrdered: jest.fn().mockResolvedValue([]),
       getExistingReviewPairs: jest.fn().mockResolvedValue(new Set()),

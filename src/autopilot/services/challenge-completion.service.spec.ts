@@ -58,7 +58,7 @@ describe('ChallengeCompletionService', () => {
     status: ChallengeStatusEnum.ACTIVE,
     createdBy: 'tester',
     updatedBy: 'tester',
-    metadata: [],
+    metadata: {},
     phases: [],
     reviewers: [],
     winners: [],

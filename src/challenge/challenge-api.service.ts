@@ -41,6 +41,7 @@ const challengeWithRelationsArgs =
         include: { constraints: true },
         orderBy: { scheduledStartDate: 'asc' as const },
       },
+      metadata: true,
       winners: true,
       prizeSets: {
         include: { prizes: true },
@@ -657,6 +658,18 @@ export class ChallengeApiService {
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
+    const metadata = (challenge.metadata ?? []).reduce<
+      Record<string, string>
+    >((acc, entry) => {
+      const key = entry?.name?.trim();
+      if (!key) {
+        return acc;
+      }
+
+      acc[key] = entry.value ?? '';
+      return acc;
+    }, {});
+
     return {
       id: challenge.id,
       name: challenge.name,
@@ -681,7 +694,7 @@ export class ChallengeApiService {
       status: challenge.status,
       createdBy: challenge.createdBy,
       updatedBy: challenge.updatedBy,
-      metadata: [],
+      metadata,
       phases: challenge.phases.map((phase) => this.mapPhase(phase)),
       reviewers:
         challenge.reviewers?.map((reviewer) => this.mapReviewer(reviewer)) ||

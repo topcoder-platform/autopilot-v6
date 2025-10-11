@@ -219,7 +219,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       status: 'ACTIVE',
       createdBy: 'tester',
       updatedBy: 'tester',
-      metadata: [],
+      metadata: {},
       phases: [reviewPhase, buildAppealsPhase()],
       reviewers: [
         {
@@ -436,7 +436,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       status: 'ACTIVE',
       createdBy: 'tester',
       updatedBy: 'tester',
-      metadata: [],
+      metadata: {},
       phases: [phase],
       reviewers: [],
       winners: [],
