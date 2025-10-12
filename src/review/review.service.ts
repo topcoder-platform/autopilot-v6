@@ -462,7 +462,7 @@ export class ReviewService {
 
   /**
    * Returns checkpoint submission IDs that have a COMPLETED review for the provided screening scorecard
-   * with a final score greater than or equal to the scorecard's minimumPassingScore.
+   * with a recorded score (final or raw) greater than or equal to the scorecard's minimumPassingScore.
    */
   async getCheckpointPassedSubmissionIds(
     challengeId: string,
@@ -484,7 +484,10 @@ export class ReviewService {
         AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
         AND r."scorecardId" = ${screeningScorecardId}
         AND UPPER((r."status")::text) = 'COMPLETED'
-        AND COALESCE(r."finalScore", 0) >= COALESCE(sc."minimumPassingScore", 50)
+        AND GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."score", 0)
+        ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
     `;
 
     try {
@@ -552,7 +555,10 @@ export class ReviewService {
         AND (
           (
             UPPER((r."status")::text) = 'COMPLETED'
-            AND COALESCE(r."finalScore", 0) < COALESCE(sc."minimumPassingScore", 50)
+            AND GREATEST(
+              COALESCE(r."finalScore", 0),
+              COALESCE(r."score", 0)
+            ) < COALESCE(sc."minimumPassingScore", sc."minScore", 50)
           )
           OR UPPER((r."status")::text) = 'FAILED'
         )
