@@ -103,6 +103,7 @@ describe('PhaseReviewService', () => {
       getActiveContestSubmissions: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
+      getFailedScreeningSubmissionIds: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
     resourcesService = {
@@ -122,6 +123,9 @@ describe('PhaseReviewService', () => {
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
     resourcesService.getReviewerResources.mockResolvedValue([{ id: 'resource-1' }] as any);
     reviewService.createPendingReview.mockResolvedValue(true);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(),
+    );
 
     service = new PhaseReviewService(
       challengeApiService,
@@ -192,5 +196,53 @@ describe('PhaseReviewService', () => {
       'old-submission',
       'latest-submission',
     ]);
+  });
+
+  it('omits submissions that failed screening', async () => {
+    const challenge = buildChallenge({});
+    const screeningPhase = {
+      ...basePhase,
+      id: 'phase-screening',
+      phaseId: 'template-screening',
+      name: 'Screening',
+    };
+    challenge.phases = [{ ...basePhase }, screeningPhase];
+    challenge.reviewers.push({
+      id: 'screening-config',
+      scorecardId: 'screening-scorecard',
+      isMemberReview: false,
+      memberReviewerCount: 1,
+      phaseId: screeningPhase.phaseId,
+      basePayment: null,
+      incrementalPayment: null,
+      type: null,
+      aiWorkflowId: null,
+      shouldOpenOpportunity: true,
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'failed-submission', memberId: '123', isLatest: true },
+      { id: 'passed-submission', memberId: '456', isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(['failed-submission']),
+    );
+
+    await service.handlePhaseOpened(challenge.id, basePhase.id);
+
+    expect(
+      reviewService.getFailedScreeningSubmissionIds,
+    ).toHaveBeenCalledWith(challenge.id, ['screening-scorecard']);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual(['passed-submission']);
   });
 });

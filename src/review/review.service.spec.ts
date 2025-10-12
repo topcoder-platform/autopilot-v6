@@ -110,3 +110,64 @@ describe('ReviewService.getTopFinalReviewScores', () => {
     );
   });
 });
+
+describe('ReviewService.getFailedScreeningSubmissionIds', () => {
+  const challengeId = 'challenge-2';
+
+  let prismaMock: { $queryRaw: jest.Mock };
+  let dbLoggerMock: { logAction: jest.Mock };
+  let service: ReviewService;
+
+  beforeEach(() => {
+    prismaMock = {
+      $queryRaw: jest.fn(),
+    };
+    dbLoggerMock = {
+      logAction: jest.fn(),
+    };
+
+    service = new ReviewService(
+      prismaMock as unknown as any,
+      dbLoggerMock as unknown as any,
+    );
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('returns an empty set when scorecard list is empty', async () => {
+    const result = await service.getFailedScreeningSubmissionIds(
+      challengeId,
+      [],
+    );
+
+    expect(result.size).toBe(0);
+    expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+    expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
+  });
+
+  it('returns failed submission ids when query succeeds', async () => {
+    prismaMock.$queryRaw.mockResolvedValueOnce([
+      { id: 'failed-1' },
+      { id: 'failed-2' },
+      { id: 'failed-1' },
+    ]);
+
+    const result = await service.getFailedScreeningSubmissionIds(
+      challengeId,
+      ['screening-1'],
+    );
+
+    expect(result).toEqual(new Set(['failed-1', 'failed-2']));
+    expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+      'review.getFailedScreeningSubmissionIds',
+      expect.objectContaining({
+        status: 'SUCCESS',
+        details: expect.objectContaining({
+          failedSubmissionCount: 2,
+        }),
+      }),
+    );
+  });
+});

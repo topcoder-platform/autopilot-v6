@@ -292,6 +292,17 @@ export class PhaseReviewService {
         new Set(filteredSubmissions.map((submission) => submission.id)),
       );
     }
+    if (
+      submissionIds.length &&
+      (isApprovalPhase ||
+        (isReviewPhase && phase.name !== 'Checkpoint Review'))
+    ) {
+      submissionIds = await this.excludeFailedScreeningSubmissions(
+        challenge,
+        submissionIds,
+      );
+    }
+
     if (!submissionIds.length) {
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,
@@ -339,6 +350,90 @@ export class PhaseReviewService {
         `Created ${createdCount} pending review(s) for challenge ${challengeId}, phase ${phase.id}`,
       );
     }
+  }
+
+  private async excludeFailedScreeningSubmissions(
+    challenge: IChallenge,
+    submissionIds: string[],
+  ): Promise<string[]> {
+    if (!submissionIds.length) {
+      return submissionIds;
+    }
+
+    const screeningScorecardIds = this.getScreeningScorecardIds(challenge);
+    if (!screeningScorecardIds.length) {
+      return submissionIds;
+    }
+
+    try {
+      const failedIds =
+        await this.reviewService.getFailedScreeningSubmissionIds(
+          challenge.id,
+          screeningScorecardIds,
+        );
+
+      if (!failedIds.size) {
+        return submissionIds;
+      }
+
+      const filtered = submissionIds.filter((id) => !failedIds.has(id));
+      const removedCount = submissionIds.length - filtered.length;
+
+      if (removedCount > 0) {
+        this.logger.log(
+          `Excluded ${removedCount} submission(s) for challenge ${challenge.id} due to failed screening.`,
+        );
+      }
+
+      return filtered;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to filter screened submissions for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return submissionIds;
+    }
+  }
+
+  private getScreeningScorecardIds(challenge: IChallenge): string[] {
+    const screeningTemplateIds = (challenge.phases ?? [])
+      .filter((phase) => phase?.phaseId && phase.name === 'Screening')
+      .map((phase) => phase.phaseId);
+
+    const scorecardIds = new Set<string>();
+
+    for (const templateId of screeningTemplateIds) {
+      const configs = getReviewerConfigsForPhase(
+        challenge.reviewers,
+        templateId,
+      );
+
+      for (const config of configs) {
+        if (config.scorecardId) {
+          scorecardIds.add(config.scorecardId);
+        }
+      }
+    }
+
+    if (!scorecardIds.size) {
+      const legacy = challenge.legacy as
+        | { screeningScorecardId?: unknown }
+        | undefined;
+      const legacyScorecardId =
+        legacy && typeof legacy === 'object'
+          ? (legacy as Record<string, unknown>).screeningScorecardId
+          : undefined;
+
+      if (
+        typeof legacyScorecardId === 'string' &&
+        legacyScorecardId.trim()
+      ) {
+        scorecardIds.add(legacyScorecardId.trim());
+      }
+    }
+
+    return Array.from(scorecardIds);
   }
 
   private selectLatestSubmissions(

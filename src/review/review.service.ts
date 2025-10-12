@@ -517,6 +517,79 @@ export class ReviewService {
     }
   }
 
+  async getFailedScreeningSubmissionIds(
+    challengeId: string,
+    screeningScorecardIds: string[],
+  ): Promise<Set<string>> {
+    const uniqueIds = Array.from(
+      new Set(
+        screeningScorecardIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueIds.length) {
+      return new Set();
+    }
+
+    const scorecardList = Prisma.join(uniqueIds.map((id) => Prisma.sql`${id}`));
+
+    const query = Prisma.sql`
+      SELECT DISTINCT s."id"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."submissionId" = s."id"
+      INNER JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND r."scorecardId" IN (${scorecardList})
+        AND (
+          (
+            UPPER((r."status")::text) = 'COMPLETED'
+            AND COALESCE(r."finalScore", 0) < COALESCE(sc."minimumPassingScore", 50)
+          )
+          OR UPPER((r."status")::text) = 'FAILED'
+        )
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const failedIds = new Set(
+        rows.map((record) => record.id).filter(Boolean),
+      );
+
+      void this.dbLogger.logAction('review.getFailedScreeningSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardCount: uniqueIds.length,
+          failedSubmissionCount: failedIds.size,
+        },
+      });
+
+      return failedIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getFailedScreeningSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardCount: uniqueIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getExistingReviewPairs(
     phaseId: string,
     challengeId?: string,
