@@ -134,7 +134,7 @@ describe('ReviewService', () => {
         : '';
 
       expect(sqlText).toContain('GREATEST(');
-      expect(sqlText).toContain('r."score"');
+      expect(sqlText).toContain('r."initialScore"');
       expect(sqlText).toContain('sc."minScore"');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
@@ -179,7 +179,7 @@ describe('ReviewService', () => {
         : '';
 
       expect(sqlText).toContain('GREATEST(');
-      expect(sqlText).toContain('r."score"');
+      expect(sqlText).toContain('r."initialScore"');
       expect(sqlText).toContain('sc."minScore"');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(

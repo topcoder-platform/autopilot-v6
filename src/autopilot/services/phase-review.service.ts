@@ -258,10 +258,20 @@ export class PhaseReviewService {
         return;
       }
 
-      submissionIds = await this.reviewService.getCheckpointPassedSubmissionIds(
-        challengeId,
-        screeningScorecardId,
-      );
+      try {
+        submissionIds =
+          await this.reviewService.getCheckpointPassedSubmissionIds(
+            challengeId,
+            screeningScorecardId,
+          );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to resolve checkpoint-passing submissions for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+          err.stack,
+        );
+        throw err;
+      }
     } else {
       const activeSubmissions =
         await this.reviewService.getActiveContestSubmissions(challengeId);

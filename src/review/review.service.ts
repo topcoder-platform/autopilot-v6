@@ -486,7 +486,7 @@ export class ReviewService {
         AND UPPER((r."status")::text) = 'COMPLETED'
         AND GREATEST(
           COALESCE(r."finalScore", 0),
-          COALESCE(r."score", 0)
+          COALESCE(r."initialScore", 0)
         ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
     `;
 
@@ -557,7 +557,7 @@ export class ReviewService {
             UPPER((r."status")::text) = 'COMPLETED'
             AND GREATEST(
               COALESCE(r."finalScore", 0),
-              COALESCE(r."score", 0)
+              COALESCE(r."initialScore", 0)
             ) < COALESCE(sc."minimumPassingScore", sc."minScore", 50)
           )
           OR UPPER((r."status")::text) = 'FAILED'
