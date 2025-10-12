@@ -268,22 +268,22 @@ export class PhaseReviewService {
 
       let filteredSubmissions: ActiveContestSubmission[];
       if (hasSubmissionLimit) {
-        filteredSubmissions = activeSubmissions;
-      } else {
         filteredSubmissions =
           this.selectLatestSubmissions(activeSubmissions);
+      } else {
+        filteredSubmissions = activeSubmissions;
       }
 
       if (!filteredSubmissions.length && activeSubmissions.length) {
         filteredSubmissions = activeSubmissions;
       }
 
-      if (!hasSubmissionLimit) {
+      if (hasSubmissionLimit) {
         const skipped =
           activeSubmissions.length - filteredSubmissions.length;
         if (skipped > 0) {
           this.logger.log(
-            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} due to unlimited submissions.`,
+            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} due to submission limits.`,
           );
         }
       }
