@@ -13,8 +13,13 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let prisma: jest.Mocked<ChallengePrismaService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
   let challengePhaseUpdate: jest.Mock;
+  let challengePhaseCreate: jest.Mock;
+  let challengePhaseDeleteMany: jest.Mock;
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
+  let txChallengeFindUnique: jest.Mock;
+  let txPhaseFindUnique: jest.Mock;
+  let txQueryRaw: jest.Mock;
   let service: ChallengeApiService;
   let configService: jest.Mocked<ConfigService>;
 
@@ -22,9 +27,14 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     jest.useFakeTimers().setSystemTime(fixedNow);
 
     challengePhaseUpdate = jest.fn().mockResolvedValue(undefined);
+    challengePhaseCreate = jest.fn().mockResolvedValue({ id: 'new-phase' });
+    challengePhaseDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
     challengeUpdate = jest.fn().mockResolvedValue(undefined);
 
     challengeFindUnique = jest.fn();
+    txChallengeFindUnique = jest.fn();
+    txPhaseFindUnique = jest.fn();
+    txQueryRaw = jest.fn().mockResolvedValue(undefined);
 
     prisma = {
       challenge: {
@@ -32,14 +42,27 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       },
       challengePhase: {
         update: challengePhaseUpdate,
+        create: challengePhaseCreate,
+        deleteMany: challengePhaseDeleteMany,
       },
       $transaction: jest.fn(),
     } as unknown as jest.Mocked<ChallengePrismaService>;
 
     prisma.$transaction.mockImplementation(async (cb) => {
-      await cb({
-        challengePhase: { update: challengePhaseUpdate },
-        challenge: { update: challengeUpdate },
+      return cb({
+        $queryRaw: txQueryRaw,
+        challenge: {
+          findUnique: txChallengeFindUnique,
+          update: challengeUpdate,
+        },
+        phase: {
+          findUnique: txPhaseFindUnique,
+        },
+        challengePhase: {
+          update: challengePhaseUpdate,
+          create: challengePhaseCreate,
+          deleteMany: challengePhaseDeleteMany,
+        },
       } as unknown as ChallengePrismaService);
     });
 
@@ -315,6 +338,220 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         scheduledEndDate: new Date(lateNow.getTime() + submissionPhase.duration * 1000),
         duration: submissionPhase.duration,
       }),
+    });
+  });
+
+  describe('createPostMortemPhase', () => {
+    const buildPhase = (overrides: Partial<any> = {}) => {
+      const scheduledStart = new Date('2025-09-26T00:00:00.000Z');
+      return {
+        id: 'phase-default',
+        phaseId: 'template-default',
+        name: 'Generic Phase',
+        description: null,
+        isOpen: false,
+        predecessor: null,
+        duration: 3600,
+        scheduledStartDate: scheduledStart,
+        scheduledEndDate: new Date(scheduledStart.getTime() + 3600 * 1000),
+        actualStartDate: null,
+        actualEndDate: null,
+        constraints: [],
+        ...overrides,
+      };
+    };
+
+    it('reuses an existing Post-Mortem phase when one already exists after submission', async () => {
+      const challengeId = 'challenge-reuse';
+      const registrationPhase = buildPhase({
+        id: 'phase-registration',
+        phaseId: 'template-registration',
+        name: 'Registration',
+      });
+      const submissionPhase = buildPhase({
+        id: 'phase-submission',
+        phaseId: 'template-submission',
+        name: 'Submission',
+        isOpen: true,
+      });
+      const reviewPhase = buildPhase({
+        id: 'phase-review',
+        phaseId: 'template-review',
+        name: 'Review',
+      });
+      const existingPostMortem = buildPhase({
+        id: 'phase-postmortem',
+        phaseId: 'template-postmortem',
+        name: 'Post-Mortem',
+        scheduledStartDate: new Date('2025-09-28T00:00:00.000Z'),
+        scheduledEndDate: new Date('2025-09-30T00:00:00.000Z'),
+        actualStartDate: null,
+        actualEndDate: new Date('2025-09-29T00:00:00.000Z'),
+        isOpen: false,
+      });
+
+      txChallengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [
+          registrationPhase,
+          submissionPhase,
+          reviewPhase,
+          existingPostMortem,
+        ],
+        currentPhaseNames: [],
+      } as any);
+
+      challengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [
+          registrationPhase,
+          submissionPhase,
+          {
+            ...existingPostMortem,
+            scheduledStartDate: fixedNow,
+            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            actualStartDate: fixedNow,
+            actualEndDate: null,
+            isOpen: true,
+          },
+        ],
+      } as any);
+
+      const result = await service.createPostMortemPhase(
+        challengeId,
+        submissionPhase.id,
+        72,
+      );
+
+      expect(txQueryRaw).toHaveBeenCalledTimes(1);
+      expect(challengePhaseDeleteMany).toHaveBeenCalledWith({
+        where: { id: { in: [reviewPhase.id] } },
+      });
+      expect(challengePhaseUpdate).toHaveBeenCalledWith({
+        where: { id: existingPostMortem.id },
+        data: expect.objectContaining({
+          predecessor: submissionPhase.phaseId,
+          isOpen: true,
+          actualEndDate: null,
+        }),
+      });
+      const reopenArgs = challengePhaseUpdate.mock.calls[0][0].data;
+      expect(reopenArgs.actualStartDate).toBeInstanceOf(Date);
+      expect(reopenArgs.actualStartDate?.toISOString()).toBe(
+        fixedNow.toISOString(),
+      );
+      expect(reopenArgs.duration).toBe(72 * 60 * 60);
+      expect(challengePhaseCreate).not.toHaveBeenCalled();
+      expect(txPhaseFindUnique).not.toHaveBeenCalled();
+      expect(challengeUpdate).toHaveBeenCalledWith({
+        where: { id: challengeId },
+        data: { currentPhaseNames: [existingPostMortem.name] },
+      });
+      expect(result.id).toBe(existingPostMortem.id);
+      expect(dbLogger.logAction).toHaveBeenLastCalledWith(
+        'challenge.createPostMortemPhase',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            reusedExisting: true,
+            postMortemPhaseId: existingPostMortem.id,
+          }),
+        }),
+      );
+    });
+
+    it('creates a new Post-Mortem phase when none exists after submission', async () => {
+      const challengeId = 'challenge-new';
+      const submissionPhase = buildPhase({
+        id: 'phase-submission',
+        phaseId: 'template-submission',
+        name: 'Submission',
+      });
+      const iterativeReviewPhase = buildPhase({
+        id: 'phase-iterative',
+        phaseId: 'template-iterative',
+        name: 'Iterative Review',
+      });
+
+      const postMortemPhaseType = {
+        id: 'template-postmortem',
+        name: 'Post-Mortem',
+        description: 'Post-Mortem phase',
+      };
+
+      txChallengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [submissionPhase, iterativeReviewPhase],
+        currentPhaseNames: [],
+      } as any);
+      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+
+      const createdPostMortem = {
+        id: 'phase-postmortem',
+      };
+      challengePhaseCreate.mockResolvedValueOnce(createdPostMortem as any);
+
+      challengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [
+          submissionPhase,
+          {
+            ...createdPostMortem,
+            phaseId: postMortemPhaseType.id,
+            name: postMortemPhaseType.name,
+            description: postMortemPhaseType.description,
+            isOpen: true,
+            duration: 72 * 60 * 60,
+            scheduledStartDate: fixedNow,
+            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            actualStartDate: fixedNow,
+            actualEndDate: null,
+            predecessor: submissionPhase.phaseId,
+            constraints: [],
+          },
+        ],
+      } as any);
+
+      const result = await service.createPostMortemPhase(
+        challengeId,
+        submissionPhase.id,
+        72,
+      );
+
+      expect(challengePhaseDeleteMany).toHaveBeenCalledWith({
+        where: { id: { in: [iterativeReviewPhase.id] } },
+      });
+      expect(txPhaseFindUnique).toHaveBeenCalledWith({
+        where: { name: 'Post-Mortem' },
+      });
+      expect(challengePhaseCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          challengeId,
+          phaseId: postMortemPhaseType.id,
+          name: postMortemPhaseType.name,
+          predecessor: submissionPhase.phaseId,
+        }),
+      });
+      const createArgs = challengePhaseCreate.mock.calls[0][0].data;
+      expect(createArgs.scheduledStartDate).toBeInstanceOf(Date);
+      expect(createArgs.isOpen).toBe(true);
+      expect(createArgs.duration).toBe(72 * 60 * 60);
+      expect(challengePhaseUpdate).not.toHaveBeenCalled();
+      expect(challengeUpdate).toHaveBeenCalledWith({
+        where: { id: challengeId },
+        data: { currentPhaseNames: [postMortemPhaseType.name] },
+      });
+      expect(result.id).toBe(createdPostMortem.id);
+      expect(dbLogger.logAction).toHaveBeenLastCalledWith(
+        'challenge.createPostMortemPhase',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            reusedExisting: false,
+            postMortemPhaseId: createdPostMortem.id,
+          }),
+        }),
+      );
     });
   });
 });

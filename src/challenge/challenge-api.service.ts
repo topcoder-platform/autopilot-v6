@@ -814,82 +814,136 @@ export class ChallengeApiService {
     durationHours: number,
   ): Promise<IPhase> {
     const now = new Date();
-    const end = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
+    const clampedDurationSeconds = Math.max(
+      Math.round((durationHours || 0) * 60 * 60),
+      1,
+    );
+    const end = new Date(now.getTime() + clampedDurationSeconds * 1000);
+
+    let reusedExisting = false;
 
     try {
-      const { createdPhaseId } = await this.prisma.$transaction(async (tx) => {
-        const challenge = await tx.challenge.findUnique({
-          ...challengeWithRelationsArgs,
-          where: { id: challengeId },
-        });
+      const { postMortemPhaseId } = await this.prisma.$transaction(
+        async (tx) => {
+          // Lock the challenge row to avoid concurrent duplicate creations.
+          await tx.$queryRaw(Prisma.sql`
+            SELECT 1
+            FROM "Challenge"
+            WHERE "id" = ${challengeId}
+            FOR UPDATE
+          `);
 
-        if (!challenge) {
-          throw new NotFoundException(
-            `Challenge with ID ${challengeId} not found when creating post-mortem phase.`,
-          );
-        }
-
-        const submissionPhaseIndex = challenge.phases.findIndex(
-          (phase) => phase.id === submissionPhaseId,
-        );
-
-        if (submissionPhaseIndex === -1) {
-          throw new NotFoundException(
-            `Submission phase ${submissionPhaseId} not found for challenge ${challengeId}.`,
-          );
-        }
-
-        const submissionPhase = challenge.phases[submissionPhaseIndex];
-
-        const futurePhaseIds = challenge.phases
-          .slice(submissionPhaseIndex + 1)
-          .map((phase) => phase.id);
-
-        if (futurePhaseIds.length) {
-          await tx.challengePhase.deleteMany({
-            where: { id: { in: futurePhaseIds } },
+          const challenge = await tx.challenge.findUnique({
+            ...challengeWithRelationsArgs,
+            where: { id: challengeId },
           });
-        }
 
-        const postMortemPhaseType = await tx.phase.findUnique({
-          where: { name: 'Post-Mortem' },
-        });
+          if (!challenge) {
+            throw new NotFoundException(
+              `Challenge with ID ${challengeId} not found when creating post-mortem phase.`,
+            );
+          }
 
-        if (!postMortemPhaseType) {
-          throw new NotFoundException(
-            'Phase type "Post-Mortem" is not configured in the system.',
+          const submissionPhaseIndex = challenge.phases.findIndex(
+            (phase) => phase.id === submissionPhaseId,
           );
-        }
 
-        const created = await tx.challengePhase.create({
-          data: {
-            challengeId,
-            phaseId: postMortemPhaseType.id,
-            name: postMortemPhaseType.name,
-            description: postMortemPhaseType.description,
-            predecessor: submissionPhase.phaseId ?? submissionPhase.id,
-            duration: Math.max(
-              Math.round((end.getTime() - now.getTime()) / 1000),
-              1,
-            ),
-            scheduledStartDate: now,
-            scheduledEndDate: end,
-            actualStartDate: now,
-            isOpen: true,
-            createdBy: 'Autopilot',
-            updatedBy: 'Autopilot',
-          },
-        });
+          if (submissionPhaseIndex === -1) {
+            throw new NotFoundException(
+              `Submission phase ${submissionPhaseId} not found for challenge ${challengeId}.`,
+            );
+          }
 
-        await tx.challenge.update({
-          where: { id: challengeId },
-          data: {
-            currentPhaseNames: [postMortemPhaseType.name],
-          },
-        });
+          const submissionPhase = challenge.phases[submissionPhaseIndex];
 
-        return { createdPhaseId: created.id };
-      });
+          const futurePhases = challenge.phases.slice(submissionPhaseIndex + 1);
+          const postMortemPhases = futurePhases.filter(
+            (phase) => phase.name === 'Post-Mortem',
+          );
+          const existingPostMortem = postMortemPhases[0] ?? null;
+
+          if (postMortemPhases.length > 1) {
+            this.logger.warn(
+              `Detected ${postMortemPhases.length} Post-Mortem phases on challenge ${challengeId}; reusing the first and preserving the rest for manual reconciliation.`,
+            );
+          }
+
+          const phasesToDelete = futurePhases
+            .filter((phase) => phase.name !== 'Post-Mortem')
+            .map((phase) => phase.id);
+
+          if (phasesToDelete.length) {
+            await tx.challengePhase.deleteMany({
+              where: { id: { in: phasesToDelete } },
+            });
+          }
+
+          if (existingPostMortem) {
+            reusedExisting = true;
+            await tx.challengePhase.update({
+              where: { id: existingPostMortem.id },
+              data: {
+                predecessor: submissionPhase.phaseId ?? submissionPhase.id,
+                duration: clampedDurationSeconds,
+                scheduledStartDate: now,
+                scheduledEndDate: end,
+                actualStartDate: now,
+                actualEndDate: null,
+                isOpen: true,
+                updatedBy: 'Autopilot',
+              },
+            });
+
+            await tx.challenge.update({
+              where: { id: challengeId },
+              data: {
+                currentPhaseNames: [existingPostMortem.name],
+              },
+            });
+
+            return { postMortemPhaseId: existingPostMortem.id };
+          }
+
+          const postMortemPhaseType = await tx.phase.findUnique({
+            where: { name: 'Post-Mortem' },
+          });
+
+          if (!postMortemPhaseType) {
+            throw new NotFoundException(
+              'Phase type "Post-Mortem" is not configured in the system.',
+            );
+          }
+
+          const created = await tx.challengePhase.create({
+            data: {
+              challengeId,
+              phaseId: postMortemPhaseType.id,
+              name: postMortemPhaseType.name,
+              description: postMortemPhaseType.description,
+              predecessor: submissionPhase.phaseId ?? submissionPhase.id,
+              duration: clampedDurationSeconds,
+              scheduledStartDate: now,
+              scheduledEndDate: end,
+              actualStartDate: now,
+              isOpen: true,
+              createdBy: 'Autopilot',
+              updatedBy: 'Autopilot',
+            },
+          });
+
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: {
+              currentPhaseNames: [postMortemPhaseType.name],
+            },
+          });
+
+          return { postMortemPhaseId: created.id };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        },
+      );
 
       const refreshed = await this.prisma.challenge.findUnique({
         ...challengeWithRelationsArgs,
@@ -897,12 +951,12 @@ export class ChallengeApiService {
       });
 
       const phaseRecord = refreshed?.phases.find(
-        (phase) => phase.id === createdPhaseId,
+        (phase) => phase.id === postMortemPhaseId,
       );
 
       if (!phaseRecord) {
         throw new Error(
-          `Created post-mortem phase ${createdPhaseId} not found after insertion for challenge ${challengeId}.`,
+          `Post-mortem phase ${postMortemPhaseId} not found after processing for challenge ${challengeId}.`,
         );
       }
 
@@ -916,6 +970,7 @@ export class ChallengeApiService {
           submissionPhaseId,
           postMortemPhaseId: mapped.id,
           durationHours,
+          reusedExisting,
         },
       });
 
@@ -929,6 +984,7 @@ export class ChallengeApiService {
         details: {
           submissionPhaseId,
           durationHours,
+          reusedExisting,
           error: err.message,
         },
       });

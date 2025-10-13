@@ -38,7 +38,7 @@ export const PHASE_ROLE_MAP: Record<string, string[]> = {
   Review: ['Reviewer'],
   'Iterative Review': ['Iterative Reviewer'],
   'Post-Mortem': ['Reviewer', 'Copilot'],
-  'Checkpoint Review': ['Reviewer'],
+  'Checkpoint Review': ['Checkpoint Reviewer'],
   Screening: ['Screener'],
   // Use the specific Checkpoint Screener role for checkpoint screening phases
   'Checkpoint Screening': ['Checkpoint Screener'],

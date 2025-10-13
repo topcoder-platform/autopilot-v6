@@ -104,6 +104,7 @@ describe('PhaseReviewService', () => {
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
+      getCheckpointPassedSubmissionIds: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
     resourcesService = {
@@ -227,6 +228,28 @@ describe('PhaseReviewService', () => {
     expect(createdSubmissionIds).not.toContain('old-submission');
   });
 
+  it('skips non-latest submissions without member IDs when a limit is enforced', async () => {
+    const submissionLimit = JSON.stringify({ limit: 'true', count: 1 });
+    const challenge = buildChallenge({ submissionLimit });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'legacy-submission', memberId: null, isLatest: false },
+      { id: 'latest-submission', memberId: null, isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual(['latest-submission']);
+  });
+
   it('omits submissions that failed screening', async () => {
     const challenge = buildChallenge({});
     const screeningPhase = {
@@ -273,5 +296,65 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('uses checkpoint reviewer resources when checkpoint review phase opens', async () => {
+    const challenge = buildChallenge({});
+    const checkpointPhase = {
+      ...basePhase,
+      id: 'phase-checkpoint-review',
+      phaseId: 'template-checkpoint-review',
+      name: 'Checkpoint Review',
+    };
+    const screeningPhase = {
+      ...basePhase,
+      id: 'phase-screening',
+      phaseId: 'template-screening',
+      name: 'Checkpoint Screening',
+    };
+
+    challenge.phases = [checkpointPhase, screeningPhase];
+
+    const baseReviewerConfig = challenge.reviewers[0];
+    challenge.reviewers = [
+      {
+        ...baseReviewerConfig,
+        id: 'checkpoint-config',
+        phaseId: checkpointPhase.phaseId,
+        scorecardId: 'checkpoint-scorecard',
+      },
+      {
+        ...baseReviewerConfig,
+        id: 'screening-config',
+        phaseId: screeningPhase.phaseId,
+        scorecardId: 'screening-scorecard',
+        isMemberReview: false,
+      },
+    ];
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      { id: 'checkpoint-resource' },
+    ] as any);
+    reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
+      'submission-1',
+    ]);
+
+    await service.handlePhaseOpened(challenge.id, checkpointPhase.id);
+
+    expect(resourcesService.getReviewerResources).toHaveBeenCalledWith(
+      challenge.id,
+      ['Checkpoint Reviewer'],
+    );
+    expect(
+      reviewService.getCheckpointPassedSubmissionIds,
+    ).toHaveBeenCalledWith(challenge.id, 'screening-scorecard');
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'submission-1',
+      'checkpoint-resource',
+      checkpointPhase.id,
+      'checkpoint-scorecard',
+      challenge.id,
+    );
   });
 });

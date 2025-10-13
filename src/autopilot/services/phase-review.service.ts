@@ -457,7 +457,7 @@ export class PhaseReviewService {
     const addedKeys = new Set<string>();
 
     for (const submission of submissions) {
-      if (!submission.isLatest && submission.memberId !== null) {
+      if (!submission.isLatest) {
         continue;
       }
 
