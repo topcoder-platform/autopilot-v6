@@ -225,6 +225,65 @@ describe('ChallengeCompletionService', () => {
     });
   });
 
+  it('awards only one placement per member even with multiple passing submissions', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildPlacementPrizeSet(3)],
+      numOfSubmissions: 3,
+    });
+
+    const duplicateSummaries: SubmissionSummary[] = [
+      {
+        submissionId: 'sub-1',
+        legacySubmissionId: null,
+        memberId: '101',
+        submittedDate: new Date('2024-01-02T08:00:00.000Z'),
+        aggregateScore: 98,
+        scorecardId: null,
+        scorecardLegacyId: null,
+        passingScore: 75,
+        isPassing: true,
+      },
+      {
+        submissionId: 'sub-2',
+        legacySubmissionId: null,
+        memberId: '101',
+        submittedDate: new Date('2024-01-02T09:00:00.000Z'),
+        aggregateScore: 96,
+        scorecardId: null,
+        scorecardLegacyId: null,
+        passingScore: 75,
+        isPassing: true,
+      },
+      {
+        submissionId: 'sub-3',
+        legacySubmissionId: null,
+        memberId: '102',
+        submittedDate: new Date('2024-01-02T10:00:00.000Z'),
+        aggregateScore: 94,
+        scorecardId: null,
+        scorecardLegacyId: null,
+        passingScore: 75,
+        isPassing: true,
+      },
+    ];
+
+    reviewService.generateReviewSummaries.mockResolvedValueOnce(duplicateSummaries);
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
+    const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
+
+    expect(winners).toHaveLength(2);
+    expect(winners.map((winner) => winner.userId)).toEqual([101, 102]);
+    expect(winners.map((winner) => winner.placement)).toEqual([1, 2]);
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+  });
+
   it('falls back to all passing submissions when no placement prizes exist', async () => {
     const challenge = buildChallenge({
       prizeSets: [],

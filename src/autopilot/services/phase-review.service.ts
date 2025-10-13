@@ -42,7 +42,8 @@ export class PhaseReviewService {
       return;
     }
 
-    const hasSubmissionLimit = this.challengeHasSubmissionLimit(challenge);
+    const allowUnlimitedSubmissions =
+      this.challengeAllowsUnlimitedSubmissions(challenge);
 
     const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
     const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
@@ -277,23 +278,25 @@ export class PhaseReviewService {
         await this.reviewService.getActiveContestSubmissions(challengeId);
 
       let filteredSubmissions: ActiveContestSubmission[];
-      if (hasSubmissionLimit) {
-        filteredSubmissions =
-          this.selectLatestSubmissions(activeSubmissions);
+
+      if (allowUnlimitedSubmissions) {
+        filteredSubmissions = activeSubmissions;
       } else {
-        filteredSubmissions = activeSubmissions;
+        filteredSubmissions = this.selectLatestSubmissions(activeSubmissions);
+
+        if (!filteredSubmissions.length && activeSubmissions.length) {
+          this.logger.warn(
+            `No latest submissions found for challenge ${challengeId} in phase ${phase.id}; skipping review creation because only the latest submission per member is reviewed when a submission limit is enforced.`,
+          );
+        }
       }
 
-      if (!filteredSubmissions.length && activeSubmissions.length) {
-        filteredSubmissions = activeSubmissions;
-      }
-
-      if (hasSubmissionLimit) {
+      if (!allowUnlimitedSubmissions) {
         const skipped =
           activeSubmissions.length - filteredSubmissions.length;
-        if (skipped > 0) {
+        if (skipped > 0 && filteredSubmissions.length > 0) {
           this.logger.log(
-            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} due to submission limits.`,
+            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} because only the latest submissions are reviewed when the submission limit is enforced.`,
           );
         }
       }
@@ -473,12 +476,14 @@ export class PhaseReviewService {
     return selected;
   }
 
-  private challengeHasSubmissionLimit(challenge: IChallenge): boolean {
+  private challengeAllowsUnlimitedSubmissions(
+    challenge: IChallenge,
+  ): boolean {
     const metadata = challenge.metadata ?? {};
     const rawValue = metadata['submissionLimit'];
 
     if (rawValue == null) {
-      return false;
+      return true;
     }
 
     let parsed: unknown = rawValue;
@@ -486,7 +491,7 @@ export class PhaseReviewService {
     if (typeof rawValue === 'string') {
       const trimmed = rawValue.trim();
       if (!trimmed) {
-        return false;
+        return true;
       }
 
       try {
@@ -494,30 +499,30 @@ export class PhaseReviewService {
       } catch {
         const numericValue = Number(trimmed);
         if (Number.isFinite(numericValue) && numericValue > 0) {
-          return true;
+          return false;
         }
         const normalized = trimmed.toLowerCase();
         if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
-          return false;
+          return true;
         }
-        return false;
+        return true;
       }
     }
 
     if (typeof parsed === 'number') {
-      return Number.isFinite(parsed) && parsed > 0;
+      return !(Number.isFinite(parsed) && parsed > 0);
     }
 
     if (typeof parsed === 'string') {
       const numericValue = Number(parsed);
       if (Number.isFinite(numericValue) && numericValue > 0) {
-        return true;
+        return false;
       }
       const normalized = parsed.trim().toLowerCase();
       if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
-        return false;
+        return true;
       }
-      return false;
+      return true;
     }
 
     if (parsed && typeof parsed === 'object') {
@@ -525,7 +530,7 @@ export class PhaseReviewService {
 
       const unlimited = this.parseBooleanFlag(record.unlimited);
       if (unlimited === true) {
-        return false;
+        return true;
       }
 
       const candidates = [
@@ -542,19 +547,19 @@ export class PhaseReviewService {
         }
         const numericValue = Number(candidate);
         if (Number.isFinite(numericValue) && numericValue > 0) {
-          return true;
+          return false;
         }
       }
 
       const limitFlag = this.parseBooleanFlag(record.limit);
       if (limitFlag === true) {
-        return true;
+        return false;
       }
 
-      return false;
+      return true;
     }
 
-    return false;
+    return true;
   }
 
   private parseBooleanFlag(value: unknown): boolean | null {

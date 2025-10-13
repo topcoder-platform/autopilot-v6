@@ -207,7 +207,7 @@ export class ChallengeCompletionService {
     });
 
     const memberIds = sortedSummaries
-      .map((summary) => summary.memberId)
+      .map((summary) => summary.memberId?.trim())
       .filter((id): id is string => Boolean(id));
 
     const handleMap = await this.resourcesService.getMemberHandleMap(
@@ -216,6 +216,8 @@ export class ChallengeCompletionService {
     );
 
     const winners: IChallengeWinner[] = [];
+    const seenMembers = new Set<string>();
+    const seenSubmissionIds = new Set<string>();
     const placementPrizeLimit = this.countPlacementPrizes(
       challenge.prizeSets ?? [],
     );
@@ -234,19 +236,43 @@ export class ChallengeCompletionService {
         continue;
       }
 
-      const numericMemberId = Number(summary.memberId);
+      if (seenSubmissionIds.has(summary.submissionId)) {
+        this.logger.warn(
+          `Skipping winner placement for duplicate submission ${summary.submissionId} on challenge ${challengeId}.`,
+        );
+        continue;
+      }
+
+      const memberId = summary.memberId.trim();
+      if (!memberId) {
+        this.logger.warn(
+          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId is blank.`,
+        );
+        continue;
+      }
+
+      if (seenMembers.has(memberId)) {
+        this.logger.log(
+          `Skipping additional placement for member ${memberId} on challenge ${challengeId}; already awarded.`,
+        );
+        continue;
+      }
+
+      const numericMemberId = Number(memberId);
       if (!Number.isFinite(numericMemberId)) {
         this.logger.warn(
-          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId ${summary.memberId} is not numeric.`,
+          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId ${memberId} is not numeric.`,
         );
         continue;
       }
 
       winners.push({
         userId: numericMemberId,
-        handle: handleMap.get(summary.memberId) ?? summary.memberId,
+        handle: handleMap.get(memberId) ?? memberId,
         placement: winners.length + 1,
       });
+      seenMembers.add(memberId);
+      seenSubmissionIds.add(summary.submissionId);
     }
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
