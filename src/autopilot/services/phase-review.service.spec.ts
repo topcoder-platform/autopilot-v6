@@ -81,7 +81,8 @@ const buildChallenge = (
 });
 
 describe('PhaseReviewService', () => {
-  let loggerSpy: jest.SpyInstance;
+  let loggerLogSpy: jest.SpyInstance;
+  let loggerWarnSpy: jest.SpyInstance;
   let service: PhaseReviewService;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
@@ -89,8 +90,11 @@ describe('PhaseReviewService', () => {
   let configService: jest.Mocked<ConfigService>;
 
   beforeAll(() => {
-    loggerSpy = jest
+    loggerLogSpy = jest
       .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
+    loggerWarnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
   });
 
@@ -141,10 +145,11 @@ describe('PhaseReviewService', () => {
   });
 
   afterAll(() => {
-    loggerSpy?.mockRestore();
+    loggerLogSpy?.mockRestore();
+    loggerWarnSpy?.mockRestore();
   });
 
-  it('includes all submissions when the challenge allows unlimited submissions', async () => {
+  it('creates reviews only for latest submissions when submissionLimit metadata is not set', async () => {
     const challenge = buildChallenge({});
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
@@ -168,7 +173,6 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual([
-      'old-submission',
       'latest-submission',
       'unique-submission',
     ]);
@@ -227,6 +231,45 @@ describe('PhaseReviewService', () => {
     ]);
     expect(createdSubmissionIds).not.toContain('old-submission');
   });
+
+  it.each([
+    ['string "null"', 'null'],
+    ['malformed JSON string', '{"limit": }'],
+    ['boolean true', true],
+  ])(
+    'treats %s submissionLimit as limited',
+    async (_description, submissionLimit) => {
+      const challenge = buildChallenge({
+        submissionLimit,
+      } as any);
+      challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+      const submissions: ActiveContestSubmission[] = [
+        { id: 'old-submission', memberId: '123', isLatest: false },
+        { id: 'latest-submission', memberId: '123', isLatest: true },
+      ];
+
+      reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+      await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+      const createdSubmissionIds =
+        reviewService.createPendingReview.mock.calls.map(
+          (callArgs) => callArgs[0],
+        );
+
+      expect(createdSubmissionIds).toEqual(['latest-submission']);
+
+      const warningMessages = loggerWarnSpy.mock.calls.map(
+        ([message]) => message as string,
+      );
+      expect(warningMessages).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('defaulting to limited submissions.'),
+        ]),
+      );
+    },
+  );
 
   it('skips non-latest submissions without member IDs when a limit is enforced', async () => {
     const submissionLimit = JSON.stringify({ limit: 'true', count: 1 });

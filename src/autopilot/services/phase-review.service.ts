@@ -483,15 +483,19 @@ export class PhaseReviewService {
     const rawValue = metadata['submissionLimit'];
 
     if (rawValue == null) {
-      return true;
+      return false;
     }
+
+    const warnUnrecognized = (value: unknown) =>
+      this.warnUnrecognizedSubmissionLimit(challenge, value);
 
     let parsed: unknown = rawValue;
 
     if (typeof rawValue === 'string') {
       const trimmed = rawValue.trim();
       if (!trimmed) {
-        return true;
+        warnUnrecognized(rawValue);
+        return false;
       }
 
       try {
@@ -505,7 +509,8 @@ export class PhaseReviewService {
         if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
           return true;
         }
-        return true;
+        warnUnrecognized(trimmed);
+        return false;
       }
     }
 
@@ -522,7 +527,8 @@ export class PhaseReviewService {
       if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
         return true;
       }
-      return true;
+      warnUnrecognized(parsed);
+      return false;
     }
 
     if (parsed && typeof parsed === 'object') {
@@ -555,11 +561,55 @@ export class PhaseReviewService {
       if (limitFlag === true) {
         return false;
       }
+      if (limitFlag === false) {
+        return true;
+      }
 
-      return true;
+      warnUnrecognized(record);
+      return false;
     }
 
-    return true;
+    warnUnrecognized(parsed);
+    return false;
+  }
+
+  private warnUnrecognizedSubmissionLimit(
+    challenge: IChallenge,
+    value: unknown,
+  ): void {
+    const valueDescription = this.describeSubmissionLimitValue(value);
+    this.logger.warn(
+      `Unrecognized submissionLimit metadata value ${valueDescription} for challenge ${challenge.id}; defaulting to limited submissions.`,
+    );
+  }
+
+  private describeSubmissionLimitValue(value: unknown): string {
+    if (value === undefined) {
+      return 'undefined';
+    }
+    if (value === null) {
+      return 'null';
+    }
+    if (typeof value === 'string') {
+      return value.trim().length ? `"${value}"` : '(empty string)';
+    }
+    if (typeof value === 'number') {
+      if (Number.isNaN(value)) {
+        return 'NaN';
+      }
+      return value.toString();
+    }
+    if (typeof value === 'boolean') {
+      return value ? 'true' : 'false';
+    }
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return Object.prototype.toString.call(value);
+      }
+    }
+    return String(value);
   }
 
   private parseBooleanFlag(value: unknown): boolean | null {
