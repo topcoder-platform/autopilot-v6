@@ -8,6 +8,12 @@ interface SubmissionRecord {
   id: string;
 }
 
+export interface ActiveContestSubmission {
+  id: string;
+  memberId: string | null;
+  isLatest: boolean;
+}
+
 interface ReviewRecord {
   submissionId: string | null;
   resourceId: string;
@@ -143,53 +149,22 @@ export class ReviewService {
           AND s."memberId" IS NOT NULL
           AND (
             s."type" IS NULL
-            OR upper(s."type") = 'CONTEST_SUBMISSION'
+            OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
           )
         ORDER BY rs."aggregateScore" DESC, s."submittedDate" ASC, s."id" ASC
         ${limitClause}
       `);
 
-      if (!rows.length) {
-        void this.dbLogger.logAction('review.getTopFinalReviewScores', {
-          challengeId,
-          status: 'SUCCESS',
-          source: ReviewService.name,
-          details: { limit, rowsExamined: 0, winnersCount: 0 },
-        });
-        return [];
-      }
+      const winnersFromSummations =
+        this.selectUniqueMemberScoresFromSummations(rows, limit);
 
-      const seenMembers = new Set<string>();
-      const winners: Array<{
-        memberId: string;
-        submissionId: string;
-        aggregateScore: number;
-      }> = [];
+      let winners = winnersFromSummations;
+      let dataSource: 'reviewSummation' | 'reviewSummaries' = 'reviewSummation';
 
-      for (const row of rows) {
-        const memberId = row.memberId?.trim();
-        if (!memberId || seenMembers.has(memberId)) {
-          continue;
-        }
-
-        const aggregateScore =
-          typeof row.aggregateScore === 'string'
-            ? Number(row.aggregateScore)
-            : (row.aggregateScore ?? 0);
-
-        if (Number.isNaN(aggregateScore)) {
-          continue;
-        }
-
-        winners.push({
-          memberId,
-          submissionId: row.submissionId,
-          aggregateScore,
-        });
-        seenMembers.add(memberId);
-
-        if (winners.length >= limit) {
-          break;
+      if (!winners.length) {
+        winners = await this.deriveTopScoresFromSummaries(challengeId, limit);
+        if (winners.length) {
+          dataSource = 'reviewSummaries';
         }
       }
 
@@ -201,6 +176,7 @@ export class ReviewService {
           limit,
           rowsExamined: rows.length,
           winnersCount: winners.length,
+          dataSource,
         },
       });
 
@@ -215,6 +191,106 @@ export class ReviewService {
       });
       throw err;
     }
+  }
+
+  private selectUniqueMemberScoresFromSummations(
+    rows: Array<{
+      memberId: string | null;
+      submissionId: string;
+      aggregateScore: number | string | null;
+    }>,
+    limit: number,
+  ): Array<{ memberId: string; submissionId: string; aggregateScore: number }> {
+    const winners: Array<{
+      memberId: string;
+      submissionId: string;
+      aggregateScore: number;
+    }> = [];
+    const seenMembers = new Set<string>();
+
+    for (const row of rows) {
+      const memberId = row.memberId?.trim();
+      if (!memberId || seenMembers.has(memberId)) {
+        continue;
+      }
+
+      const aggregateScore =
+        typeof row.aggregateScore === 'string'
+          ? Number(row.aggregateScore)
+          : (row.aggregateScore ?? 0);
+
+      if (Number.isNaN(aggregateScore)) {
+        continue;
+      }
+
+      winners.push({
+        memberId,
+        submissionId: row.submissionId,
+        aggregateScore,
+      });
+      seenMembers.add(memberId);
+
+      if (winners.length >= limit) {
+        break;
+      }
+    }
+
+    return winners;
+  }
+
+  private async deriveTopScoresFromSummaries(
+    challengeId: string,
+    limit: number,
+  ): Promise<
+    Array<{ memberId: string; submissionId: string; aggregateScore: number }>
+  > {
+    const summaries = await this.generateReviewSummaries(challengeId);
+    if (!summaries.length) {
+      return [];
+    }
+
+    const seenMembers = new Set<string>();
+    const sortedSummaries = summaries
+      .filter((summary) => summary.isPassing)
+      .sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) {
+          return b.aggregateScore - a.aggregateScore;
+        }
+
+        const timeA = a.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+        const timeB = b.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+        if (timeA !== timeB) {
+          return timeA - timeB;
+        }
+
+        return a.submissionId.localeCompare(b.submissionId);
+      });
+
+    const winners: Array<{
+      memberId: string;
+      submissionId: string;
+      aggregateScore: number;
+    }> = [];
+
+    for (const summary of sortedSummaries) {
+      const memberId = summary.memberId?.trim();
+      if (!memberId || seenMembers.has(memberId)) {
+        continue;
+      }
+
+      winners.push({
+        memberId,
+        submissionId: summary.submissionId,
+        aggregateScore: summary.aggregateScore,
+      });
+      seenMembers.add(memberId);
+
+      if (winners.length >= limit) {
+        break;
+      }
+    }
+
+    return winners;
   }
 
   async getActiveSubmissionIds(challengeId: string): Promise<string[]> {
@@ -247,6 +323,274 @@ export class ReviewService {
         status: 'ERROR',
         source: ReviewService.name,
         details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveContestSubmissions(
+    challengeId: string,
+  ): Promise<ActiveContestSubmission[]> {
+    const query = Prisma.sql`
+      SELECT
+        s."id",
+        s."memberId",
+        CASE
+          WHEN ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(s."memberId", s."id")
+            ORDER BY
+              s."submittedDate" DESC NULLS LAST,
+              s."createdAt" DESC NULLS LAST,
+              s."updatedAt" DESC NULLS LAST,
+              s."id" DESC
+          ) = 1 THEN TRUE
+          ELSE FALSE
+        END AS "isLatest"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+    `;
+
+    try {
+      const submissions =
+        await this.prisma.$queryRaw<
+          Array<{ id: string; memberId: string | null; isLatest: boolean }>
+        >(query);
+
+      const sanitized = submissions
+        .filter((record) => Boolean(record?.id))
+        .map((record) => ({
+          id: record.id,
+          memberId: record.memberId ?? null,
+          isLatest: Boolean(record.isLatest),
+        }));
+
+      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: sanitized.length },
+      });
+
+      return sanitized;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveContestSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    try {
+      const submissions = await this.getActiveContestSubmissions(challengeId);
+      const submissionIds = submissions.map((record) => record.id);
+
+      void this.dbLogger.logAction('review.getActiveContestSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: submissionIds.length },
+      });
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveContestSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveCheckpointSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SUBMISSION_TABLE}
+      WHERE "challengeId" = ${challengeId}
+        AND ("status" = 'ACTIVE' OR "status" IS NULL)
+        AND UPPER(("type")::text) = 'CHECKPOINT_SUBMISSION'
+    `;
+
+    try {
+      const submissions =
+        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = submissions
+        .map((record) => record.id)
+        .filter(Boolean);
+
+      void this.dbLogger.logAction(
+        'review.getActiveCheckpointSubmissionIds',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: { submissionCount: submissionIds.length },
+        },
+      );
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'review.getActiveCheckpointSubmissionIds',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: { error: err.message },
+        },
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Returns checkpoint submission IDs that have a COMPLETED review for the provided screening scorecard
+   * with a recorded score (final or raw) greater than or equal to the scorecard's minimumPassingScore.
+   */
+  async getCheckpointPassedSubmissionIds(
+    challengeId: string,
+    screeningScorecardId: string,
+  ): Promise<string[]> {
+    if (!challengeId || !screeningScorecardId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      SELECT s."id"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."submissionId" = s."id"
+      INNER JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+        AND r."scorecardId" = ${screeningScorecardId}
+        AND UPPER((r."status")::text) = 'COMPLETED'
+        AND GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const submissionIds = rows.map((r) => r.id).filter(Boolean);
+
+      void this.dbLogger.logAction('review.getCheckpointPassedSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardId,
+          submissionCount: submissionIds.length,
+        },
+      });
+
+      return submissionIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getCheckpointPassedSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getFailedScreeningSubmissionIds(
+    challengeId: string,
+    screeningScorecardIds: string[],
+  ): Promise<Set<string>> {
+    const uniqueIds = Array.from(
+      new Set(
+        screeningScorecardIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueIds.length) {
+      return new Set();
+    }
+
+    const scorecardList = Prisma.join(uniqueIds.map((id) => Prisma.sql`${id}`));
+
+    const query = Prisma.sql`
+      SELECT DISTINCT s."id"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."submissionId" = s."id"
+      INNER JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND r."scorecardId" IN (${scorecardList})
+        AND (
+          (
+            UPPER((r."status")::text) = 'COMPLETED'
+            AND GREATEST(
+              COALESCE(r."finalScore", 0),
+              COALESCE(r."initialScore", 0)
+            ) < COALESCE(sc."minimumPassingScore", sc."minScore", 50)
+          )
+          OR UPPER((r."status")::text) = 'FAILED'
+        )
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
+      const failedIds = new Set(
+        rows.map((record) => record.id).filter(Boolean),
+      );
+
+      void this.dbLogger.logAction('review.getFailedScreeningSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardCount: uniqueIds.length,
+          failedSubmissionCount: failedIds.size,
+        },
+      });
+
+      return failedIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getFailedScreeningSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          screeningScorecardCount: uniqueIds.length,
+          error: err.message,
+        },
       });
       throw err;
     }
@@ -296,6 +640,57 @@ export class ReviewService {
         source: ReviewService.name,
         details: {
           phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getReviewerSubmissionPairs(
+    challengeId: string,
+  ): Promise<Set<string>> {
+    if (!challengeId) {
+      return new Set<string>();
+    }
+
+    const query = Prisma.sql`
+      SELECT review."submissionId", review."resourceId"
+      FROM ${ReviewService.REVIEW_TABLE} AS review
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} AS submission
+        ON submission."id" = review."submissionId"
+      WHERE submission."challengeId" = ${challengeId}
+    `;
+
+    try {
+      const records = await this.prisma.$queryRaw<ReviewRecord[]>(query);
+      const result = new Set<string>();
+
+      for (const record of records) {
+        if (!record.submissionId || !record.resourceId) {
+          continue;
+        }
+
+        result.add(this.composeKey(record.resourceId, record.submissionId));
+      }
+
+      void this.dbLogger.logAction('review.getReviewerSubmissionPairs', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pairCount: result.size,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getReviewerSubmissionPairs', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
           error: err.message,
         },
       });
@@ -385,6 +780,7 @@ export class ReviewService {
             OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
           )
       )
+      RETURNING "id"
     `;
 
     try {
@@ -395,14 +791,47 @@ export class ReviewService {
         scorecardId,
       );
 
-      const created = await this.prisma.$transaction(async (tx) => {
-        await tx.$executeRaw(Prisma.sql`
-          SELECT pg_advisory_xact_lock(${lockId})
-        `);
+      const { created, reviewId, pendingReviewIds } =
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw(Prisma.sql`
+            SELECT pg_advisory_xact_lock(${lockId})
+          `);
 
-        const rowsInserted = await tx.$executeRaw(insert);
-        return rowsInserted > 0;
-      });
+          const insertedReviews = await tx.$queryRaw<
+            Array<{ id: string }>
+          >(insert);
+
+          if (insertedReviews.length > 0) {
+            return {
+              created: true,
+              reviewId: insertedReviews[0]?.id ?? null,
+              pendingReviewIds: insertedReviews.map((row) => row.id),
+            };
+          }
+
+          const existingPendingReviews = await tx.$queryRaw<
+            Array<{ id: string }>
+          >(Prisma.sql`
+            SELECT existing."id"
+            FROM ${ReviewService.REVIEW_TABLE} existing
+            WHERE existing."resourceId" = ${resourceId}
+              AND existing."phaseId" = ${phaseId}
+              AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
+              AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
+              AND (
+                existing."status" IS NULL
+                OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+              )
+            ORDER BY existing."createdAt" DESC, existing."id" DESC
+            LIMIT 10
+          `);
+
+          return {
+            created: false,
+            reviewId: existingPendingReviews[0]?.id ?? null,
+            pendingReviewIds: existingPendingReviews.map((row) => row.id),
+          };
+        });
 
       void this.dbLogger.logAction('review.createPendingReview', {
         challengeId,
@@ -412,7 +841,10 @@ export class ReviewService {
           resourceId,
           submissionId,
           phaseId,
+          scorecardId,
           created,
+          reviewId,
+          pendingReviewIds,
         },
       });
 
@@ -427,7 +859,9 @@ export class ReviewService {
           resourceId,
           submissionId,
           phaseId,
+          scorecardId,
           error: err.message,
+          errorStack: err.stack ?? null,
         },
       });
       throw err;
@@ -811,6 +1245,51 @@ export class ReviewService {
     }
   }
 
+  async getScorecardIdByName(name: string): Promise<string | null> {
+    if (!name) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT "id"
+      FROM ${ReviewService.SCORECARD_TABLE}
+      WHERE "name" = ${name}
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<{ id: string | null }[]>(
+        query,
+      );
+
+      const id = record?.id ?? null;
+
+      void this.dbLogger.logAction('review.getScorecardIdByName', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          name,
+          scorecardId: id,
+        },
+      });
+
+      return id;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getScorecardIdByName', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          name,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getPendingAppealCount(challengeId: string): Promise<number> {
     const query = Prisma.sql`
       SELECT COUNT(*)::int AS count
@@ -847,6 +1326,50 @@ export class ReviewService {
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('review.getPendingAppealCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getTotalAppealCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.APPEAL_TABLE} a
+      INNER JOIN ${ReviewService.REVIEW_ITEM_COMMENT_TABLE} ric
+        ON ric."id" = a."reviewItemCommentId"
+      INNER JOIN ${ReviewService.REVIEW_ITEM_TABLE} ri
+        ON ri."id" = ric."reviewItemId"
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."id" = ri."reviewId"
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = r."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<AppealCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getTotalAppealCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          totalAppeals: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getTotalAppealCount', {
         challengeId,
         status: 'ERROR',
         source: ReviewService.name,

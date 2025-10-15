@@ -592,6 +592,8 @@ model ChallengeReviewer {
   incrementalCoefficient    Float?
   type                ReviewOpportunityTypeEnum?
   aiWorkflowId        String? @db.VarChar(14)
+  // If false, Autopilot should not open public review opportunities for this reviewer
+  shouldOpenOpportunity Boolean @default(true)
 
   // Relation to the challenge
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
@@ -626,6 +628,8 @@ model DefaultChallengeReviewer {
   incrementalCoefficient    Float?
   opportunityType     ReviewOpportunityTypeEnum?
   isAIReviewer        Boolean
+  // Default for whether to open a public review opportunity for this reviewer when a challenge is created
+  shouldOpenOpportunity Boolean @default(true)
 
   // Relations
   challengeType  ChallengeType  @relation(fields: [typeId], references: [id])

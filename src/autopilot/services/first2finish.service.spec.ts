@@ -13,7 +13,11 @@ import type {
   IPhase,
   IChallengeReviewer,
 } from '../../challenge/interfaces/challenge.interface';
-import { ITERATIVE_REVIEW_PHASE_NAME } from '../constants/review.constants';
+import {
+  ITERATIVE_REVIEW_PHASE_NAME,
+  REGISTRATION_PHASE_NAME,
+  SUBMISSION_PHASE_NAME,
+} from '../constants/review.constants';
 
 const iso = () => new Date().toISOString();
 
@@ -71,7 +75,7 @@ const buildChallenge = (overrides: Partial<IChallenge> = {}): IChallenge => ({
   status: 'ACTIVE',
   createdBy: 'tester',
   updatedBy: 'tester',
-  metadata: [],
+  metadata: {},
   phases: [],
   reviewers: [],
   winners: [],
@@ -108,6 +112,7 @@ describe('First2FinishService', () => {
     challengeApiService = {
       getChallengeById: jest.fn(),
       createIterativeReviewPhase: jest.fn(),
+      getPhaseDetails: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
     schedulerService = {
@@ -118,6 +123,7 @@ describe('First2FinishService', () => {
     reviewService = {
       getAllSubmissionIdsOrdered: jest.fn(),
       getExistingReviewPairs: jest.fn(),
+      getReviewerSubmissionPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getScorecardPassingScore: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
@@ -145,6 +151,8 @@ describe('First2FinishService', () => {
       resourcesService,
       configService,
     );
+
+    reviewService.getReviewerSubmissionPairs.mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -175,6 +183,67 @@ describe('First2FinishService', () => {
       challengeApiService.createIterativeReviewPhase,
     ).not.toHaveBeenCalled();
     expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+  });
+
+  it('reopens the seeded iterative review phase when the first submission arrives', async () => {
+    const seedPhase = buildIterativePhase({
+      isOpen: false,
+      actualStartDate: null,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [seedPhase],
+      reviewers: [buildReviewer()],
+    });
+
+    const reopenedPhase: IPhase = {
+      ...seedPhase,
+      isOpen: true,
+      actualStartDate: iso(),
+      actualEndDate: null,
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    challengeApiService.getPhaseDetails.mockResolvedValue(reopenedPhase);
+
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue(['sub-123']);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.createPendingReview.mockResolvedValue(true);
+
+    await service.handleSubmissionByChallengeId(challenge.id, 'sub-123');
+
+    expect(
+      challengeApiService.createIterativeReviewPhase,
+    ).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: challenge.id,
+        phaseId: seedPhase.id,
+        state: 'START',
+      }),
+    );
+    expect(challengeApiService.getPhaseDetails).toHaveBeenCalledWith(
+      challenge.id,
+      seedPhase.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'sub-123',
+      'resource-1',
+      seedPhase.id,
+      'iterative-scorecard',
+      challenge.id,
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalled();
   });
 
   it('assigns the preferred submission when the list snapshot is empty', async () => {
@@ -230,5 +299,81 @@ describe('First2FinishService', () => {
 
     expect(schedulerService.advancePhase).not.toHaveBeenCalled();
     expect(schedulerService.schedulePhaseTransition).toHaveBeenCalled();
+  });
+
+  it('closes submission and registration after a passing iterative review', async () => {
+    const iterativePhase = buildIterativePhase({
+      id: 'iter-phase',
+      isOpen: true,
+      actualEndDate: null,
+    });
+    const submissionPhase = buildIterativePhase({
+      id: 'submission-phase',
+      name: SUBMISSION_PHASE_NAME,
+      isOpen: true,
+      actualEndDate: null,
+    });
+    const registrationPhase = buildIterativePhase({
+      id: 'registration-phase',
+      name: REGISTRATION_PHASE_NAME,
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [iterativePhase, submissionPhase, registrationPhase],
+      reviewers: [buildReviewer()],
+    });
+
+    reviewService.getScorecardPassingScore.mockResolvedValue(90);
+
+    await service.handleIterativeReviewCompletion(
+      challenge,
+      iterativePhase,
+      {
+        score: 95,
+        scorecardId: 'iterative-scorecard',
+        resourceId: 'resource-1',
+        submissionId: 'submission-1',
+        phaseId: iterativePhase.id,
+      },
+      {
+        reviewId: 'review-1',
+        challengeId: challenge.id,
+        submissionId: 'submission-1',
+        phaseId: iterativePhase.id,
+        scorecardId: 'iterative-scorecard',
+        reviewerResourceId: 'resource-1',
+        reviewerHandle: 'iterativeReviewer',
+        reviewerMemberId: '2001',
+        submitterHandle: 'submitter',
+        submitterMemberId: '4001',
+        completedAt: iso(),
+        initialScore: 95,
+      },
+    );
+
+    expect(schedulerService.advancePhase).toHaveBeenCalledTimes(3);
+    expect(schedulerService.advancePhase).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        phaseId: iterativePhase.id,
+        state: 'END',
+      }),
+    );
+    expect(schedulerService.advancePhase).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        phaseId: submissionPhase.id,
+        state: 'END',
+      }),
+    );
+    expect(schedulerService.advancePhase).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        phaseId: registrationPhase.id,
+        state: 'END',
+      }),
+    );
   });
 });

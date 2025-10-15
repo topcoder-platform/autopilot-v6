@@ -7,22 +7,31 @@ import {
 import { SchedulerService } from './scheduler.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
+import { ReviewService } from '../../review/review.service';
 import {
   AutopilotOperator,
   ChallengeUpdatePayload,
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
-import { REVIEW_PHASE_NAMES } from '../constants/review.constants';
+import {
+  DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+  REVIEW_PHASE_NAMES,
+} from '../constants/review.constants';
+import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class PhaseScheduleManager {
   private readonly logger = new Logger(PhaseScheduleManager.name);
+  private readonly appealsResponsePhaseNames: Set<string>;
 
   constructor(
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly reviewAssignmentService: ReviewAssignmentService,
+    private readonly reviewService: ReviewService,
+    private readonly configService: ConfigService,
   ) {
     this.schedulerService.setPhaseChainCallback(
       (
@@ -38,6 +47,13 @@ export class PhaseScheduleManager {
           nextPhases,
         );
       },
+    );
+
+    this.appealsResponsePhaseNames = new Set(
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsResponsePhaseNames'),
+        Array.from(DEFAULT_APPEALS_RESPONSE_PHASE_NAMES),
+      ),
     );
   }
 
@@ -145,7 +161,7 @@ export class PhaseScheduleManager {
       `Consumed phase transition event: ${JSON.stringify(message)}`,
     );
 
-    if (!this.isChallengeActive(message.projectStatus)) {
+    if (!isActiveStatus(message.projectStatus)) {
       this.logger.log(
         `Ignoring phase transition for challenge ${message.challengeId} with status ${message.projectStatus}; only ACTIVE challenges are processed.`,
       );
@@ -188,7 +204,7 @@ export class PhaseScheduleManager {
         challenge.id,
       );
 
-      if (!this.isChallengeActive(challengeDetails.status)) {
+      if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
           `Skipping challenge ${challenge.id} with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -239,7 +255,7 @@ export class PhaseScheduleManager {
         message.id,
       );
 
-      if (!this.isChallengeActive(challengeDetails.status)) {
+      if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
           `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -476,7 +492,7 @@ export class PhaseScheduleManager {
     projectStatus: string,
     nextPhases: IPhase[],
   ): Promise<void> {
-    if (!this.isChallengeActive(projectStatus)) {
+    if (!isActiveStatus(projectStatus)) {
       this.logger.log(
         `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}), skipping phase chain processing.`,
       );
@@ -552,7 +568,7 @@ export class PhaseScheduleManager {
     projectStatus: string,
     phase: IPhase,
   ): Promise<boolean> {
-    if (!this.isChallengeActive(projectStatus)) {
+    if (!isActiveStatus(projectStatus)) {
       this.logger.log(
         `[PHASE CHAIN] Challenge ${challengeId} is not ACTIVE (status: ${projectStatus}); skipping phase ${phase.name} (${phase.id}).`,
       );
@@ -582,16 +598,16 @@ export class PhaseScheduleManager {
       `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
 
-    if (REVIEW_PHASE_NAMES.has(phase.name)) {
-      try {
-        await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
-      } catch (error) {
-        const err = error as Error;
-        this.logger.error(
-          `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
-          err.stack,
-        );
-      }
+    // Create pending reviews for any review-related phases (Review, Screening, Approval).
+    // PhaseReviewService will ignore non review phases.
+    try {
+      await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
     }
 
     const updatedPhase =
@@ -602,6 +618,39 @@ export class PhaseScheduleManager {
         `[PHASE CHAIN] Opened phase ${phase.name} (${phase.id}) has no scheduled end date, skipping scheduling`,
       );
       return false;
+    }
+
+    if (this.isAppealsResponsePhaseName(updatedPhase.name)) {
+      try {
+        const totalAppeals =
+          await this.reviewService.getTotalAppealCount(challengeId);
+
+        if (totalAppeals === 0) {
+          this.logger.log(
+            `[APPEALS RESPONSE] No appeals detected for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
+          );
+
+          const closePayload: PhaseTransitionPayload = {
+            projectId,
+            challengeId,
+            phaseId: updatedPhase.id,
+            phaseTypeName: updatedPhase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+            projectStatus,
+            date: new Date().toISOString(),
+          };
+
+          await this.schedulerService.advancePhase(closePayload);
+          return true;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS RESPONSE] Unable to auto-close phase ${updatedPhase.id} for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
     }
 
     const existingJobId = this.schedulerService.buildJobId(
@@ -633,7 +682,16 @@ export class PhaseScheduleManager {
     return true;
   }
 
-  private isChallengeActive(status?: string): boolean {
-    return (status ?? '').toUpperCase() === 'ACTIVE';
+  // isActiveStatus utility now centralizes active-status checks
+
+  private isAppealsResponsePhaseName(
+    phaseName?: string | null,
+  ): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return this.appealsResponsePhaseNames.has(normalized);
   }
 }

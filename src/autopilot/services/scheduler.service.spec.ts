@@ -11,6 +11,7 @@ import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
+import { PhaseChangeNotificationService } from './phase-change-notification.service';
 import { ConfigService } from '@nestjs/config';
 import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import {
@@ -34,6 +35,8 @@ type ChallengeApiServiceMock = {
 
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
+  getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
+  getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
 };
 
 type KafkaServiceMock = {
@@ -82,6 +85,7 @@ describe('SchedulerService (review phase deferral)', () => {
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let reviewService: ReviewServiceMock;
   let resourcesService: jest.Mocked<ResourcesService>;
+  let phaseChangeNotificationService: jest.Mocked<PhaseChangeNotificationService>;
   let configService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
@@ -108,13 +112,23 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService = {
       getPendingReviewCount:
         createMockMethod<ReviewService['getPendingReviewCount']>(),
+      getPendingAppealCount:
+        createMockMethod<ReviewService['getPendingAppealCount']>(),
+      getTotalAppealCount:
+        createMockMethod<ReviewService['getTotalAppealCount']>(),
     };
+    reviewService.getTotalAppealCount.mockResolvedValue(1);
+    reviewService.getPendingAppealCount.mockResolvedValue(0);
 
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
       getReviewerResources: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<ResourcesService>;
+
+    phaseChangeNotificationService = {
+      sendPhaseChangeNotification: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<PhaseChangeNotificationService>;
 
     configService = {
       get: jest.fn().mockReturnValue(undefined),
@@ -127,6 +141,7 @@ describe('SchedulerService (review phase deferral)', () => {
       challengeCompletionService,
       reviewService as unknown as ReviewService,
       resourcesService,
+      phaseChangeNotificationService,
       configService,
     );
   });
@@ -206,6 +221,208 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.challengeId,
       payload.phaseId,
       'close',
+    );
+  });
+
+  it('defers closing appeals phases when pending appeal responses exist', async () => {
+    const payload = createPayload({
+      phaseId: 'appeals-phase',
+      phaseTypeName: 'Appeals Response',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Appeals Response',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingAppealCount.mockResolvedValue(2);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('appeals-rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes appeals phase without pending appeal check', async () => {
+    const payload = createPayload({
+      phaseId: 'appeals-phase',
+      phaseTypeName: 'Appeals',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Appeals',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingAppealCount.mockResolvedValue(0);
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed appeals',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Appeals',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getPendingAppealCount).not.toHaveBeenCalled();
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('closes appeals response phase when all responses are in', async () => {
+    const payload = createPayload({
+      phaseId: 'appeals-response-phase',
+      phaseTypeName: 'Appeals Response',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Appeals Response',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingAppealCount.mockResolvedValue(0);
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed appeals response',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Appeals Response',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('auto-closes appeals response phase immediately when no appeals exist on open', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'appeals-response-phase',
+      phaseTypeName: 'Appeals Response',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Appeals Response',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Appeals Response',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    reviewService.getTotalAppealCount.mockResolvedValue(0);
+    reviewService.getPendingAppealCount.mockResolvedValue(0);
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened appeals response',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Appeals Response',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    const closeResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed appeals response',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Appeals Response',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase
+      .mockResolvedValueOnce(openResponse)
+      .mockResolvedValueOnce(closeResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenNthCalledWith(
+      1,
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(reviewService.getTotalAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenNthCalledWith(
+      2,
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
     );
   });
 });

@@ -15,6 +15,7 @@ import {
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
+  REGISTRATION_PHASE_NAME,
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
   isSubmissionPhaseName,
@@ -169,6 +170,24 @@ export class First2FinishService {
           projectStatus: challenge.status,
         });
       }
+
+      const openRegistrationPhases = challenge.phases.filter(
+        (phaseCandidate) =>
+          phaseCandidate.isOpen &&
+          phaseCandidate.name === REGISTRATION_PHASE_NAME,
+      );
+
+      for (const registrationPhase of openRegistrationPhases) {
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: registrationPhase.id,
+          phaseTypeName: registrationPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+      }
     } else {
       this.logger.log(
         `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore}).`,
@@ -248,6 +267,23 @@ export class First2FinishService {
         );
         return;
       }
+
+      // Safety: if any non-completed review exists for this phase, do not close or reassign
+      const existingPairs = await this.reviewService.getExistingReviewPairs(
+        activePhase.id,
+        challenge.id,
+      );
+      if (existingPairs.size > 0) {
+        this.logger.debug(
+          `Iterative review work detected for challenge ${challenge.id}; deferring.`,
+          {
+            submissionId: submissionId ?? null,
+            activePhaseId: activePhase.id,
+            existingPairs: existingPairs.size,
+          },
+        );
+        return;
+      }
     }
 
     if (!activePhase) {
@@ -263,10 +299,19 @@ export class First2FinishService {
         }
       }
 
-      activePhase = await this.createNextIterativePhase(
-        challenge,
-        latestIterativePhase,
-      );
+      if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
+        activePhase = await this.reopenSeedIterativePhase(
+          challenge,
+          latestIterativePhase,
+        );
+      }
+
+      if (!activePhase) {
+        activePhase = await this.createNextIterativePhase(
+          challenge,
+          latestIterativePhase,
+        );
+      }
 
       if (!activePhase) {
         return;
@@ -402,52 +447,47 @@ export class First2FinishService {
     phase: IPhase,
     resourceId: string,
     scorecardId: string,
-    preferredSubmissionId?: string,
+    candidateSubmissionIds: string[],
+    usedPairs: Set<string>,
   ): Promise<boolean> {
-    const submissionIds =
-      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
-
-    const orderedIds = preferredSubmissionId
-      ? [preferredSubmissionId, ...submissionIds]
-      : submissionIds;
-
-    const seen = new Set<string>();
-    const uniqueIds = orderedIds.filter((id) => {
-      if (!id || seen.has(id)) {
-        return false;
-      }
-      seen.add(id);
-      return true;
-    });
-
-    if (!uniqueIds.length) {
-      return false;
-    }
-
-    const existingPairs = await this.reviewService.getExistingReviewPairs(
-      phase.id,
-      challengeId,
-    );
-
-    for (const submissionId of uniqueIds) {
-      const key = `${resourceId}:${submissionId}`;
-      if (existingPairs.has(key)) {
+    for (const submissionId of candidateSubmissionIds) {
+      if (!submissionId) {
         continue;
       }
 
-      const created = await this.reviewService.createPendingReview(
-        submissionId,
-        resourceId,
-        phase.id,
-        scorecardId,
-        challengeId,
-      );
+      const key = `${resourceId}:${submissionId}`;
+      if (usedPairs.has(key)) {
+        continue;
+      }
 
-      if (created) {
-        this.logger.log(
-          `Assigned iterative review for submission ${submissionId} to resource ${resourceId} on challenge ${challengeId}.`,
+      try {
+        const created = await this.reviewService.createPendingReview(
+          submissionId,
+          resourceId,
+          phase.id,
+          scorecardId,
+          challengeId,
         );
-        return true;
+
+        if (created) {
+          usedPairs.add(key);
+          this.logger.log(
+            `Assigned iterative review for submission ${submissionId} to resource ${resourceId} on challenge ${challengeId}.`,
+          );
+          return true;
+        }
+
+        usedPairs.add(key);
+      } catch (error) {
+        if (this.isDuplicateReviewPairError(error)) {
+          usedPairs.add(key);
+          this.logger.debug(
+            `Skipped duplicate iterative review assignment for submission ${submissionId} and resource ${resourceId} on challenge ${challengeId}.`,
+          );
+          continue;
+        }
+
+        throw error;
       }
     }
 
@@ -498,11 +538,17 @@ export class First2FinishService {
       latestIterativePhase.id,
       challengeId,
     );
+    const reviewerHistoryPairs =
+      await this.reviewService.getReviewerSubmissionPairs(challengeId);
+    const exclusionPairs = new Set<string>([
+      ...recentPairs,
+      ...reviewerHistoryPairs,
+    ]);
 
     const preferredSubmissionId = this.selectNextIterativeSubmission(
       reviewers,
       submissionIds,
-      recentPairs,
+      exclusionPairs,
       lastSubmissionId,
     );
 
@@ -525,10 +571,21 @@ export class First2FinishService {
       return;
     }
 
-    const nextPhase = await this.createNextIterativePhase(
-      challenge,
-      latestIterativePhase,
-    );
+    let nextPhase: IPhase | null = null;
+
+    if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
+      nextPhase = await this.reopenSeedIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
+    }
+
+    if (!nextPhase) {
+      nextPhase = await this.createNextIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
+    }
 
     if (!nextPhase) {
       return;
@@ -567,12 +624,31 @@ export class First2FinishService {
     challenge: IChallenge,
     phase: IPhase,
   ): string | null {
-    return selectScorecardId(
+    // Prefer configured scorecard(s) on the challenge for the Iterative Review phase
+    const selected = selectScorecardId(
       challenge.reviewers ?? [],
       () => null,
       () => null,
       phase.phaseId,
     );
+
+    if (selected) {
+      return selected;
+    }
+
+    // Fallback: use a default iterative review scorecard if provided via config
+    const fallback = this.configService.get<string | null>(
+      'autopilot.iterativeReviewScorecardId',
+    );
+
+    if (fallback && typeof fallback === 'string' && fallback.trim().length) {
+      this.logger.warn(
+        `Using fallback iterative review scorecard ${fallback} for challenge ${challenge.id} (no phase-specific scorecard configured).`,
+      );
+      return fallback.trim();
+    }
+
+    return null;
   }
 
   private getLatestIterativePhase(challenge: IChallenge): IPhase | null {
@@ -591,6 +667,56 @@ export class First2FinishService {
     return sorted.at(-1) ?? null;
   }
 
+  private canReuseSeedIterativePhase(phase: IPhase): boolean {
+    return (
+      !phase.isOpen &&
+      !phase.actualStartDate &&
+      !phase.actualEndDate
+    );
+  }
+
+  private async reopenSeedIterativePhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'START',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+
+      const refreshed = await this.challengeApiService.getPhaseDetails(
+        challenge.id,
+        phase.id,
+      );
+
+      if (!refreshed?.isOpen) {
+        this.logger.warn(
+          `Failed to reopen seeded iterative review phase ${phase.id} for challenge ${challenge.id}; proceeding to create a new phase.`,
+        );
+        return null;
+      }
+
+      this.logger.log(
+        `Reopened seeded iterative review phase ${phase.id} for challenge ${challenge.id}.`,
+      );
+
+      return refreshed;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to reopen seeded iterative review phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
+  }
+
   private getPhaseStartTime(phase: IPhase): number {
     const reference = phase.actualStartDate ?? phase.scheduledStartDate;
     return new Date(reference).getTime();
@@ -599,7 +725,7 @@ export class First2FinishService {
   private selectNextIterativeSubmission(
     reviewers: Array<{ id: string }>,
     submissionIds: string[],
-    recentPairs: Set<string>,
+    exclusionPairs: Set<string>,
     lastSubmissionId?: string,
   ): string | null {
     for (const submissionId of submissionIds) {
@@ -608,7 +734,7 @@ export class First2FinishService {
       }
 
       const alreadyReviewed = reviewers.some((reviewer) =>
-        recentPairs.has(`${reviewer.id}:${submissionId}`),
+        exclusionPairs.has(`${reviewer.id}:${submissionId}`),
       );
 
       if (!alreadyReviewed) {
@@ -690,13 +816,43 @@ export class First2FinishService {
     scorecardId: string,
     preferredSubmissionId?: string,
   ): Promise<boolean> {
+    const submissionIds =
+      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
+
+    const orderedIds = preferredSubmissionId
+      ? [preferredSubmissionId, ...submissionIds]
+      : submissionIds;
+
+    const seen = new Set<string>();
+    const candidateSubmissionIds = orderedIds.filter((id) => {
+      if (!id || seen.has(id)) {
+        return false;
+      }
+      seen.add(id);
+      return true;
+    });
+
+    if (!candidateSubmissionIds.length) {
+      return false;
+    }
+
+    const pendingPairs = await this.reviewService.getExistingReviewPairs(
+      phase.id,
+      challengeId,
+    );
+    const historicalPairs = await this.reviewService.getReviewerSubmissionPairs(
+      challengeId,
+    );
+    const usedPairs = new Set<string>([...pendingPairs, ...historicalPairs]);
+
     for (const reviewer of reviewers) {
       const assigned = await this.assignNextIterativeReview(
         challengeId,
         phase,
         reviewer.id,
         scorecardId,
-        preferredSubmissionId,
+        candidateSubmissionIds,
+        usedPairs,
       );
 
       if (assigned) {
@@ -705,5 +861,28 @@ export class First2FinishService {
     }
 
     return false;
+  }
+
+  private isDuplicateReviewPairError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const candidate = error as { code?: string; message?: string };
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+
+    if (code === 'P2002' || code === 'P2034' || code === '23505') {
+      return true;
+    }
+
+    if (code.toUpperCase().includes('23505')) {
+      return true;
+    }
+
+    const message = typeof candidate.message === 'string' ? candidate.message : '';
+
+    return (
+      message.includes('already exists') || message.includes('duplicate key')
+    );
   }
 }

@@ -176,6 +176,56 @@ export class ResourcesService {
     }
   }
 
+  async getPhaseChangeNotificationResources(
+    challengeId: string,
+  ): Promise<ReviewerResourceRecord[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        r."id",
+        r."memberId",
+        r."memberHandle",
+        rr."name" AS "roleName"
+      FROM ${ResourcesService.RESOURCE_TABLE} r
+      INNER JOIN ${ResourcesService.RESOURCE_ROLE_TABLE} rr ON rr."id" = r."roleId"
+      WHERE r."challengeId" = ${challengeId}
+        AND r."phaseChangeNotifications" IS TRUE
+    `;
+
+    try {
+      const recipients = await this.prisma.$queryRaw<
+        ReviewerResourceRecord[]
+      >(query);
+
+      void this.dbLogger.logAction(
+        'resources.getPhaseChangeNotificationResources',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ResourcesService.name,
+          details: { recipientCount: recipients.length },
+        },
+      );
+
+      return recipients;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'resources.getPhaseChangeNotificationResources',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ResourcesService.name,
+          details: { error: err.message },
+        },
+      );
+      throw err;
+    }
+  }
+
   async getResourceByMemberHandle(
     challengeId: string,
     memberHandle: string,

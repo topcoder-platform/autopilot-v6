@@ -1,12 +1,18 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { ChallengePrismaService } from './challenge-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import {
   IPhase,
   IChallenge,
   IChallengeWinner,
+  IChallengePrizeSet,
 } from './interfaces/challenge.interface';
+import {
+  DEFAULT_APPEALS_PHASE_NAMES,
+  DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+} from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -35,7 +41,11 @@ const challengeWithRelationsArgs =
         include: { constraints: true },
         orderBy: { scheduledStartDate: 'asc' as const },
       },
+      metadata: true,
       winners: true,
+      prizeSets: {
+        include: { prizes: true },
+      },
       track: true,
       type: true,
       legacyRecord: true,
@@ -48,16 +58,29 @@ type ChallengeWithRelations = Prisma.ChallengeGetPayload<
 >;
 
 type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
+type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
 
 @Injectable()
 export class ChallengeApiService {
   private readonly logger = new Logger(ChallengeApiService.name);
   private readonly defaultPageSize = 50;
+  private readonly appealsPhaseNames: Set<string>;
+  private readonly appealsResponsePhaseNames: Set<string>;
 
   constructor(
     private readonly prisma: ChallengePrismaService,
     private readonly dbLogger: AutopilotDbLoggerService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.appealsPhaseNames = this.buildPhaseNameSet(
+      this.configService.get('autopilot.appealsPhaseNames'),
+      DEFAULT_APPEALS_PHASE_NAMES,
+    );
+    this.appealsResponsePhaseNames = this.buildPhaseNameSet(
+      this.configService.get('autopilot.appealsResponsePhaseNames'),
+      DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+    );
+  }
 
   async getAllActiveChallenges(
     filters: ChallengeFiltersDto = {},
@@ -339,15 +362,82 @@ export class ChallengeApiService {
       const scheduledStartDate = targetPhase.scheduledStartDate
         ? new Date(targetPhase.scheduledStartDate)
         : null;
+      const scheduledEndDate = targetPhase.scheduledEndDate
+        ? new Date(targetPhase.scheduledEndDate)
+        : null;
       const durationSeconds = this.computePhaseDurationSeconds(targetPhase);
-      const shouldAdjustSchedule =
+      const isAppealsPhase = this.isAppealsPhaseName(targetPhase.name);
+      const isOpeningLateAppeals =
+        operation === 'open' &&
+        isAppealsPhase &&
+        durationSeconds !== null &&
+        scheduledStartDate !== null &&
+        now.getTime() - scheduledStartDate.getTime() > 1000;
+      const isOpeningEarly =
+        operation === 'open' &&
+        durationSeconds !== null &&
+        scheduledStartDate !== null &&
+        scheduledStartDate.getTime() - now.getTime() > 1000;
+      const isOpeningAfterScheduledEnd =
+        operation === 'open' &&
+        durationSeconds !== null &&
+        scheduledEndDate !== null &&
+        now.getTime() - scheduledEndDate.getTime() > 1000;
+
+      const minimumEndTime =
+        durationSeconds !== null
+          ? now.getTime() + durationSeconds * 1000
+          : null;
+      const openedLate =
         operation === 'open' &&
         scheduledStartDate !== null &&
-        durationSeconds !== null &&
-        scheduledStartDate.getTime() - now.getTime() > 1000;
-      const adjustedEndDate = shouldAdjustSchedule
-        ? new Date(now.getTime() + durationSeconds * 1000)
-        : null;
+        now.getTime() - scheduledStartDate.getTime() > 1000;
+      const hasInsufficientRemainingDuration =
+        openedLate &&
+        minimumEndTime !== null &&
+        (scheduledEndDate === null ||
+          scheduledEndDate.getTime() < minimumEndTime);
+
+      let shouldAdjustSchedule = false;
+      let adjustedEndDate: Date | null = null;
+
+      if (
+        minimumEndTime !== null &&
+        (isOpeningEarly || isOpeningLateAppeals || isOpeningAfterScheduledEnd)
+      ) {
+        shouldAdjustSchedule = true;
+        adjustedEndDate = new Date(minimumEndTime);
+      }
+
+      if (minimumEndTime !== null && hasInsufficientRemainingDuration) {
+        shouldAdjustSchedule = true;
+        if (!adjustedEndDate || adjustedEndDate.getTime() < minimumEndTime) {
+          adjustedEndDate = new Date(minimumEndTime);
+        }
+      }
+
+      if (isOpeningLateAppeals && adjustedEndDate) {
+        this.logger.log(
+          `Extending appeals phase ${targetPhase.id} to preserve duration. New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
+
+      if (isOpeningAfterScheduledEnd && adjustedEndDate && !isAppealsPhase) {
+        this.logger.log(
+          `Extending phase ${targetPhase.id} (${targetPhase.name}) opened after its scheduled end. New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
+
+      if (
+        hasInsufficientRemainingDuration &&
+        adjustedEndDate &&
+        !isOpeningLateAppeals &&
+        !isOpeningAfterScheduledEnd
+      ) {
+        this.logger.log(
+          `Extending phase ${targetPhase.id} (${targetPhase.name}) opened late to preserve configured duration (${durationSeconds}s). New end: ${adjustedEndDate.toISOString()}.`,
+        );
+      }
 
       try {
         await this.prisma.$transaction(async (tx) => {
@@ -513,7 +603,73 @@ export class ChallengeApiService {
     return null;
   }
 
+  private buildPhaseNameSet(
+    source: unknown,
+    fallback: Set<string>,
+  ): Set<string> {
+    const resolved = this.normalizeStringArray(source, Array.from(fallback));
+    return new Set(
+      resolved
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    );
+  }
+
+  private normalizeStringArray(
+    source: unknown,
+    fallback: string[],
+  ): string[] {
+    if (Array.isArray(source)) {
+      const normalized = source
+        .map((item) =>
+          typeof item === 'string' ? item.trim() : String(item ?? '').trim(),
+        )
+        .filter((item) => item.length > 0);
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    if (typeof source === 'string' && source.length > 0) {
+      const normalized = source
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    return fallback;
+  }
+
+  private isAppealsPhaseName(phaseName?: string | null): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      this.appealsPhaseNames.has(normalized) ||
+      this.appealsResponsePhaseNames.has(normalized)
+    );
+  }
+
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
+    const metadata = (challenge.metadata ?? []).reduce<
+      Record<string, string>
+    >((acc, entry) => {
+      const key = entry?.name?.trim();
+      if (!key) {
+        return acc;
+      }
+
+      acc[key] = entry.value ?? '';
+      return acc;
+    }, {});
+
     return {
       id: challenge.id,
       name: challenge.name,
@@ -538,7 +694,7 @@ export class ChallengeApiService {
       status: challenge.status,
       createdBy: challenge.createdBy,
       updatedBy: challenge.updatedBy,
-      metadata: [],
+      metadata,
       phases: challenge.phases.map((phase) => this.mapPhase(phase)),
       reviewers:
         challenge.reviewers?.map((reviewer) => this.mapReviewer(reviewer)) ||
@@ -546,7 +702,8 @@ export class ChallengeApiService {
       winners: challenge.winners?.map((winner) => this.mapWinner(winner)) || [],
       discussions: [],
       events: [],
-      prizeSets: [],
+      prizeSets:
+        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
       terms: [],
       skills: [],
       attachments: [],
@@ -621,6 +778,8 @@ export class ChallengeApiService {
       incrementalCoefficient: reviewer.incrementalCoefficient ?? null,
       type: reviewer.type ?? null,
       aiWorkflowId: reviewer.aiWorkflowId ?? null,
+      shouldOpenOpportunity:
+        reviewer.shouldOpenOpportunity === false ? false : true,
     };
   }
 
@@ -635,13 +794,217 @@ export class ChallengeApiService {
     };
   }
 
+  private mapPrizeSet(
+    prizeSet: ChallengePrizeSetWithPrizes,
+  ): IChallengePrizeSet {
+    return {
+      type: prizeSet.type,
+      description: prizeSet.description ?? null,
+      prizes:
+        prizeSet.prizes?.map((prize) => ({
+          type: prize.type,
+          value: prize.value,
+          description: prize.description ?? null,
+        })) ?? [],
+    };
+  }
+
   async createPostMortemPhase(
     challengeId: string,
     submissionPhaseId: string,
     durationHours: number,
   ): Promise<IPhase> {
     const now = new Date();
-    const end = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
+    const clampedDurationSeconds = Math.max(
+      Math.round((durationHours || 0) * 60 * 60),
+      1,
+    );
+    const end = new Date(now.getTime() + clampedDurationSeconds * 1000);
+
+    let reusedExisting = false;
+
+    try {
+      const { postMortemPhaseId } = await this.prisma.$transaction(
+        async (tx) => {
+          // Lock the challenge row to avoid concurrent duplicate creations.
+          await tx.$queryRaw(Prisma.sql`
+            SELECT 1
+            FROM "Challenge"
+            WHERE "id" = ${challengeId}
+            FOR UPDATE
+          `);
+
+          const challenge = await tx.challenge.findUnique({
+            ...challengeWithRelationsArgs,
+            where: { id: challengeId },
+          });
+
+          if (!challenge) {
+            throw new NotFoundException(
+              `Challenge with ID ${challengeId} not found when creating post-mortem phase.`,
+            );
+          }
+
+          const submissionPhaseIndex = challenge.phases.findIndex(
+            (phase) => phase.id === submissionPhaseId,
+          );
+
+          if (submissionPhaseIndex === -1) {
+            throw new NotFoundException(
+              `Submission phase ${submissionPhaseId} not found for challenge ${challengeId}.`,
+            );
+          }
+
+          const submissionPhase = challenge.phases[submissionPhaseIndex];
+
+          const futurePhases = challenge.phases.slice(submissionPhaseIndex + 1);
+          const postMortemPhases = futurePhases.filter(
+            (phase) => phase.name === 'Post-Mortem',
+          );
+          const existingPostMortem = postMortemPhases[0] ?? null;
+
+          if (postMortemPhases.length > 1) {
+            this.logger.warn(
+              `Detected ${postMortemPhases.length} Post-Mortem phases on challenge ${challengeId}; reusing the first and preserving the rest for manual reconciliation.`,
+            );
+          }
+
+          const phasesToDelete = futurePhases
+            .filter((phase) => phase.name !== 'Post-Mortem')
+            .map((phase) => phase.id);
+
+          if (phasesToDelete.length) {
+            await tx.challengePhase.deleteMany({
+              where: { id: { in: phasesToDelete } },
+            });
+          }
+
+          if (existingPostMortem) {
+            reusedExisting = true;
+            await tx.challengePhase.update({
+              where: { id: existingPostMortem.id },
+              data: {
+                predecessor: submissionPhase.phaseId ?? submissionPhase.id,
+                duration: clampedDurationSeconds,
+                scheduledStartDate: now,
+                scheduledEndDate: end,
+                actualStartDate: now,
+                actualEndDate: null,
+                isOpen: true,
+                updatedBy: 'Autopilot',
+              },
+            });
+
+            await tx.challenge.update({
+              where: { id: challengeId },
+              data: {
+                currentPhaseNames: [existingPostMortem.name],
+              },
+            });
+
+            return { postMortemPhaseId: existingPostMortem.id };
+          }
+
+          const postMortemPhaseType = await tx.phase.findUnique({
+            where: { name: 'Post-Mortem' },
+          });
+
+          if (!postMortemPhaseType) {
+            throw new NotFoundException(
+              'Phase type "Post-Mortem" is not configured in the system.',
+            );
+          }
+
+          const created = await tx.challengePhase.create({
+            data: {
+              challengeId,
+              phaseId: postMortemPhaseType.id,
+              name: postMortemPhaseType.name,
+              description: postMortemPhaseType.description,
+              predecessor: submissionPhase.phaseId ?? submissionPhase.id,
+              duration: clampedDurationSeconds,
+              scheduledStartDate: now,
+              scheduledEndDate: end,
+              actualStartDate: now,
+              isOpen: true,
+              createdBy: 'Autopilot',
+              updatedBy: 'Autopilot',
+            },
+          });
+
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: {
+              currentPhaseNames: [postMortemPhaseType.name],
+            },
+          });
+
+          return { postMortemPhaseId: created.id };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        },
+      );
+
+      const refreshed = await this.prisma.challenge.findUnique({
+        ...challengeWithRelationsArgs,
+        where: { id: challengeId },
+      });
+
+      const phaseRecord = refreshed?.phases.find(
+        (phase) => phase.id === postMortemPhaseId,
+      );
+
+      if (!phaseRecord) {
+        throw new Error(
+          `Post-mortem phase ${postMortemPhaseId} not found after processing for challenge ${challengeId}.`,
+        );
+      }
+
+      const mapped = this.mapPhase(phaseRecord);
+
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: {
+          submissionPhaseId,
+          postMortemPhaseId: mapped.id,
+          durationHours,
+          reusedExisting,
+        },
+      });
+
+      return mapped;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.createPostMortemPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          submissionPhaseId,
+          durationHours,
+          reusedExisting,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Create a Post-Mortem phase without deleting any subsequent phases and without forcing it open.
+   * Used for Topgear late submission flow where Post-Mortem must exist but only open later.
+   */
+  async createPostMortemPhasePreserving(
+    challengeId: string,
+    predecessorPhaseId: string,
+    durationHours: number,
+    openImmediately = false,
+  ): Promise<IPhase> {
+    const now = new Date();
+    const end = new Date(now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000);
 
     try {
       const { createdPhaseId } = await this.prisma.$transaction(async (tx) => {
@@ -652,30 +1015,26 @@ export class ChallengeApiService {
 
         if (!challenge) {
           throw new NotFoundException(
-            `Challenge with ID ${challengeId} not found when creating post-mortem phase.`,
+            `Challenge with ID ${challengeId} not found when creating post-mortem phase (preserving).`,
           );
         }
 
-        const submissionPhaseIndex = challenge.phases.findIndex(
-          (phase) => phase.id === submissionPhaseId,
+        const predecessorPhase = challenge.phases.find(
+          (phase) => phase.id === predecessorPhaseId,
         );
 
-        if (submissionPhaseIndex === -1) {
+        if (!predecessorPhase) {
           throw new NotFoundException(
-            `Submission phase ${submissionPhaseId} not found for challenge ${challengeId}.`,
+            `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId}.`,
           );
         }
 
-        const submissionPhase = challenge.phases[submissionPhaseIndex];
-
-        const futurePhaseIds = challenge.phases
-          .slice(submissionPhaseIndex + 1)
-          .map((phase) => phase.id);
-
-        if (futurePhaseIds.length) {
-          await tx.challengePhase.deleteMany({
-            where: { id: { in: futurePhaseIds } },
-          });
+        // If a Post-Mortem already exists, return it idempotently.
+        const existing = challenge.phases.find(
+          (phase) => phase.name === 'Post-Mortem',
+        );
+        if (existing) {
+          return { createdPhaseId: existing.id };
         }
 
         const postMortemPhaseType = await tx.phase.findUnique({
@@ -694,26 +1053,26 @@ export class ChallengeApiService {
             phaseId: postMortemPhaseType.id,
             name: postMortemPhaseType.name,
             description: postMortemPhaseType.description,
-            predecessor: submissionPhase.phaseId ?? submissionPhase.id,
-            duration: Math.max(
-              Math.round((end.getTime() - now.getTime()) / 1000),
-              1,
-            ),
+            predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
+            duration: Math.max(Math.round((end.getTime() - now.getTime()) / 1000), 1),
             scheduledStartDate: now,
             scheduledEndDate: end,
-            actualStartDate: now,
-            isOpen: true,
+            actualStartDate: openImmediately ? now : null,
+            isOpen: !!openImmediately,
             createdBy: 'Autopilot',
             updatedBy: 'Autopilot',
           },
         });
 
-        await tx.challenge.update({
-          where: { id: challengeId },
-          data: {
-            currentPhaseNames: [postMortemPhaseType.name],
-          },
-        });
+        // Maintain currentPhaseNames only if opening immediately
+        if (openImmediately) {
+          const phaseNames = new Set(challenge.currentPhaseNames ?? []);
+          phaseNames.add(postMortemPhaseType.name);
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: { currentPhaseNames: Array.from(phaseNames) },
+          });
+        }
 
         return { createdPhaseId: created.id };
       });
@@ -740,9 +1099,11 @@ export class ChallengeApiService {
         status: 'SUCCESS',
         source: ChallengeApiService.name,
         details: {
-          submissionPhaseId,
           postMortemPhaseId: mapped.id,
           durationHours,
+          preserveFuturePhases: true,
+          openImmediately,
+          predecessorPhaseId,
         },
       });
 
@@ -754,8 +1115,10 @@ export class ChallengeApiService {
         status: 'ERROR',
         source: ChallengeApiService.name,
         details: {
-          submissionPhaseId,
+          predecessorPhaseId,
           durationHours,
+          preserveFuturePhases: true,
+          openImmediately,
           error: err.message,
         },
       });

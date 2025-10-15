@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { AutopilotService } from '../autopilot/services/autopilot.service';
 import { ChallengeApiService } from '../challenge/challenge-api.service';
 import { SchedulerService } from '../autopilot/services/scheduler.service';
@@ -18,7 +18,8 @@ export class SyncService {
     private readonly schedulerService: SchedulerService,
   ) {}
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  // Run sync every 3 minutes instead of 5
+  @Cron('*/3 * * * *')
   async handleCron() {
     this.logger.log('Running scheduled challenge synchronization...');
     await this.synchronizeChallenges();

@@ -18,6 +18,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:flows": "tsx scripts/run-autopilot-flows.ts",
     "prisma:generate": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma",
     "postinstall": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma && patch-package",
     "prisma:pushautopilot": "prisma db push --schema prisma/autopilot.schema.prisma",
@@ -57,6 +58,7 @@
     "winston": "^3.17.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.645.0",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
     "@nestjs/schematics": "^11.0.0",
@@ -68,11 +70,14 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^9.0.8",
+    "dayjs": "^1.11.13",
+    "eventemitter3": "^5.0.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^16.0.0",
     "jest": "^29.7.0",
+    "nanoid": "^5.0.7",
     "nodemon": "^3.0.0",
     "patch-package": "^8.0.0",
     "prettier": "^3.4.2",
@@ -83,6 +88,7 @@
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.16.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },

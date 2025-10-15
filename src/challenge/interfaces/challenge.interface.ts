@@ -3,6 +3,8 @@
  * returned by the external Challenge API, matching the provided JSON response.
  */
 
+import type { PrizeSetTypeEnum } from '@prisma/client';
+
 /**
  * Represents a single phase of a challenge.
  */
@@ -32,6 +34,7 @@ export interface IChallengeReviewer {
   incrementalCoefficient: number | null;
   type: string | null;
   aiWorkflowId: string | null;
+  shouldOpenOpportunity: boolean;
 }
 
 export interface IChallengeWinner {
@@ -39,6 +42,18 @@ export interface IChallengeWinner {
   handle: string;
   placement: number;
   type?: string;
+}
+
+export interface IChallengePrize {
+  type: string;
+  value: number;
+  description: string | null;
+}
+
+export interface IChallengePrizeSet {
+  type: PrizeSetTypeEnum;
+  description: string | null;
+  prizes: IChallengePrize[];
 }
 
 /**
@@ -66,13 +81,13 @@ export interface IChallenge {
   status: string;
   createdBy: string;
   updatedBy: string;
-  metadata: any[];
+  metadata: Record<string, string>;
   phases: IPhase[];
   reviewers: IChallengeReviewer[];
   winners: IChallengeWinner[];
   discussions: any[];
   events: any[];
-  prizeSets: any[];
+  prizeSets: IChallengePrizeSet[];
   terms: any[];
   skills: any[];
   attachments: any[];

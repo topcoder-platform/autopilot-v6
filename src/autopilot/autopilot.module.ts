@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
 import { AutopilotService } from './services/autopilot.service';
 import { KafkaModule } from '../kafka/kafka.module';
 import { SchedulerService } from './services/scheduler.service';
@@ -12,6 +13,10 @@ import { ChallengeCompletionService } from './services/challenge-completion.serv
 import { PhaseScheduleManager } from './services/phase-schedule-manager.service';
 import { ResourceEventHandler } from './services/resource-event-handler.service';
 import { First2FinishService } from './services/first2finish.service';
+import { MembersModule } from '../members/members.module';
+import { Auth0Module } from '../auth/auth0.module';
+import { PhaseChangeNotificationService } from './services/phase-change-notification.service';
+import { FinanceModule } from '../finance/finance.module';
 
 @Module({
   imports: [
@@ -19,9 +24,13 @@ import { First2FinishService } from './services/first2finish.service';
     // Corrected: Removed .forRoot() as it's already called in the root AppModule.
     // This makes the providers from ScheduleModule available here without re-registering them.
     ScheduleModule,
+    HttpModule,
     ChallengeModule,
     ReviewModule,
     ResourcesModule,
+    MembersModule,
+    Auth0Module,
+    FinanceModule,
   ],
   providers: [
     AutopilotService,
@@ -32,6 +41,7 @@ import { First2FinishService } from './services/first2finish.service';
     PhaseReviewService,
     ReviewAssignmentService,
     ChallengeCompletionService,
+    PhaseChangeNotificationService,
   ],
   exports: [AutopilotService, SchedulerService],
 })

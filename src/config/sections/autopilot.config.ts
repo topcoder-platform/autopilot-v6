@@ -22,6 +22,9 @@ export default registerAs('autopilot', () => ({
   postMortemScorecardId: process.env.POST_MORTEM_SCORECARD_ID || null,
   topgearPostMortemScorecardId:
     process.env.TOPGEAR_POST_MORTEM_SCORECARD_ID || null,
+  // Optional default scorecard to use for First2Finish iterative reviews
+  iterativeReviewScorecardId:
+    process.env.ITERATIVE_REVIEW_SCORECARD_ID || null,
   postMortemDurationHours: parseNumber(
     process.env.POST_MORTEM_DURATION_HOURS,
     72,
@@ -44,4 +47,6 @@ export default registerAs('autopilot', () => ({
     process.env.APPEALS_RESPONSE_PHASE_NAMES,
     ['Appeals Response'],
   ),
+  phaseNotificationSendgridTemplateId:
+    process.env.PHASE_NOTIFICATION_SENDGRID_TEMPLATE || null,
 }));

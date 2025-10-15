@@ -8,4 +8,5 @@ export default registerAs('app', () => ({
     directory: process.env.LOG_DIR || 'logs',
     enableFileLogging: process.env.ENABLE_FILE_LOGGING === 'true',
   },
+  reviewAppUrl: process.env.REVIEW_APP_URL?.trim() || null,
 }));

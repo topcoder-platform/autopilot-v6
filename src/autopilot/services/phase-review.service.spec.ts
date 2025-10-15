@@ -1,0 +1,403 @@
+import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PhaseReviewService } from './phase-review.service';
+import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
+import { ReviewService, ActiveContestSubmission } from '../../review/review.service';
+import { ResourcesService } from '../../resources/resources.service';
+
+const basePhase = {
+  id: 'phase-1',
+  phaseId: 'template-1',
+  name: 'Review',
+  description: null,
+  isOpen: true,
+  duration: 1000,
+  scheduledStartDate: new Date().toISOString(),
+  scheduledEndDate: new Date().toISOString(),
+  actualStartDate: null,
+  actualEndDate: null,
+  predecessor: null,
+  constraints: [],
+};
+
+const buildChallenge = (
+  metadata: Record<string, string>,
+): IChallenge => ({
+  id: 'challenge-1',
+  name: 'Test Challenge',
+  description: null,
+  descriptionFormat: 'markdown',
+  projectId: 1,
+  typeId: 'type-1',
+  trackId: 'track-1',
+  timelineTemplateId: 'timeline-1',
+  currentPhaseNames: [],
+  tags: [],
+  groups: [],
+  submissionStartDate: new Date().toISOString(),
+  submissionEndDate: new Date().toISOString(),
+  registrationStartDate: new Date().toISOString(),
+  registrationEndDate: new Date().toISOString(),
+  startDate: new Date().toISOString(),
+  endDate: null,
+  legacyId: null,
+  status: 'ACTIVE',
+  createdBy: 'test',
+  updatedBy: 'test',
+  metadata,
+  phases: [{ ...basePhase }],
+  reviewers: [
+    {
+      id: 'reviewer-config',
+      scorecardId: 'scorecard-1',
+      isMemberReview: true,
+      memberReviewerCount: 1,
+      phaseId: basePhase.phaseId,
+      basePayment: null,
+      incrementalPayment: null,
+      type: null,
+      aiWorkflowId: null,
+      shouldOpenOpportunity: true,
+    },
+  ],
+  winners: [],
+  discussions: [],
+  events: [],
+  prizeSets: [],
+  terms: [],
+  skills: [],
+  attachments: [],
+  track: 'Development',
+  type: 'Development',
+  legacy: {},
+  task: {},
+  created: new Date().toISOString(),
+  updated: new Date().toISOString(),
+  overview: {},
+  numOfSubmissions: 0,
+  numOfCheckpointSubmissions: 0,
+  numOfRegistrants: 0,
+});
+
+describe('PhaseReviewService', () => {
+  let loggerLogSpy: jest.SpyInstance;
+  let loggerWarnSpy: jest.SpyInstance;
+  let service: PhaseReviewService;
+  let challengeApiService: jest.Mocked<ChallengeApiService>;
+  let reviewService: jest.Mocked<ReviewService>;
+  let resourcesService: jest.Mocked<ResourcesService>;
+  let configService: jest.Mocked<ConfigService>;
+
+  beforeAll(() => {
+    loggerLogSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
+    loggerWarnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+  });
+
+  beforeEach(() => {
+    challengeApiService = {
+      getChallengeById: jest.fn(),
+    } as unknown as jest.Mocked<ChallengeApiService>;
+
+    reviewService = {
+      getActiveContestSubmissions: jest.fn(),
+      getExistingReviewPairs: jest.fn(),
+      createPendingReview: jest.fn(),
+      getFailedScreeningSubmissionIds: jest.fn(),
+      getCheckpointPassedSubmissionIds: jest.fn(),
+    } as unknown as jest.Mocked<ReviewService>;
+
+    resourcesService = {
+      getReviewerResources: jest.fn(),
+      getResourcesByRoleNames: jest.fn(),
+      getResourceById: jest.fn(),
+      getRoleNameById: jest.fn(),
+      hasSubmitterResource: jest.fn(),
+      getMemberHandleMap: jest.fn(),
+      getResourceByMemberHandle: jest.fn(),
+    } as unknown as jest.Mocked<ResourcesService>;
+
+    configService = {
+      get: jest.fn(),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    resourcesService.getReviewerResources.mockResolvedValue([{ id: 'resource-1' }] as any);
+    reviewService.createPendingReview.mockResolvedValue(true);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(),
+    );
+
+    service = new PhaseReviewService(
+      challengeApiService,
+      reviewService,
+      resourcesService,
+      configService,
+    );
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterAll(() => {
+    loggerLogSpy?.mockRestore();
+    loggerWarnSpy?.mockRestore();
+  });
+
+  it('creates reviews only for latest submissions when submissionLimit metadata is not set', async () => {
+    const challenge = buildChallenge({});
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'old-submission', memberId: '123', isLatest: false },
+      { id: 'latest-submission', memberId: '123', isLatest: true },
+      { id: 'unique-submission', memberId: null, isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    expect(reviewService.getActiveContestSubmissions).toHaveBeenCalledWith(
+      challenge.id,
+    );
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual([
+      'latest-submission',
+      'unique-submission',
+    ]);
+  });
+
+  it('includes all submissions when submissionLimit metadata indicates unlimited', async () => {
+    const submissionLimit = JSON.stringify({
+      unlimited: 'true',
+      limit: 'false',
+      count: '',
+    });
+    const challenge = buildChallenge({ submissionLimit });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'old-submission', memberId: '123', isLatest: false },
+      { id: 'latest-submission', memberId: '123', isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual([
+      'old-submission',
+      'latest-submission',
+    ]);
+  });
+
+  it('creates reviews only for latest submissions when the challenge enforces a submission limit', async () => {
+    const submissionLimit = JSON.stringify({ limit: 'true', count: 2 });
+    const challenge = buildChallenge({ submissionLimit });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'old-submission', memberId: '123', isLatest: false },
+      { id: 'latest-submission', memberId: '123', isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual([
+      'latest-submission',
+    ]);
+    expect(createdSubmissionIds).not.toContain('old-submission');
+  });
+
+  it.each([
+    ['string "null"', 'null'],
+    ['malformed JSON string', '{"limit": }'],
+    ['boolean true', true],
+  ])(
+    'treats %s submissionLimit as limited',
+    async (_description, submissionLimit) => {
+      const challenge = buildChallenge({
+        submissionLimit,
+      } as any);
+      challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+      const submissions: ActiveContestSubmission[] = [
+        { id: 'old-submission', memberId: '123', isLatest: false },
+        { id: 'latest-submission', memberId: '123', isLatest: true },
+      ];
+
+      reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+      await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+      const createdSubmissionIds =
+        reviewService.createPendingReview.mock.calls.map(
+          (callArgs) => callArgs[0],
+        );
+
+      expect(createdSubmissionIds).toEqual(['latest-submission']);
+
+      const warningMessages = loggerWarnSpy.mock.calls.map(
+        ([message]) => message as string,
+      );
+      expect(warningMessages).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('defaulting to limited submissions.'),
+        ]),
+      );
+    },
+  );
+
+  it('skips non-latest submissions without member IDs when a limit is enforced', async () => {
+    const submissionLimit = JSON.stringify({ limit: 'true', count: 1 });
+    const challenge = buildChallenge({ submissionLimit });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'legacy-submission', memberId: null, isLatest: false },
+      { id: 'latest-submission', memberId: null, isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual(['latest-submission']);
+  });
+
+  it('omits submissions that failed screening', async () => {
+    const challenge = buildChallenge({});
+    const screeningPhase = {
+      ...basePhase,
+      id: 'phase-screening',
+      phaseId: 'template-screening',
+      name: 'Screening',
+    };
+    challenge.phases = [{ ...basePhase }, screeningPhase];
+    challenge.reviewers.push({
+      id: 'screening-config',
+      scorecardId: 'screening-scorecard',
+      isMemberReview: false,
+      memberReviewerCount: 1,
+      phaseId: screeningPhase.phaseId,
+      basePayment: null,
+      incrementalPayment: null,
+      type: null,
+      aiWorkflowId: null,
+      shouldOpenOpportunity: true,
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'failed-submission', memberId: '123', isLatest: true },
+      { id: 'passed-submission', memberId: '456', isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(['failed-submission']),
+    );
+
+    await service.handlePhaseOpened(challenge.id, basePhase.id);
+
+    expect(
+      reviewService.getFailedScreeningSubmissionIds,
+    ).toHaveBeenCalledWith(challenge.id, ['screening-scorecard']);
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('uses checkpoint reviewer resources when checkpoint review phase opens', async () => {
+    const challenge = buildChallenge({});
+    const checkpointPhase = {
+      ...basePhase,
+      id: 'phase-checkpoint-review',
+      phaseId: 'template-checkpoint-review',
+      name: 'Checkpoint Review',
+    };
+    const screeningPhase = {
+      ...basePhase,
+      id: 'phase-screening',
+      phaseId: 'template-screening',
+      name: 'Checkpoint Screening',
+    };
+
+    challenge.phases = [checkpointPhase, screeningPhase];
+
+    const baseReviewerConfig = challenge.reviewers[0];
+    challenge.reviewers = [
+      {
+        ...baseReviewerConfig,
+        id: 'checkpoint-config',
+        phaseId: checkpointPhase.phaseId,
+        scorecardId: 'checkpoint-scorecard',
+      },
+      {
+        ...baseReviewerConfig,
+        id: 'screening-config',
+        phaseId: screeningPhase.phaseId,
+        scorecardId: 'screening-scorecard',
+        isMemberReview: false,
+      },
+    ];
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      { id: 'checkpoint-resource' },
+    ] as any);
+    reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
+      'submission-1',
+    ]);
+
+    await service.handlePhaseOpened(challenge.id, checkpointPhase.id);
+
+    expect(resourcesService.getReviewerResources).toHaveBeenCalledWith(
+      challenge.id,
+      ['Checkpoint Reviewer'],
+    );
+    expect(
+      reviewService.getCheckpointPassedSubmissionIds,
+    ).toHaveBeenCalledWith(challenge.id, 'screening-scorecard');
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'submission-1',
+      'checkpoint-resource',
+      checkpointPhase.id,
+      'checkpoint-scorecard',
+      challenge.id,
+    );
+  });
+});

@@ -13,6 +13,7 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
 } from '../constants/review.constants';
 import { First2FinishService } from './first2finish.service';
 import { SchedulerService } from './scheduler.service';
@@ -92,10 +93,12 @@ export class ResourceEventHandler {
 
       await this.maybeOpenDeferredReviewPhases(challenge);
 
+      // Sync pending reviews for any open Review or Screening phases
       const openReviewPhases = challenge.phases?.filter(
         (phase) =>
           phase.isOpen &&
-          REVIEW_PHASE_NAMES.has(phase.name) &&
+          (REVIEW_PHASE_NAMES.has(phase.name) ||
+            SCREENING_PHASE_NAMES.has(phase.name)) &&
           phase.name !== ITERATIVE_REVIEW_PHASE_NAME,
       );
 
@@ -159,8 +162,8 @@ export class ResourceEventHandler {
         return;
       }
 
-      const reviewPhases = challenge.phases?.filter((phase) =>
-        REVIEW_PHASE_NAMES.has(phase.name),
+      const reviewPhases = challenge.phases?.filter(
+        (phase) => REVIEW_PHASE_NAMES.has(phase.name) || SCREENING_PHASE_NAMES.has(phase.name),
       );
 
       if (reviewPhases?.length) {
