@@ -865,6 +865,35 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        if (operation === 'open' && isAppealsResponsePhase && isSchedulerInitiated) {
+          try {
+            const totalAppeals =
+              await this.reviewService.getTotalAppealCount(data.challengeId);
+
+            if (totalAppeals === 0) {
+              this.logger.log(
+                `[APPEALS RESPONSE] No appeals detected for challenge ${data.challengeId}; closing phase ${data.phaseId} immediately after open.`,
+              );
+
+              const closePayload: PhaseTransitionPayload = {
+                ...data,
+                state: 'END',
+                operator: AutopilotOperator.SYSTEM_SCHEDULER,
+                date: new Date().toISOString(),
+              };
+
+              await this.advancePhase(closePayload);
+              return;
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[APPEALS RESPONSE] Unable to auto-close phase ${data.phaseId} for challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
         if (operation === 'close') {
           if (phaseName === SUBMISSION_PHASE_NAME) {
             try {

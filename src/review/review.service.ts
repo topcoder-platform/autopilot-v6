@@ -1336,4 +1336,48 @@ export class ReviewService {
       throw err;
     }
   }
+
+  async getTotalAppealCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.APPEAL_TABLE} a
+      INNER JOIN ${ReviewService.REVIEW_ITEM_COMMENT_TABLE} ric
+        ON ric."id" = a."reviewItemCommentId"
+      INNER JOIN ${ReviewService.REVIEW_ITEM_TABLE} ri
+        ON ri."id" = ric."reviewItemId"
+      INNER JOIN ${ReviewService.REVIEW_TABLE} r
+        ON r."id" = ri."reviewId"
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = r."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<AppealCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getTotalAppealCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          totalAppeals: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getTotalAppealCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
 }
