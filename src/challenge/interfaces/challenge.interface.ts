@@ -27,8 +27,9 @@ export interface IChallengeReviewer {
   isMemberReview: boolean;
   memberReviewerCount: number | null;
   phaseId: string;
-  basePayment: number | null;
-  incrementalPayment: number | null;
+  fixedAmount?: number;
+  baseCoefficient: number | null;
+  incrementalCoefficient: number | null;
   type: string | null;
   aiWorkflowId: string | null;
 }
