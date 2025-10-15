@@ -616,8 +616,9 @@ export class ChallengeApiService {
       isMemberReview: reviewer.isMemberReview,
       memberReviewerCount: reviewer.memberReviewerCount ?? null,
       phaseId: reviewer.phaseId,
-      basePayment: reviewer.basePayment ?? null,
-      incrementalPayment: reviewer.incrementalPayment ?? null,
+      fixedAmount: reviewer.fixedAmount ?? 0,
+      baseCoefficient: reviewer.baseCoefficient ?? null,
+      incrementalCoefficient: reviewer.incrementalCoefficient ?? null,
       type: reviewer.type ?? null,
       aiWorkflowId: reviewer.aiWorkflowId ?? null,
     };
