@@ -32,6 +32,16 @@ export class PhaseChangeNotificationService {
   private readonly reviewAppBaseUrl: string;
   private readonly emailDomain: string;
   private readonly sendgridTemplateId: string | null;
+  private readonly easternTimeFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
 
   constructor(
     private readonly resourcesService: ResourcesService,
@@ -245,19 +255,22 @@ export class PhaseChangeNotificationService {
       return;
     }
 
+    const phaseOpenDateRaw =
+      operation === 'open'
+        ? phase.actualStartDate ?? new Date().toISOString()
+        : null;
+    const phaseCloseDateRaw =
+      operation === 'close'
+        ? phase.actualEndDate ?? new Date().toISOString()
+        : null;
+
     const payloadData: NotificationPayloadData = {
       challengeName: challenge.name,
       challengeURL: this.buildChallengeUrl(challengeId),
       phaseOpen: operation === 'open' ? phase.name : null,
-      phaseOpenDate:
-        operation === 'open'
-          ? phase.actualStartDate ?? new Date().toISOString()
-          : null,
+      phaseOpenDate: this.formatPhaseDate(phaseOpenDateRaw),
       phaseClose: operation === 'close' ? phase.name : null,
-      phaseCloseDate:
-        operation === 'close'
-          ? phase.actualEndDate ?? new Date().toISOString()
-          : null,
+      phaseCloseDate: this.formatPhaseDate(phaseCloseDateRaw),
     };
 
     const defaultNotificationEmail = `no-reply@${this.emailDomain}.com`;
@@ -369,6 +382,39 @@ export class PhaseChangeNotificationService {
       : this.reviewAppBaseUrl;
 
     return `${base}/active-challenges/${challengeId}/challenge-details`;
+  }
+
+  private formatPhaseDate(value: string | Date | null | undefined): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const date = value instanceof Date ? value : new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      this.logger.warn(
+        `Unable to format phase date "${value}" for phase change notification payload.`,
+      );
+
+      return typeof value === 'string' ? value : null;
+    }
+
+    const parts = this.easternTimeFormatter.formatToParts(date);
+    const getPartValue = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+
+    const day = getPartValue('day');
+    const month = getPartValue('month');
+    const year = getPartValue('year');
+    const hour = getPartValue('hour');
+    const minute = getPartValue('minute');
+    const timeZoneName = getPartValue('timeZoneName');
+
+    if (!day || !month || !year || !hour || !minute || !timeZoneName) {
+      return this.easternTimeFormatter.format(date);
+    }
+
+    return `${day}-${month}-${year} ${hour}:${minute} ${timeZoneName}`;
   }
 
   private normalizeBaseUrl(value: string): string {
