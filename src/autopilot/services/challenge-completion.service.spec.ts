@@ -305,7 +305,7 @@ describe('ChallengeCompletionService', () => {
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
   });
 
-  it('creates post-mortem reviews for copilots when zero submissions trigger cancellation', async () => {
+  it('creates post-mortem reviews for reviewers and copilots when zero submissions trigger cancellation', async () => {
     const challenge = buildChallenge({
       numOfSubmissions: 0,
       phases: [
@@ -351,6 +351,18 @@ describe('ChallengeCompletionService', () => {
 
     resourcesService.getResourcesByRoleNames.mockResolvedValueOnce([
       {
+        id: 'reviewer-resource-1',
+        memberId: '301',
+        memberHandle: 'reviewer1',
+        roleName: 'Reviewer',
+      },
+      {
+        id: 'reviewer-resource-2',
+        memberId: '302',
+        memberHandle: 'reviewer2',
+        roleName: 'Reviewer',
+      },
+      {
         id: 'copilot-resource-1',
         memberId: '201',
         memberHandle: 'copilot1',
@@ -377,7 +389,7 @@ describe('ChallengeCompletionService', () => {
       expect.any(Number),
       true,
     );
-    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(2);
+    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(4);
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
       'copilot-resource-1',
@@ -388,6 +400,20 @@ describe('ChallengeCompletionService', () => {
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
       'copilot-resource-2',
+      postMortemPhase.id,
+      'scorecard-id',
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'reviewer-resource-1',
+      postMortemPhase.id,
+      'scorecard-id',
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'reviewer-resource-2',
       postMortemPhase.id,
       'scorecard-id',
       challenge.id,

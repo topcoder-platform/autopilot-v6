@@ -82,15 +82,16 @@ export class ChallengeCompletionService {
           true,
         );
 
-      // Assign to Copilot(s) if scorecard is available
+      // Assign to Post-Mortem resources if scorecard is available
       if (scorecardId) {
-        const copilots = await this.resourcesService.getResourcesByRoleNames(
-          challengeId,
-          ['Copilot'],
-        );
+        const postMortemResources =
+          await this.resourcesService.getResourcesByRoleNames(
+            challengeId,
+          ['Reviewer', 'Copilot'],
+          );
 
         let createdCount = 0;
-        for (const resource of copilots) {
+        for (const resource of postMortemResources) {
           try {
             const created = await this.reviewService.createPendingReview(
               null,
@@ -113,7 +114,7 @@ export class ChallengeCompletionService {
 
         if (createdCount > 0) {
           this.logger.log(
-            `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Copilot).`,
+            `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Reviewer and Copilot).`,
           );
         }
       }
