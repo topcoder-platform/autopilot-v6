@@ -33,6 +33,14 @@ export class PhaseReviewService {
   async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
     const challenge =
       await this.challengeApiService.getChallengeById(challengeId);
+    await this.handlePhaseOpenedForChallenge(challenge, phaseId);
+  }
+
+  async handlePhaseOpenedForChallenge(
+    challenge: IChallenge,
+    phaseId: string,
+  ): Promise<void> {
+    const challengeId = challenge.id;
     const phase = challenge.phases.find((p) => p.id === phaseId);
 
     if (!phase) {

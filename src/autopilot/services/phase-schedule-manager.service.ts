@@ -315,8 +315,8 @@ export class PhaseScheduleManager {
             this.logger.log(
               `[MANUAL PHASE DETECTION] Processing open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
             );
-            await this.phaseReviewService.handlePhaseOpened(
-              challengeDetails.id,
+            await this.phaseReviewService.handlePhaseOpenedForChallenge(
+              challengeDetails,
               phase.id,
             );
             processedCount += 1;
