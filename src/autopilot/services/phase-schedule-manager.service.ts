@@ -14,8 +14,10 @@ import {
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
 import {
+  APPROVAL_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
 } from '../constants/review.constants';
 import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
 import { ConfigService } from '@nestjs/config';
@@ -290,6 +292,54 @@ export class PhaseScheduleManager {
             `Next phase ${phase.id} for updated challenge ${message.id} has no scheduled ${stateLabel} date. Skipping.`,
           ),
       });
+
+      const openPhasesRequiringScorecards = (challengeDetails.phases ?? []).filter(
+        (phase) =>
+          phase.isOpen === true &&
+          (SCREENING_PHASE_NAMES.has(phase.name) ||
+            REVIEW_PHASE_NAMES.has(phase.name) ||
+            APPROVAL_PHASE_NAMES.has(phase.name)),
+      );
+
+      if (openPhasesRequiringScorecards.length > 0) {
+        const phaseNames = openPhasesRequiringScorecards
+          .map((phase) => phase.name)
+          .join(', ');
+        this.logger.log(
+          `[MANUAL PHASE DETECTION] Detected ${openPhasesRequiringScorecards.length} open phase(s) requiring scorecards for challenge ${challengeDetails.id}: ${phaseNames}`,
+        );
+
+        let processedCount = 0;
+        for (const phase of openPhasesRequiringScorecards) {
+          try {
+            this.logger.log(
+              `[MANUAL PHASE DETECTION] Processing open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
+            );
+            await this.phaseReviewService.handlePhaseOpened(
+              challengeDetails.id,
+              phase.id,
+            );
+            processedCount += 1;
+            this.logger.log(
+              `[MANUAL PHASE DETECTION] Successfully processed open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[MANUAL PHASE DETECTION] Failed to process open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
+        this.logger.log(
+          `[MANUAL PHASE DETECTION] Completed processing for ${processedCount} open phase(s) requiring scorecards on challenge ${challengeDetails.id}`,
+        );
+      } else {
+        this.logger.debug(
+          `[MANUAL PHASE DETECTION] No open phases requiring scorecards found for challenge ${challengeDetails.id}`,
+        );
+      }
     } catch (error) {
       const err = error as Error;
       this.logger.error(
