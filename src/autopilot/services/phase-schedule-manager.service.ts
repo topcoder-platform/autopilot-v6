@@ -258,7 +258,7 @@ export class PhaseScheduleManager {
     this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
 
     try {
-      const challengeDetails = await this.challengeApiService.getChallengeById(
+      let challengeDetails = await this.challengeApiService.getChallengeById(
         message.id,
       );
 
@@ -267,6 +267,26 @@ export class PhaseScheduleManager {
           `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
         return;
+      }
+
+      const immediateClosures =
+        await this.processPastDueOpenPhases(challengeDetails);
+
+      if (immediateClosures > 0) {
+        this.logger.log(
+          `Processed ${immediateClosures} overdue phase(s) immediately for challenge ${message.id}; refreshing challenge snapshot before rescheduling.`,
+        );
+
+        challengeDetails = await this.challengeApiService.getChallengeById(
+          message.id,
+        );
+
+        if (!isActiveStatus(challengeDetails.status)) {
+          this.logger.log(
+            `Skipping challenge ${message.id} update after immediate processing; status is now ${challengeDetails.status}.`,
+          );
+          return;
+        }
       }
 
       if (!challengeDetails.phases) {
@@ -491,6 +511,88 @@ export class PhaseScheduleManager {
         await this.cancelPhaseTransition(challengeId, phaseId);
       }
     }
+  }
+
+  private async processPastDueOpenPhases(
+    challenge: IChallenge,
+  ): Promise<number> {
+    const now = Date.now();
+
+    const overduePhases = (challenge.phases ?? [])
+      .filter((phase) => {
+        if (!phase.isOpen || !phase.scheduledEndDate) {
+          return false;
+        }
+
+        const scheduledEndTime = new Date(phase.scheduledEndDate).getTime();
+
+        if (Number.isNaN(scheduledEndTime)) {
+          return false;
+        }
+
+        return scheduledEndTime < now;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.scheduledEndDate).getTime() -
+          new Date(b.scheduledEndDate).getTime(),
+      );
+
+    if (overduePhases.length === 0) {
+      return 0;
+    }
+
+    this.logger.log(
+      `Detected ${overduePhases.length} open phase(s) with scheduled end in the past for challenge ${challenge.id}; attempting immediate processing.`,
+    );
+
+    let processedCount = 0;
+
+    for (const phase of overduePhases) {
+      try {
+        const jobId = this.schedulerService.buildJobId(
+          challenge.id,
+          phase.id,
+        );
+
+        if (this.schedulerService.getScheduledTransition(jobId)) {
+          const canceled =
+            await this.schedulerService.cancelScheduledTransition(jobId);
+
+          if (canceled) {
+            this.logger.log(
+              `Canceled outdated schedule ${jobId} before immediate close for challenge ${challenge.id}.`,
+            );
+          }
+        }
+
+        const payload: PhaseTransitionPayload = {
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM_SYNC,
+          projectStatus: challenge.status,
+          date: new Date().toISOString(),
+        };
+
+        this.logger.log(
+          `Attempting immediate closure for overdue phase ${phase.name} (${phase.id}) on challenge ${challenge.id}.`,
+        );
+
+        await this.schedulerService.advancePhase(payload);
+        processedCount += 1;
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed immediate processing for phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    return processedCount;
   }
 
   private async scheduleRelevantPhases(

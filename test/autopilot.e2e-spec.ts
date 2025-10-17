@@ -201,6 +201,7 @@ describe('Autopilot Service (e2e)', () => {
     getChallengePhases: jest.Mock;
     getPhaseTypeName: jest.Mock;
     advancePhase: jest.Mock;
+    createIterativeReviewPhase: jest.Mock;
     createPostMortemPhase: jest.Mock;
     cancelChallenge: jest.Mock;
     completeChallenge: jest.Mock;
@@ -250,6 +251,9 @@ describe('Autopilot Service (e2e)', () => {
       getReviewerResources: jest.fn().mockResolvedValue([]),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
+      ensureResourcesForMembers: jest
+        .fn()
+        .mockResolvedValue(new Map<string, string>()),
       getMemberHandleMap: jest.fn().mockResolvedValue(new Map()),
       getResourceByMemberHandle: jest.fn(),
     } satisfies Record<string, jest.Mock>;
@@ -352,6 +356,7 @@ describe('Autopilot Service (e2e)', () => {
           },
         ),
       createPostMortemPhase: jest.fn(),
+      createIterativeReviewPhase: jest.fn(),
       cancelChallenge: jest.fn(),
       completeChallenge: jest.fn(),
     };
@@ -536,6 +541,67 @@ describe('Autopilot Service (e2e)', () => {
           phaseId: updatedChallenge.phases[0].id,
         }),
       );
+    });
+
+    it('should immediately advance overdue open phases when an update shortens their duration into the past', async () => {
+      const refreshedChallenge = {
+        ...mockChallengeWithPastPhase,
+        phases: [
+          {
+            ...mockChallengeWithPastPhase.phases[0],
+            isOpen: false,
+            actualEndDate: new Date().toISOString(),
+          },
+          {
+            ...mockChallengeWithPastPhase.phases[1],
+            isOpen: true,
+            actualStartDate: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+            scheduledStartDate: mockPastPhaseDate,
+            scheduledEndDate: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          },
+        ],
+      };
+
+      mockChallengeApiService.getChallengeById
+        .mockImplementationOnce(async () => mockChallengeWithPastPhase)
+        .mockImplementationOnce(async () => mockChallengeWithPastPhase)
+        .mockImplementationOnce(async () => refreshedChallenge)
+        .mockImplementationOnce(async () => refreshedChallenge);
+
+      mockChallengeApiService.getPhaseDetails.mockImplementationOnce(
+        async () => mockChallengeWithPastPhase.phases[0],
+      );
+
+      const advanceSpy = jest.spyOn(schedulerService, 'advancePhase');
+      const rescheduleSpy = jest.spyOn(
+        phaseScheduleManager,
+        'reschedulePhaseTransition',
+      );
+
+      try {
+        await autopilotConsumer.topicHandlers[KAFKA_TOPICS.CHALLENGE_UPDATED]({
+          id: mockChallengeWithPastPhase.id,
+          challengeId: mockChallengeWithPastPhase.id,
+          projectId: mockChallengeWithPastPhase.projectId,
+          status: 'ACTIVE',
+          operator: AutopilotOperator.SYSTEM,
+        } as ChallengeUpdatePayload);
+
+        expect(advanceSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            challengeId: mockChallengeWithPastPhase.id,
+            phaseId: mockChallengeWithPastPhase.phases[0].id,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_SYNC,
+          }),
+        );
+
+        expect(mockChallengeApiService.getChallengeById).toHaveBeenCalled();
+        expect(rescheduleSpy).toHaveBeenCalled();
+      } finally {
+        advanceSpy.mockRestore();
+        rescheduleSpy.mockRestore();
+      }
     });
   });
 
