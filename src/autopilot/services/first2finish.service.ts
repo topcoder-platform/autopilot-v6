@@ -251,8 +251,10 @@ export class First2FinishService {
       ) ?? null;
 
     if (activePhase) {
+      const currentPhase = activePhase;
+
       const pendingReviews = await this.reviewService.getPendingReviewCount(
-        activePhase.id,
+        currentPhase.id,
         challenge.id,
       );
 
@@ -270,7 +272,7 @@ export class First2FinishService {
 
       // Safety: if any non-completed review exists for this phase, do not close or reassign
       const existingPairs = await this.reviewService.getExistingReviewPairs(
-        activePhase.id,
+        currentPhase.id,
         challenge.id,
       );
       if (existingPairs.size > 0) {
@@ -278,11 +280,46 @@ export class First2FinishService {
           `Iterative review work detected for challenge ${challenge.id}; deferring.`,
           {
             submissionId: submissionId ?? null,
-            activePhaseId: activePhase.id,
+            activePhaseId: currentPhase.id,
             existingPairs: existingPairs.size,
           },
         );
         return;
+      }
+
+      const completedIterativePhases = challenge.phases.filter(
+        (phaseCandidate) =>
+          phaseCandidate.id !== currentPhase.id &&
+          phaseCandidate.name === ITERATIVE_REVIEW_PHASE_NAME &&
+          !phaseCandidate.isOpen &&
+          !!phaseCandidate.actualEndDate,
+      );
+
+      if (completedIterativePhases.length > 0) {
+        try {
+          await this.schedulerService.advancePhase({
+            projectId: challenge.projectId,
+            challengeId: challenge.id,
+            phaseId: currentPhase.id,
+            phaseTypeName: currentPhase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM,
+            projectStatus: challenge.status,
+          });
+
+          this.logger.debug(
+            `Closed iterative review phase ${currentPhase.id} for challenge ${challenge.id} before assigning next submission.`,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to close iterative review phase ${currentPhase.id} before next assignment on challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+          return;
+        }
+
+        activePhase = null;
       }
     }
 

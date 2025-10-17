@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
 import { ReviewService } from '../../review/review.service';
-import type { ActiveContestSubmission } from '../../review/review.service';
+import type {
+  ActiveContestSubmission,
+  SubmissionSummary,
+} from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import {
   getRoleNamesForPhase,
@@ -18,6 +21,7 @@ import {
   selectScorecardId,
 } from '../utils/reviewer.utils';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import { ChallengeCompletionService } from './challenge-completion.service';
 
 @Injectable()
 export class PhaseReviewService {
@@ -28,6 +32,7 @@ export class PhaseReviewService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
+    private readonly challengeCompletionService: ChallengeCompletionService,
   ) {}
 
   async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
@@ -221,12 +226,63 @@ export class PhaseReviewService {
 
     let submissionIds: string[] = [];
     if (isApprovalPhase) {
-      // Only the top final-scoring submission (winner) should be reviewed
-      const winners = await this.reviewService.getTopFinalReviewScores(
-        challengeId,
-        1,
-      );
-      submissionIds = winners.map((w) => w.submissionId);
+      try {
+        const summaries =
+          await this.reviewService.generateReviewSummaries(challengeId);
+        const passingSummaries = summaries.filter(
+          (summary) => summary.isPassing,
+        );
+
+        if (!passingSummaries.length) {
+          this.logger.log(
+            `No passing submissions detected for challenge ${challengeId}; cancelling challenge and replacing Approval phase ${phase.id} with Post-Mortem.`,
+          );
+
+          try {
+            const finalized =
+              await this.challengeCompletionService.finalizeChallenge(
+                challengeId,
+              );
+
+            if (!finalized) {
+              this.logger.warn(
+                `Challenge ${challengeId} finalization deferred after missing passing submissions for Approval.`,
+              );
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to finalize challenge ${challengeId} after missing passing submissions for Approval: ${err.message}`,
+              err.stack,
+            );
+            throw err;
+          }
+
+          return;
+        }
+
+        const winningSummary =
+          this.selectWinningApprovalSummary(passingSummaries);
+
+        if (!winningSummary?.submissionId) {
+          this.logger.warn(
+            `Approval phase opened for challenge ${challengeId}, but no submission ID could be determined from passing summaries; skipping review creation for phase ${phase.id}.`,
+          );
+          return;
+        }
+
+        submissionIds = [winningSummary.submissionId];
+        this.logger.debug(
+          `Prepared approval review for challenge ${challengeId} using submission ${winningSummary.submissionId}.`,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to prepare approval submissions for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+          err.stack,
+        );
+        throw err;
+      }
     } else if (phase.name === 'Checkpoint Screening') {
       // For checkpoint screening, review all active checkpoint submissions
       submissionIds = await this.reviewService.getActiveCheckpointSubmissionIds(
@@ -455,6 +511,31 @@ export class PhaseReviewService {
     }
 
     return Array.from(scorecardIds);
+  }
+
+  private selectWinningApprovalSummary(
+    summaries: SubmissionSummary[],
+  ): SubmissionSummary | null {
+    if (!summaries.length) {
+      return null;
+    }
+
+    const sorted = [...summaries].sort((a, b) => {
+      if (b.aggregateScore !== a.aggregateScore) {
+        return b.aggregateScore - a.aggregateScore;
+      }
+
+      const aTime = a.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+      const bTime = b.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
+
+      if (aTime !== bTime) {
+        return aTime - bTime;
+      }
+
+      return (a.submissionId ?? '').localeCompare(b.submissionId ?? '');
+    });
+
+    return sorted[0] ?? null;
   }
 
   private selectLatestSubmissions(

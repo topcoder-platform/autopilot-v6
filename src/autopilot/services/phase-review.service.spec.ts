@@ -3,8 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { PhaseReviewService } from './phase-review.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
-import { ReviewService, ActiveContestSubmission } from '../../review/review.service';
+import {
+  ReviewService,
+  ActiveContestSubmission,
+  SubmissionSummary,
+} from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
+import { ChallengeCompletionService } from './challenge-completion.service';
 
 const basePhase = {
   id: 'phase-1',
@@ -54,8 +59,8 @@ const buildChallenge = (
       isMemberReview: true,
       memberReviewerCount: 1,
       phaseId: basePhase.phaseId,
-      basePayment: null,
-      incrementalPayment: null,
+      baseCoefficient: null,
+      incrementalCoefficient: null,
       type: null,
       aiWorkflowId: null,
       shouldOpenOpportunity: true,
@@ -88,6 +93,7 @@ describe('PhaseReviewService', () => {
   let reviewService: jest.Mocked<ReviewService>;
   let resourcesService: jest.Mocked<ResourcesService>;
   let configService: jest.Mocked<ConfigService>;
+  let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
 
   beforeAll(() => {
     loggerLogSpy = jest
@@ -105,10 +111,12 @@ describe('PhaseReviewService', () => {
 
     reviewService = {
       getActiveContestSubmissions: jest.fn(),
+      getActiveCheckpointSubmissionIds: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
       getCheckpointPassedSubmissionIds: jest.fn(),
+      generateReviewSummaries: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
     resourcesService = {
@@ -125,18 +133,26 @@ describe('PhaseReviewService', () => {
       get: jest.fn(),
     } as unknown as jest.Mocked<ConfigService>;
 
+    challengeCompletionService = {
+      finalizeChallenge: jest.fn(),
+    } as unknown as jest.Mocked<ChallengeCompletionService>;
+
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
     resourcesService.getReviewerResources.mockResolvedValue([{ id: 'resource-1' }] as any);
     reviewService.createPendingReview.mockResolvedValue(true);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
       new Set(),
     );
+    reviewService.generateReviewSummaries.mockResolvedValue([]);
+    reviewService.getActiveCheckpointSubmissionIds.mockResolvedValue([]);
+    challengeCompletionService.finalizeChallenge.mockResolvedValue(true);
 
     service = new PhaseReviewService(
       challengeApiService,
       reviewService,
       resourcesService,
       configService,
+      challengeCompletionService,
     );
   });
 
@@ -308,8 +324,8 @@ describe('PhaseReviewService', () => {
       isMemberReview: false,
       memberReviewerCount: 1,
       phaseId: screeningPhase.phaseId,
-      basePayment: null,
-      incrementalPayment: null,
+      baseCoefficient: null,
+      incrementalCoefficient: null,
       type: null,
       aiWorkflowId: null,
       shouldOpenOpportunity: true,
@@ -339,6 +355,93 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('assigns approval review to the highest passing submission', async () => {
+    const challenge = buildChallenge({});
+    challenge.phases[0].name = 'Approval';
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const summaries: SubmissionSummary[] = [
+      {
+        submissionId: 'winner',
+        legacySubmissionId: null,
+        memberId: '111',
+        submittedDate: new Date('2024-04-01T00:00:00Z'),
+        aggregateScore: 96,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 86,
+        isPassing: true,
+      },
+      {
+        submissionId: 'runner-up',
+        legacySubmissionId: null,
+        memberId: '222',
+        submittedDate: new Date('2024-04-02T00:00:00Z'),
+        aggregateScore: 92,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 86,
+        isPassing: true,
+      },
+      {
+        submissionId: 'failing-submission',
+        legacySubmissionId: null,
+        memberId: '333',
+        submittedDate: new Date('2024-04-03T00:00:00Z'),
+        aggregateScore: 40,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 86,
+        isPassing: false,
+      },
+    ];
+    reviewService.generateReviewSummaries.mockResolvedValue(summaries);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    expect(reviewService.generateReviewSummaries).toHaveBeenCalledWith(
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'winner',
+      'resource-1',
+      challenge.phases[0].id,
+      'scorecard-1',
+      challenge.id,
+    );
+    expect(
+      challengeCompletionService.finalizeChallenge,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('cancels the challenge when approval opens without passing submissions', async () => {
+    const challenge = buildChallenge({});
+    challenge.phases[0].name = 'Approval';
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const summaries: SubmissionSummary[] = [
+      {
+        submissionId: 'failing-submission',
+        legacySubmissionId: null,
+        memberId: '333',
+        submittedDate: new Date('2024-04-03T00:00:00Z'),
+        aggregateScore: 40,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 86,
+        isPassing: false,
+      },
+    ];
+    reviewService.generateReviewSummaries.mockResolvedValue(summaries);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    expect(challengeCompletionService.finalizeChallenge).toHaveBeenCalledWith(
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
   });
 
   it('uses checkpoint reviewer resources when checkpoint review phase opens', async () => {
