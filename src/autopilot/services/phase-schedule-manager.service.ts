@@ -21,6 +21,11 @@ import {
 } from '../constants/review.constants';
 import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
 import { ConfigService } from '@nestjs/config';
+import {
+  getMemberReviewerConfigs,
+  getReviewerConfigsForPhase,
+  selectScorecardId,
+} from '../utils/reviewer.utils';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -315,6 +320,22 @@ export class PhaseScheduleManager {
             this.logger.log(
               `[MANUAL PHASE DETECTION] Processing open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
             );
+
+            const targetScorecardId =
+              this.resolveScorecardIdForOpenPhase(challengeDetails, phase);
+
+            if (targetScorecardId) {
+              await this.updatePendingReviewScorecards(
+                challengeDetails.id,
+                phase,
+                targetScorecardId,
+              );
+            } else {
+              this.logger.debug(
+                `[MANUAL PHASE DETECTION] No scorecard detected for open phase ${phase.id} (${phase.name}) on challenge ${challengeDetails.id}; skipping pending review updates.`,
+              );
+            }
+
             await this.phaseReviewService.handlePhaseOpenedForChallenge(
               challengeDetails,
               phase.id,
@@ -344,6 +365,102 @@ export class PhaseScheduleManager {
       const err = error as Error;
       this.logger.error(
         `Error handling challenge update: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  private resolveScorecardIdForOpenPhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): string | null {
+    const phaseTemplateId = phase.phaseId;
+    if (!phaseTemplateId) {
+      return null;
+    }
+
+    if (SCREENING_PHASE_NAMES.has(phase.name)) {
+      const configs = getReviewerConfigsForPhase(
+        challenge.reviewers,
+        phaseTemplateId,
+      ).filter((config) => Boolean(config.scorecardId));
+
+      if (!configs.length) {
+        this.logger.debug(
+          `No screening reviewer configs with scorecards found for challenge ${challenge.id}, phase ${phase.id}`,
+        );
+        return null;
+      }
+
+      const uniqueScorecards = Array.from(
+        new Set(
+          configs
+            .map((config) => config.scorecardId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+
+      if (uniqueScorecards.length > 1) {
+        this.logger.warn(
+          `Multiple screening scorecard IDs detected for challenge ${challenge.id}, phase ${phase.id}. Using ${uniqueScorecards[0]} for pending review updates.`,
+        );
+      }
+
+      return uniqueScorecards[0] ?? null;
+    }
+
+    const reviewerConfigs = getMemberReviewerConfigs(
+      challenge.reviewers,
+      phaseTemplateId,
+    ).filter((config) => Boolean(config.scorecardId));
+
+    if (!reviewerConfigs.length) {
+      this.logger.debug(
+        `No member reviewer configs with scorecards found for challenge ${challenge.id}, phase ${phase.id}`,
+      );
+      return null;
+    }
+
+    const scorecardId = selectScorecardId(
+      reviewerConfigs,
+      () =>
+        this.logger.warn(
+          `Member reviewer configs missing scorecard IDs for challenge ${challenge.id}, phase ${phase.id}`,
+        ),
+      (choices) =>
+        this.logger.warn(
+          `Multiple scorecard IDs detected for challenge ${challenge.id}, phase ${phase.id}. Using ${choices[0]} for pending review updates.`,
+        ),
+    );
+
+    return scorecardId ?? null;
+  }
+
+  private async updatePendingReviewScorecards(
+    challengeId: string,
+    phase: IPhase,
+    scorecardId: string,
+  ): Promise<void> {
+    try {
+      const updated = await this.reviewService.updatePendingReviewScorecards(
+        challengeId,
+        phase.id,
+        scorecardId,
+      );
+
+      if (updated > 0) {
+        this.logger.log(
+          `[MANUAL PHASE DETECTION] Updated ${updated} pending review(s) for challenge ${challengeId}, phase ${phase.id} to scorecard ${scorecardId}`,
+        );
+      } else {
+        this.logger.debug(
+          `[MANUAL PHASE DETECTION] No pending reviews required scorecard updates for challenge ${challengeId}, phase ${phase.id}`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[MANUAL PHASE DETECTION] Failed to update pending reviews for challenge ${challengeId}, phase ${phase.id} to scorecard ${scorecardId}: ${err.message}`,
         err.stack,
       );
     }

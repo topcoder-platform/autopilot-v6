@@ -3,13 +3,14 @@ import { ReviewService } from './review.service';
 describe('ReviewService', () => {
   const challengeId = 'challenge-1';
 
-  let prismaMock: { $queryRaw: jest.Mock };
+  let prismaMock: { $queryRaw: jest.Mock; $executeRaw: jest.Mock };
   let dbLoggerMock: { logAction: jest.Mock };
   let service: ReviewService;
 
   beforeEach(() => {
     prismaMock = {
       $queryRaw: jest.fn(),
+      $executeRaw: jest.fn(),
     };
     dbLoggerMock = {
       logAction: jest.fn(),
@@ -212,6 +213,73 @@ describe('ReviewService', () => {
           status: 'SUCCESS',
           details: expect.objectContaining({
             failedSubmissionCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('updatePendingReviewScorecards', () => {
+    const phaseId = 'phase-1';
+    const scorecardId = 'scorecard-123';
+
+    it('returns 0 when phaseId or scorecardId is missing', async () => {
+      const result = await service.updatePendingReviewScorecards(
+        challengeId,
+        '   ',
+        scorecardId,
+      );
+
+      expect(result).toBe(0);
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+      expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
+    });
+
+    it('updates pending reviews and logs success', async () => {
+      prismaMock.$executeRaw.mockResolvedValueOnce(3);
+
+      const result = await service.updatePendingReviewScorecards(
+        challengeId,
+        phaseId,
+        scorecardId,
+      );
+
+      expect(result).toBe(3);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.updatePendingReviewScorecards',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            phaseId,
+            scorecardId,
+            updatedCount: 3,
+          }),
+        }),
+      );
+    });
+
+    it('logs error and rethrows when update fails', async () => {
+      prismaMock.$executeRaw.mockRejectedValueOnce(
+        new Error('database unavailable'),
+      );
+
+      await expect(
+        service.updatePendingReviewScorecards(
+          challengeId,
+          phaseId,
+          scorecardId,
+        ),
+      ).rejects.toThrow('database unavailable');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.updatePendingReviewScorecards',
+        expect.objectContaining({
+          status: 'ERROR',
+          details: expect.objectContaining({
+            phaseId,
+            scorecardId,
+            error: 'database unavailable',
           }),
         }),
       );

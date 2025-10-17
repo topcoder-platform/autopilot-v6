@@ -868,6 +868,66 @@ export class ReviewService {
     }
   }
 
+  async updatePendingReviewScorecards(
+    challengeId: string,
+    phaseId: string,
+    scorecardId: string | null,
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+    const trimmedScorecardId = scorecardId?.trim();
+
+    if (!trimmedPhaseId || !trimmedScorecardId) {
+      return 0;
+    }
+
+    const query = Prisma.sql`
+      UPDATE ${ReviewService.REVIEW_TABLE}
+      SET
+        "scorecardId" = ${trimmedScorecardId},
+        "updatedAt" = NOW()
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) = 'PENDING'
+        )
+        AND (
+          "scorecardId" IS DISTINCT FROM ${trimmedScorecardId}
+        )
+    `;
+
+    try {
+      const updated = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.updatePendingReviewScorecards', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          scorecardId: trimmedScorecardId,
+          updatedCount: updated,
+        },
+      });
+
+      return updated;
+    } catch (error) {
+      const err = error as Error;
+
+      void this.dbLogger.logAction('review.updatePendingReviewScorecards', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          scorecardId: trimmedScorecardId,
+          error: err.message,
+        },
+      });
+
+      throw err;
+    }
+  }
+
   async deletePendingReviewsForResource(
     phaseId: string,
     resourceId: string,
