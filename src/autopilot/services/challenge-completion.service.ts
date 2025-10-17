@@ -10,6 +10,7 @@ import {
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { FinanceApiService } from '../../finance/finance-api.service';
+import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -84,10 +85,16 @@ export class ChallengeCompletionService {
 
       // Assign to Post-Mortem resources if scorecard is available
       if (scorecardId) {
-        const postMortemResources =
+        const reviewerAndCopilotResources =
           await this.resourcesService.getResourcesByRoleNames(
             challengeId,
-          ['Reviewer', 'Copilot'],
+            ['Reviewer', 'Copilot'],
+          );
+        const postMortemResources =
+          await this.resourcesService.ensureResourcesForMembers(
+            challengeId,
+            reviewerAndCopilotResources,
+            POST_MORTEM_REVIEWER_ROLE_NAME,
           );
 
         let createdCount = 0;
@@ -114,7 +121,7 @@ export class ChallengeCompletionService {
 
         if (createdCount > 0) {
           this.logger.log(
-            `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Reviewer and Copilot).`,
+            `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (${POST_MORTEM_REVIEWER_ROLE_NAME}).`,
           );
         }
       }

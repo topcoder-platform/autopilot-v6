@@ -20,6 +20,7 @@ import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
   POST_MORTEM_PHASE_NAME,
+  POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
@@ -107,10 +108,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       this.configService.get('autopilot.submitterRoles'),
       ['Submitter'],
     );
-    this.postMortemRoles = getNormalizedStringArray(
+    const configuredPostMortemRoles = getNormalizedStringArray(
       this.configService.get('autopilot.postMortemRoles'),
-      ['Reviewer', 'Copilot'],
+      [POST_MORTEM_REVIEWER_ROLE_NAME],
     );
+    const uniquePostMortemRoles = new Set<string>([
+      POST_MORTEM_REVIEWER_ROLE_NAME,
+      ...configuredPostMortemRoles,
+    ]);
+    this.postMortemRoles = Array.from(uniquePostMortemRoles);
     this.postMortemScorecardId =
       this.configService.get<string | null>(
         'autopilot.postMortemScorecardId',
@@ -1425,14 +1431,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const resources = await this.resourcesService.getResourcesByRoleNames(
-        challengeId,
-        this.postMortemRoles,
-      );
+      const reviewerAndCopilotResources =
+        await this.resourcesService.getResourcesByRoleNames(
+          challengeId,
+          ['Reviewer', 'Copilot'],
+        );
+      const resources =
+        await this.resourcesService.ensureResourcesForMembers(
+          challengeId,
+          reviewerAndCopilotResources,
+          POST_MORTEM_REVIEWER_ROLE_NAME,
+        );
 
       if (!resources.length) {
         this.logger.log(
-          `[ZERO SUBMISSIONS] No resources found for post-mortem roles on challenge ${challengeId}; skipping review creation.`,
+          `[ZERO SUBMISSIONS] No resources found for ${POST_MORTEM_REVIEWER_ROLE_NAME} role on challenge ${challengeId}; skipping review creation.`,
         );
         return;
       }
@@ -1497,8 +1510,22 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      const resources =
+        await this.resourcesService.ensureResourcesForMembers(
+          challengeId,
+          copilots,
+          POST_MORTEM_REVIEWER_ROLE_NAME,
+        );
+
+      if (!resources.length) {
+        this.logger.log(
+          `[ZERO REGISTRATIONS] No resources found for ${POST_MORTEM_REVIEWER_ROLE_NAME} role on challenge ${challengeId}; skipping review creation.`,
+        );
+        return;
+      }
+
       let createdCount = 0;
-      for (const resource of copilots) {
+      for (const resource of resources) {
         try {
           const created = await this.reviewService.createPendingReview(
             null,
@@ -1521,7 +1548,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(
-        `[ZERO REGISTRATIONS] Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (Copilot).`,
+        `[ZERO REGISTRATIONS] Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId} (${POST_MORTEM_REVIEWER_ROLE_NAME}).`,
       );
     } catch (error) {
       const err = error as Error;

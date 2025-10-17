@@ -10,6 +10,7 @@ import {
 } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
+import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 
 const basePhase = {
   id: 'phase-1',
@@ -127,6 +128,7 @@ describe('PhaseReviewService', () => {
       hasSubmitterResource: jest.fn(),
       getMemberHandleMap: jest.fn(),
       getResourceByMemberHandle: jest.fn(),
+      ensureResourcesForMembers: jest.fn(),
     } as unknown as jest.Mocked<ResourcesService>;
 
     configService = {
@@ -138,7 +140,22 @@ describe('PhaseReviewService', () => {
     } as unknown as jest.Mocked<ChallengeCompletionService>;
 
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
-    resourcesService.getReviewerResources.mockResolvedValue([{ id: 'resource-1' }] as any);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '111',
+        memberHandle: 'member-111',
+        roleName: 'Reviewer',
+      },
+    ] as any);
+    resourcesService.ensureResourcesForMembers.mockResolvedValue([
+      {
+        id: 'post-mortem-resource-1',
+        memberId: '111',
+        memberHandle: 'member-111',
+        roleName: 'Post-Mortem Reviewer',
+      },
+    ] as any);
     reviewService.createPendingReview.mockResolvedValue(true);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
       new Set(),
@@ -355,6 +372,86 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('creates post-mortem pending reviews for Post-Mortem Reviewer resources', async () => {
+    const challenge = buildChallenge({});
+    const postMortemPhase = {
+      ...basePhase,
+      id: 'post-mortem-phase',
+      name: 'Post-Mortem',
+    };
+    challenge.phases = [postMortemPhase];
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    configService.get.mockImplementation((key: string) =>
+      key === 'autopilot.postMortemScorecardId' ? 'scorecard-123' : null,
+    );
+
+    const sourceResources = [
+      {
+        id: 'reviewer-resource',
+        memberId: '301',
+        memberHandle: 'reviewer1',
+        roleName: 'Reviewer',
+      },
+      {
+        id: 'copilot-resource',
+        memberId: '201',
+        memberHandle: 'copilot1',
+        roleName: 'Copilot',
+      },
+    ];
+
+    const postMortemResources = [
+      {
+        id: 'pm-resource-1',
+        memberId: '301',
+        memberHandle: 'reviewer1',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+      {
+        id: 'pm-resource-2',
+        memberId: '201',
+        memberHandle: 'copilot1',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+    ];
+
+    resourcesService.getReviewerResources.mockResolvedValueOnce(
+      sourceResources as any,
+    );
+    resourcesService.ensureResourcesForMembers.mockResolvedValueOnce(
+      postMortemResources as any,
+    );
+
+    await service.handlePhaseOpenedForChallenge(
+      challenge,
+      postMortemPhase.id,
+    );
+
+    expect(resourcesService.ensureResourcesForMembers).toHaveBeenCalledWith(
+      challenge.id,
+      sourceResources,
+      POST_MORTEM_REVIEWER_ROLE_NAME,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(
+      postMortemResources.length,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'pm-resource-1',
+      postMortemPhase.id,
+      'scorecard-123',
+      challenge.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      null,
+      'pm-resource-2',
+      postMortemPhase.id,
+      'scorecard-123',
+      challenge.id,
+    );
   });
 
   it('assigns approval review to the highest passing submission', async () => {

@@ -124,6 +124,7 @@ describe('SchedulerService (review phase deferral)', () => {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
       getReviewerResources: jest.fn().mockResolvedValue([]),
+      ensureResourcesForMembers: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<ResourcesService>;
 
     phaseChangeNotificationService = {

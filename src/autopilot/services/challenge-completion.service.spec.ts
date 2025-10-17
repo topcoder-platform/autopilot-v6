@@ -4,6 +4,9 @@ import type { ChallengeApiService } from '../../challenge/challenge-api.service'
 import type { ReviewService, SubmissionSummary } from '../../review/review.service';
 import type { ResourcesService } from '../../resources/resources.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
+import {
+  POST_MORTEM_REVIEWER_ROLE_NAME,
+} from '../constants/review.constants';
 import type {
   IChallenge,
   IChallengePrizeSet,
@@ -25,6 +28,7 @@ describe('ChallengeCompletionService', () => {
   let resourcesService: {
     getMemberHandleMap: jest.MockedFunction<ResourcesService['getMemberHandleMap']>;
     getResourcesByRoleNames: jest.MockedFunction<ResourcesService['getResourcesByRoleNames']>;
+    ensureResourcesForMembers: jest.MockedFunction<ResourcesService['ensureResourcesForMembers']>;
   };
   let financeApiService: {
     generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
@@ -167,6 +171,7 @@ describe('ChallengeCompletionService', () => {
           ]),
         ),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
+      ensureResourcesForMembers: jest.fn().mockResolvedValue([]),
     };
 
     financeApiService = {
@@ -375,6 +380,32 @@ describe('ChallengeCompletionService', () => {
         roleName: 'Copilot',
       },
     ]);
+    resourcesService.ensureResourcesForMembers.mockResolvedValueOnce([
+      {
+        id: 'pm-resource-1',
+        memberId: '301',
+        memberHandle: 'reviewer1',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+      {
+        id: 'pm-resource-2',
+        memberId: '302',
+        memberHandle: 'reviewer2',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+      {
+        id: 'pm-resource-3',
+        memberId: '201',
+        memberHandle: 'copilot1',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+      {
+        id: 'pm-resource-4',
+        memberId: '202',
+        memberHandle: 'copilot2',
+        roleName: POST_MORTEM_REVIEWER_ROLE_NAME,
+      },
+    ]);
 
     const result = await service.finalizeChallenge(challenge.id);
 
@@ -389,31 +420,61 @@ describe('ChallengeCompletionService', () => {
       expect.any(Number),
       true,
     );
+    expect(resourcesService.ensureResourcesForMembers).toHaveBeenCalledWith(
+      challenge.id,
+      [
+        {
+          id: 'reviewer-resource-1',
+          memberId: '301',
+          memberHandle: 'reviewer1',
+          roleName: 'Reviewer',
+        },
+        {
+          id: 'reviewer-resource-2',
+          memberId: '302',
+          memberHandle: 'reviewer2',
+          roleName: 'Reviewer',
+        },
+        {
+          id: 'copilot-resource-1',
+          memberId: '201',
+          memberHandle: 'copilot1',
+          roleName: 'Copilot',
+        },
+        {
+          id: 'copilot-resource-2',
+          memberId: '202',
+          memberHandle: 'copilot2',
+          roleName: 'Copilot',
+        },
+      ],
+      POST_MORTEM_REVIEWER_ROLE_NAME,
+    );
     expect(reviewService.createPendingReview).toHaveBeenCalledTimes(4);
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
-      'copilot-resource-1',
+      'pm-resource-3',
       postMortemPhase.id,
       'scorecard-id',
       challenge.id,
     );
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
-      'copilot-resource-2',
+      'pm-resource-4',
       postMortemPhase.id,
       'scorecard-id',
       challenge.id,
     );
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
-      'reviewer-resource-1',
+      'pm-resource-1',
       postMortemPhase.id,
       'scorecard-id',
       challenge.id,
     );
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       null,
-      'reviewer-resource-2',
+      'pm-resource-2',
       postMortemPhase.id,
       'scorecard-id',
       challenge.id,

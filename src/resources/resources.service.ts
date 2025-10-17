@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { ResourcesPrismaService } from './resources-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
@@ -12,6 +13,11 @@ export interface ReviewerResourceRecord {
 
 interface CountRecord {
   count: number | string;
+}
+
+interface ResourceRoleRecord {
+  id: string;
+  name: string;
 }
 
 export interface ResourceRecord extends ReviewerResourceRecord {
@@ -434,5 +440,193 @@ export class ResourcesService {
       });
       throw err;
     }
+  }
+
+  async getResourceRoleIdByName(roleName: string): Promise<string | null> {
+    const normalized = roleName?.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT "id", "name"
+      FROM ${ResourcesService.RESOURCE_ROLE_TABLE}
+      WHERE LOWER("name") = LOWER(${normalized})
+      LIMIT 1
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<ResourceRoleRecord[]>(query);
+
+      if (!record?.id) {
+        void this.dbLogger.logAction('resources.getResourceRoleIdByName', {
+          challengeId: null,
+          status: 'SUCCESS',
+          source: ResourcesService.name,
+          details: { roleName: normalized, found: false },
+        });
+        return null;
+      }
+
+      void this.dbLogger.logAction('resources.getResourceRoleIdByName', {
+        challengeId: null,
+        status: 'SUCCESS',
+        source: ResourcesService.name,
+        details: { roleName: normalized, roleId: record.id },
+      });
+
+      return record.id;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('resources.getResourceRoleIdByName', {
+        challengeId: null,
+        status: 'ERROR',
+        source: ResourcesService.name,
+        details: { roleName: normalized, error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async ensureResourcesForMembers(
+    challengeId: string,
+    members: ReviewerResourceRecord[],
+    roleName: string,
+  ): Promise<ReviewerResourceRecord[]> {
+    const normalizedRole = roleName?.trim();
+    if (!challengeId || !normalizedRole) {
+      return [];
+    }
+
+    const uniqueMembers = new Map<string, ReviewerResourceRecord>();
+    for (const member of members) {
+      const memberId = member.memberId?.trim();
+      if (!memberId) {
+        continue;
+      }
+      if (!uniqueMembers.has(memberId)) {
+        uniqueMembers.set(memberId, member);
+      }
+    }
+
+    if (!uniqueMembers.size) {
+      return this.getResourcesByRoleNames(challengeId, [normalizedRole]);
+    }
+
+    const roleId = await this.getResourceRoleIdByName(normalizedRole);
+    if (!roleId) {
+      this.dbLogger.logAction('resources.ensureResourcesForMembers', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ResourcesService.name,
+        details: {
+          roleName: normalizedRole,
+          sourceCount: members.length,
+          createdCount: 0,
+          reason: 'ROLE_NOT_FOUND',
+        },
+      });
+      return [];
+    }
+
+    const memberIds = Array.from(uniqueMembers.keys());
+    const memberIdList = Prisma.join(
+      memberIds.map((id) => Prisma.sql`${id}`),
+    );
+
+    let existing: ReviewerResourceRecord[] = [];
+    if (memberIds.length) {
+      existing = await this.prisma.$queryRaw<ReviewerResourceRecord[]>(
+        Prisma.sql`
+          SELECT r."id", r."memberId", r."memberHandle", rr."name" AS "roleName"
+          FROM ${ResourcesService.RESOURCE_TABLE} r
+          INNER JOIN ${ResourcesService.RESOURCE_ROLE_TABLE} rr
+            ON rr."id" = r."roleId"
+          WHERE r."challengeId" = ${challengeId}
+            AND rr."name" = ${normalizedRole}
+            AND r."memberId" IN (${memberIdList})
+        `,
+      );
+    }
+
+    const existingMemberIds = new Set(
+      existing.map((record) => record.memberId?.trim()).filter(Boolean),
+    );
+
+    const toCreate = memberIds.filter(
+      (memberId) => !existingMemberIds.has(memberId),
+    );
+
+    const created: ReviewerResourceRecord[] = [];
+    if (toCreate.length) {
+      await this.prisma.$transaction(
+        async (tx) => {
+          for (const memberId of toCreate) {
+            const source = uniqueMembers.get(memberId);
+            if (!source) {
+              continue;
+            }
+
+            const resourceId = randomUUID();
+            const memberHandle =
+              source.memberHandle?.trim() || source.memberId?.trim() || memberId;
+
+            await tx.$executeRaw(
+              Prisma.sql`
+                INSERT INTO ${ResourcesService.RESOURCE_TABLE} (
+                  "id",
+                  "challengeId",
+                  "memberId",
+                  "memberHandle",
+                  "roleId",
+                  "phaseChangeNotifications",
+                  "createdBy",
+                  "updatedBy"
+                )
+                VALUES (
+                  ${resourceId},
+                  ${challengeId},
+                  ${memberId},
+                  ${memberHandle},
+                  ${roleId},
+                  TRUE,
+                  'Autopilot',
+                  'Autopilot'
+                )
+              `,
+            );
+
+            created.push({
+              id: resourceId,
+              memberId,
+              memberHandle,
+              roleName: normalizedRole,
+            });
+          }
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        },
+      );
+    }
+
+    const finalRecords = await this.getResourcesByRoleNames(challengeId, [
+      normalizedRole,
+    ]);
+
+    void this.dbLogger.logAction('resources.ensureResourcesForMembers', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ResourcesService.name,
+      details: {
+        roleName: normalizedRole,
+        sourceCount: members.length,
+        uniqueSourceCount: uniqueMembers.size,
+        createdCount: created.length,
+        finalCount: finalRecords.length,
+      },
+    });
+
+    return finalRecords;
   }
 }

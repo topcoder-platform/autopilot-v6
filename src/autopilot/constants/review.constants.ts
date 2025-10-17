@@ -7,6 +7,7 @@ export const REVIEW_PHASE_NAMES = new Set([
 
 export const ITERATIVE_REVIEW_PHASE_NAME = 'Iterative Review';
 export const POST_MORTEM_PHASE_NAME = 'Post-Mortem';
+export const POST_MORTEM_REVIEWER_ROLE_NAME = 'Post-Mortem Reviewer';
 export const REGISTRATION_PHASE_NAME = 'Registration';
 export const SUBMISSION_PHASE_NAME = 'Submission';
 export const TOPGEAR_SUBMISSION_PHASE_NAME = 'Topgear Submission';
@@ -37,7 +38,7 @@ const DEFAULT_PHASE_ROLES = ['Reviewer', 'Iterative Reviewer'];
 export const PHASE_ROLE_MAP: Record<string, string[]> = {
   Review: ['Reviewer'],
   'Iterative Review': ['Iterative Reviewer'],
-  'Post-Mortem': ['Reviewer', 'Copilot'],
+  'Post-Mortem': [POST_MORTEM_REVIEWER_ROLE_NAME],
   'Checkpoint Review': ['Checkpoint Reviewer'],
   Screening: ['Screener'],
   // Use the specific Checkpoint Screener role for checkpoint screening phases

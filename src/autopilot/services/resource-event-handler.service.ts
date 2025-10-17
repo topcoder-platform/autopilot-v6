@@ -11,6 +11,7 @@ import {
 } from '../interfaces/autopilot.interface';
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
+  POST_MORTEM_REVIEWER_ROLE_NAME,
   PHASE_ROLE_MAP,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
@@ -38,9 +39,15 @@ export class ResourceEventHandler {
     private readonly first2FinishService: First2FinishService,
     private readonly schedulerService: SchedulerService,
   ) {
-    const postMortemRoles = getNormalizedStringArray(
+    const configuredPostMortemRoles = getNormalizedStringArray(
       this.configService.get('autopilot.postMortemRoles'),
-      ['Reviewer', 'Copilot'],
+      [POST_MORTEM_REVIEWER_ROLE_NAME],
+    );
+    const postMortemRoles = Array.from(
+      new Set<string>([
+        POST_MORTEM_REVIEWER_ROLE_NAME,
+        ...configuredPostMortemRoles,
+      ]),
     );
     this.reviewRoleNames = this.computeReviewRoleNames(postMortemRoles);
     this.iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [

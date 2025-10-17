@@ -30,8 +30,7 @@ export default registerAs('autopilot', () => ({
     72,
   ),
   postMortemRoles: parseList(process.env.POST_MORTEM_REVIEW_ROLES, [
-    'Reviewer',
-    'Copilot',
+    'Post-Mortem Reviewer',
   ]),
   submitterRoles: parseList(process.env.SUBMITTER_ROLE_NAMES, ['Submitter']),
   iterativeReviewDurationHours: parseNumber(

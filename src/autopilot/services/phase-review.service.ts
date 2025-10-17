@@ -14,6 +14,7 @@ import {
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
   POST_MORTEM_PHASE_NAME,
+  POST_MORTEM_REVIEWER_ROLE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
@@ -109,15 +110,21 @@ export class PhaseReviewService {
         return;
       }
 
-      const roleNames = getRoleNamesForPhase(phase.name);
-      const reviewerResources = await this.resourcesService.getReviewerResources(
-        challengeId,
-        roleNames,
-      );
+      const reviewerAndCopilotResources =
+        await this.resourcesService.getReviewerResources(
+          challengeId,
+          ['Reviewer', 'Copilot'],
+        );
+      const reviewerResources =
+        await this.resourcesService.ensureResourcesForMembers(
+          challengeId,
+          reviewerAndCopilotResources,
+          POST_MORTEM_REVIEWER_ROLE_NAME,
+        );
 
       if (!reviewerResources.length) {
         this.logger.log(
-          `No resources found for post-mortem roles on challenge ${challengeId}; skipping review creation for phase ${phase.id}.`,
+          `No resources found for ${POST_MORTEM_REVIEWER_ROLE_NAME} role on challenge ${challengeId}; skipping review creation for phase ${phase.id}.`,
         );
         return;
       }
