@@ -31,6 +31,7 @@ import {
 export class PhaseScheduleManager {
   private readonly logger = new Logger(PhaseScheduleManager.name);
   private readonly appealsResponsePhaseNames: Set<string>;
+  private static readonly OVERDUE_PHASE_GRACE_PERIOD_MS = 60_000;
 
   constructor(
     private readonly schedulerService: SchedulerService,
@@ -530,7 +531,19 @@ export class PhaseScheduleManager {
           return false;
         }
 
-        return scheduledEndTime < now;
+        if (scheduledEndTime >= now) {
+          return false;
+        }
+
+        const ageMs = now - scheduledEndTime;
+        if (ageMs < PhaseScheduleManager.OVERDUE_PHASE_GRACE_PERIOD_MS) {
+          this.logger.debug(
+            `Skipping immediate closure for phase ${phase.name} (${phase.id}) on challenge ${challenge.id}; overdue by ${ageMs} ms which is inside the ${PhaseScheduleManager.OVERDUE_PHASE_GRACE_PERIOD_MS} ms grace period.`,
+          );
+          return false;
+        }
+
+        return true;
       })
       .sort(
         (a, b) =>
@@ -580,6 +593,35 @@ export class PhaseScheduleManager {
         this.logger.log(
           `Attempting immediate closure for overdue phase ${phase.name} (${phase.id}) on challenge ${challenge.id}.`,
         );
+
+        try {
+          const latestPhase =
+            await this.challengeApiService.getPhaseDetails(
+              challenge.id,
+              phase.id,
+            );
+
+          if (!latestPhase) {
+            this.logger.warn(
+              `Skipping overdue closure for phase ${phase.id} on challenge ${challenge.id}; phase details could not be retrieved.`,
+            );
+            continue;
+          }
+
+          if (!latestPhase.isOpen || latestPhase.actualEndDate) {
+            this.logger.debug(
+              `Skipping overdue closure for phase ${phase.name} (${phase.id}) on challenge ${challenge.id}; latest snapshot indicates it is no longer open.`,
+            );
+            continue;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Unable to verify latest status for phase ${phase.id} on challenge ${challenge.id} before overdue closure: ${err.message}`,
+            err.stack,
+          );
+          continue;
+        }
 
         await this.schedulerService.advancePhase(payload);
         processedCount += 1;
