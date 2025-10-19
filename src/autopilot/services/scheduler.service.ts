@@ -9,6 +9,7 @@ import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
+import { FinanceApiService } from '../../finance/finance-api.service';
 import {
   PhaseTransitionMessage,
   PhaseTransitionPayload,
@@ -99,6 +100,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
+    private readonly financeApiService: FinanceApiService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly phaseChangeNotificationService: PhaseChangeNotificationService,
@@ -915,6 +917,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 err.stack,
               );
             }
+          } else if (isScreeningPhase) {
+            try {
+              const handled = await this.handleScreeningPhaseClosed(data);
+              if (handled) {
+                skipPhaseChain = true;
+                skipFinalization = true;
+              }
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[SCREENING FAILED] Unable to process screening failure workflow for challenge ${data.challengeId}: ${err.message}`,
+                err.stack,
+              );
+            }
           } else if (phaseName === REGISTRATION_PHASE_NAME) {
             try {
               const handled = await this.handleRegistrationPhaseClosed(data);
@@ -1416,6 +1432,120 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         err.stack,
       );
       throw err;
+    }
+  }
+
+  private async handleScreeningPhaseClosed(
+    data: PhaseTransitionPayload,
+  ): Promise<boolean> {
+    let cancellationSucceeded = false;
+
+    try {
+      const challenge = await this.challengeApiService.getChallengeById(
+        data.challengeId,
+      );
+
+      const screeningScorecardIds = this.getScreeningScorecardIds(challenge);
+
+      const activeSubmissionIds =
+        await this.reviewService.getActiveContestSubmissionIds(
+          data.challengeId,
+        );
+
+      if (activeSubmissionIds.length === 0) {
+        return false;
+      }
+
+      const activeSubmissionIdSet = new Set(activeSubmissionIds);
+
+      const failedSubmissionIds =
+        await this.reviewService.getFailedScreeningSubmissionIds(
+          data.challengeId,
+          screeningScorecardIds,
+        );
+
+      const passedSubmissionIds =
+        await this.reviewService.getPassedScreeningSubmissionIds(
+          data.challengeId,
+          screeningScorecardIds,
+        );
+
+      const hasPassingActiveSubmissions = Array.from(passedSubmissionIds).some(
+        (submissionId) => activeSubmissionIdSet.has(submissionId),
+      );
+
+      if (hasPassingActiveSubmissions) {
+        this.logger.log(
+          `[SCREENING FAILED] Detected active submissions with passing screening review for challenge ${data.challengeId}; skipping cancellation workflow.`,
+        );
+        return false;
+      }
+
+      for (const passedSubmissionId of passedSubmissionIds) {
+        failedSubmissionIds.delete(passedSubmissionId);
+      }
+
+      if (failedSubmissionIds.size !== activeSubmissionIdSet.size) {
+        return false;
+      }
+
+      this.logger.log(
+        `[SCREENING FAILED] All active submissions failed screening for challenge ${data.challengeId}; initiating cancellation workflow.`,
+      );
+
+      await this.challengeApiService.cancelChallenge(
+        data.challengeId,
+        ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+      );
+
+      cancellationSucceeded = true;
+
+      const postMortemPhase =
+        await this.challengeApiService.createPostMortemPhase(
+          data.challengeId,
+          data.phaseId,
+          this.postMortemDurationHours,
+        );
+
+      await this.createPostMortemPendingReviews(
+        data.challengeId,
+        postMortemPhase.id,
+      );
+
+      if (!postMortemPhase.scheduledEndDate) {
+        this.logger.warn(
+          `[SCREENING FAILED] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${data.challengeId} without a scheduled end date. Manual intervention required to close the phase.`,
+        );
+        return true;
+      }
+
+      const payload: PhaseTransitionPayload = {
+        projectId: data.projectId,
+        challengeId: data.challengeId,
+        phaseId: postMortemPhase.id,
+        phaseTypeName: postMortemPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+        projectStatus: data.projectStatus,
+        date: postMortemPhase.scheduledEndDate,
+      };
+
+      await this.schedulePhaseTransition(payload);
+      this.logger.log(
+        `[SCREENING FAILED] Scheduled Post-Mortem phase ${postMortemPhase.id} closure for challenge ${data.challengeId} at ${postMortemPhase.scheduledEndDate}.`,
+      );
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[SCREENING FAILED] Failed to process screening failure workflow for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    } finally {
+      if (cancellationSucceeded) {
+        void this.financeApiService.generateChallengePayments(data.challengeId);
+      }
     }
   }
 
@@ -1977,5 +2107,44 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       this.appealsOpenRetryBaseDelayMs,
       this.appealsOpenRetryMaxDelayMs,
     );
+  }
+
+  private getScreeningScorecardIds(challenge: IChallenge): string[] {
+    const screeningPhaseTemplateIds = (challenge.phases ?? [])
+      .filter((phase) => SCREENING_PHASE_NAMES.has(phase.name))
+      .map((phase) => phase.phaseId)
+      .filter((phaseId): phaseId is string => Boolean(phaseId));
+
+    const scorecardIds = new Set<string>();
+
+    for (const templateId of screeningPhaseTemplateIds) {
+      const configs = getReviewerConfigsForPhase(challenge.reviewers, templateId);
+
+      for (const config of configs) {
+        const scorecardId = config.scorecardId?.trim();
+
+        if (scorecardId) {
+          scorecardIds.add(scorecardId);
+        }
+      }
+    }
+
+    if (scorecardIds.size === 0) {
+      const { legacy } = challenge;
+
+      if (legacy && typeof legacy === 'object') {
+        const { screeningScorecardId } = legacy as { screeningScorecardId?: unknown };
+
+        if (typeof screeningScorecardId === 'string') {
+          const trimmedScorecardId = screeningScorecardId.trim();
+
+          if (trimmedScorecardId) {
+            scorecardIds.add(trimmedScorecardId);
+          }
+        }
+      }
+    }
+
+    return Array.from(scorecardIds);
   }
 }
