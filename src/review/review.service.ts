@@ -193,6 +193,84 @@ export class ReviewService {
     }
   }
 
+  async getTopCheckpointReviewScores(
+    challengeId: string,
+    phaseId: string,
+    limit = 3,
+  ): Promise<
+    Array<{
+      memberId: string;
+      submissionId: string;
+      score: number;
+    }>
+  > {
+    if (!challengeId || !phaseId) {
+      return [];
+    }
+
+    const fetchLimit = Math.max(limit, 1) * 5;
+    const limitClause = Prisma.sql`LIMIT ${fetchLimit}`;
+
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{
+          memberId: string | null;
+          submissionId: string | null;
+          score: number | string | null;
+        }>
+      >(Prisma.sql`
+        SELECT
+          s."memberId" AS "memberId",
+          s."id" AS "submissionId",
+          COALESCE(r."finalScore", r."initialScore") AS "score"
+        FROM ${ReviewService.REVIEW_TABLE} r
+        INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+          ON s."id" = r."submissionId"
+        WHERE s."challengeId" = ${challengeId}
+          AND r."phaseId" = ${phaseId}
+          AND s."memberId" IS NOT NULL
+          AND s."id" IS NOT NULL
+          AND COALESCE(r."finalScore", r."initialScore") IS NOT NULL
+          AND (UPPER((r."status")::text) = 'COMPLETED' OR r."status" IS NULL)
+          AND r."committed" = true
+          AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+        ORDER BY COALESCE(r."finalScore", r."initialScore") DESC,
+                 s."submittedDate" ASC NULLS LAST,
+                 s."id" ASC
+        ${limitClause}
+      `);
+
+      const winners = this.selectUniqueCheckpointScores(rows, limit);
+
+      void this.dbLogger.logAction('review.getTopCheckpointReviewScores', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          limit,
+          rowsExamined: rows.length,
+          winnersCount: winners.length,
+        },
+      });
+
+      return winners;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getTopCheckpointReviewScores', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          limit,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   private selectUniqueMemberScoresFromSummations(
     rows: Array<{
       memberId: string | null;
@@ -229,6 +307,65 @@ export class ReviewService {
         aggregateScore,
       });
       seenMembers.add(memberId);
+
+      if (winners.length >= limit) {
+        break;
+      }
+    }
+
+    return winners;
+  }
+
+  private selectUniqueCheckpointScores(
+    rows: Array<{
+      memberId: string | null;
+      submissionId: string | null;
+      score: number | string | null;
+    }>,
+    limit: number,
+  ): Array<{
+    memberId: string;
+    submissionId: string;
+    score: number;
+  }> {
+    if (!Array.isArray(rows) || limit <= 0) {
+      return [];
+    }
+
+    const winners: Array<{
+      memberId: string;
+      submissionId: string;
+      score: number;
+    }> = [];
+
+    const seenMembers = new Set<string>();
+    const seenSubmissions = new Set<string>();
+
+    for (const row of rows) {
+      const memberId = row.memberId?.trim();
+      const submissionId = row.submissionId?.trim();
+      if (!memberId || !submissionId) {
+        continue;
+      }
+
+      if (seenMembers.has(memberId) || seenSubmissions.has(submissionId)) {
+        continue;
+      }
+
+      const scoreValue =
+        typeof row.score === 'number' ? row.score : Number(row.score);
+      if (!Number.isFinite(scoreValue)) {
+        continue;
+      }
+
+      winners.push({
+        memberId,
+        submissionId,
+        score: scoreValue,
+      });
+
+      seenMembers.add(memberId);
+      seenSubmissions.add(submissionId);
 
       if (winners.length >= limit) {
         break;

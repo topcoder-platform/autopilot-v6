@@ -931,6 +931,19 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 err.stack,
               );
             }
+          } else if (phaseName === 'Checkpoint Review') {
+            try {
+              await this.challengeCompletionService.assignCheckpointWinners(
+                data.challengeId,
+                data.phaseId,
+              );
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[CHECKPOINT WINNERS] Unable to assign checkpoint winners for challenge ${data.challengeId}: ${err.message}`,
+                err.stack,
+              );
+            }
           } else if (phaseName === REGISTRATION_PHASE_NAME) {
             try {
               const handled = await this.handleRegistrationPhaseClosed(data);

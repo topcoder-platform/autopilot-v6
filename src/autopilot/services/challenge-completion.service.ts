@@ -134,19 +134,135 @@ export class ChallengeCompletionService {
     }
   }
 
-  private countPlacementPrizes(prizeSets: IChallengePrizeSet[]): number {
+  private countPrizesByType(
+    prizeSets: IChallengePrizeSet[],
+    prizeType: PrizeSetTypeEnum,
+  ): number {
     if (!Array.isArray(prizeSets) || prizeSets.length === 0) {
       return 0;
     }
 
     return prizeSets.reduce((total, prizeSet) => {
-      if (!prizeSet || prizeSet.type !== PrizeSetTypeEnum.PLACEMENT) {
+      if (!prizeSet || prizeSet.type !== prizeType) {
         return total;
       }
 
       const prizeCount = prizeSet.prizes?.length ?? 0;
       return total + prizeCount;
     }, 0);
+  }
+
+  private countPlacementPrizes(prizeSets: IChallengePrizeSet[]): number {
+    return this.countPrizesByType(prizeSets, PrizeSetTypeEnum.PLACEMENT);
+  }
+
+  private countCheckpointPrizes(prizeSets: IChallengePrizeSet[]): number {
+    return this.countPrizesByType(prizeSets, PrizeSetTypeEnum.CHECKPOINT);
+  }
+
+  async assignCheckpointWinners(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<void> {
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      const checkpointPrizeLimit = this.countCheckpointPrizes(
+        challenge.prizeSets ?? [],
+      );
+
+      if (checkpointPrizeLimit <= 0) {
+        this.logger.log(
+          `No checkpoint prizes configured for challenge ${challengeId}; clearing checkpoint winners.`,
+        );
+        await this.challengeApiService.setCheckpointWinners(challengeId, []);
+        return;
+      }
+
+      const topScores =
+        await this.reviewService.getTopCheckpointReviewScores(
+          challengeId,
+          phaseId,
+          checkpointPrizeLimit,
+        );
+
+      if (!topScores.length) {
+        this.logger.warn(
+          `Checkpoint Review closed for challenge ${challengeId}, but no completed checkpoint reviews were found; clearing checkpoint winners.`,
+        );
+        await this.challengeApiService.setCheckpointWinners(challengeId, []);
+        return;
+      }
+
+      const memberIds = Array.from(
+        new Set(
+          topScores
+            .map((score) => score.memberId?.trim())
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+
+      const handleMap = await this.resourcesService.getMemberHandleMap(
+        challengeId,
+        memberIds,
+      );
+
+      const winners: IChallengeWinner[] = [];
+      const seenMembers = new Set<string>();
+      const seenSubmissions = new Set<string>();
+
+      for (const score of topScores) {
+        const memberId = score.memberId.trim();
+        const submissionId = score.submissionId.trim();
+
+        if (!memberId || !submissionId) {
+          continue;
+        }
+
+        if (seenMembers.has(memberId) || seenSubmissions.has(submissionId)) {
+          continue;
+        }
+
+        const numericMemberId = Number(memberId);
+        if (!Number.isFinite(numericMemberId)) {
+          this.logger.warn(
+            `Skipping checkpoint winner assignment for submission ${submissionId} on challenge ${challengeId}: memberId ${memberId} is not numeric.`,
+          );
+          continue;
+        }
+
+        winners.push({
+          userId: numericMemberId,
+          handle: handleMap.get(memberId) ?? memberId,
+          placement: winners.length + 1,
+          type: PrizeSetTypeEnum.CHECKPOINT,
+        });
+
+        seenMembers.add(memberId);
+        seenSubmissions.add(submissionId);
+
+        if (winners.length >= checkpointPrizeLimit) {
+          break;
+        }
+      }
+
+      await this.challengeApiService.setCheckpointWinners(
+        challengeId,
+        winners,
+      );
+
+      this.logger.log(
+        `Assigned ${winners.length} checkpoint winner(s) for challenge ${challengeId} after closing phase ${phaseId}.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to assign checkpoint winners for challenge ${challengeId} after closing phase ${phaseId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
   }
 
   async finalizeChallenge(challengeId: string): Promise<boolean> {

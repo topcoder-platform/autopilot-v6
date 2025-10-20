@@ -19,11 +19,13 @@ describe('ChallengeCompletionService', () => {
     cancelChallenge: jest.MockedFunction<ChallengeApiService['cancelChallenge']>;
     completeChallenge: jest.MockedFunction<ChallengeApiService['completeChallenge']>;
     createPostMortemPhasePreserving: jest.MockedFunction<ChallengeApiService['createPostMortemPhasePreserving']>;
+    setCheckpointWinners: jest.MockedFunction<ChallengeApiService['setCheckpointWinners']>;
   };
   let reviewService: {
     generateReviewSummaries: jest.MockedFunction<ReviewService['generateReviewSummaries']>;
     getScorecardIdByName: jest.MockedFunction<ReviewService['getScorecardIdByName']>;
     createPendingReview: jest.MockedFunction<ReviewService['createPendingReview']>;
+    getTopCheckpointReviewScores: jest.MockedFunction<ReviewService['getTopCheckpointReviewScores']>;
   };
   let resourcesService: {
     getMemberHandleMap: jest.MockedFunction<ResourcesService['getMemberHandleMap']>;
@@ -85,12 +87,120 @@ describe('ChallengeCompletionService', () => {
     ...overrides,
   });
 
+  it('assigns checkpoint winners using top checkpoint review scores', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildCheckpointPrizeSet(3)],
+    });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getTopCheckpointReviewScores.mockResolvedValue([
+      { memberId: '101', submissionId: 'sub-1', score: 95 },
+      { memberId: '102', submissionId: 'sub-2', score: 90 },
+      { memberId: '103', submissionId: 'sub-3', score: 85 },
+    ]);
+
+    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+
+    expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledTimes(1);
+    expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
+      challenge.id,
+      [
+        {
+          userId: 101,
+          handle: 'user101',
+          placement: 1,
+          type: PrizeSetTypeEnum.CHECKPOINT,
+        },
+        {
+          userId: 102,
+          handle: 'user102',
+          placement: 2,
+          type: PrizeSetTypeEnum.CHECKPOINT,
+        },
+        {
+          userId: 103,
+          handle: 'user103',
+          placement: 3,
+          type: PrizeSetTypeEnum.CHECKPOINT,
+        },
+      ],
+    );
+  });
+
+  it('limits checkpoint winners to the number of checkpoint prizes', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildCheckpointPrizeSet(2)],
+    });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getTopCheckpointReviewScores.mockResolvedValue([
+      { memberId: '101', submissionId: 'sub-1', score: 99 },
+      { memberId: '102', submissionId: 'sub-2', score: 95 },
+      { memberId: '103', submissionId: 'sub-3', score: 90 },
+    ]);
+
+    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+
+    expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledTimes(1);
+    expect(challengeApiService.setCheckpointWinners.mock.calls[0][1]).toEqual([
+      {
+        userId: 101,
+        handle: 'user101',
+        placement: 1,
+        type: PrizeSetTypeEnum.CHECKPOINT,
+      },
+      {
+        userId: 102,
+        handle: 'user102',
+        placement: 2,
+        type: PrizeSetTypeEnum.CHECKPOINT,
+      },
+    ]);
+  });
+
+  it('clears checkpoint winners when no checkpoint prizes are defined', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [],
+    });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+
+    expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
+      challenge.id,
+      [],
+    );
+  });
+
+  it('clears checkpoint winners when no checkpoint review scores are available', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildCheckpointPrizeSet(2)],
+    });
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getTopCheckpointReviewScores.mockResolvedValue([]);
+
+    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+
+    expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
+      challenge.id,
+      [],
+    );
+  });
+
   const buildPlacementPrizeSet = (count: number): IChallengePrizeSet => ({
     type: PrizeSetTypeEnum.PLACEMENT,
     description: null,
     prizes: Array.from({ length: count }, (_, index) => ({
       type: 'USD',
       value: 100 - index * 10,
+      description: null,
+    })),
+  });
+
+  const buildCheckpointPrizeSet = (count: number): IChallengePrizeSet => ({
+    type: PrizeSetTypeEnum.CHECKPOINT,
+    description: 'Checkpoint Prizes',
+    prizes: Array.from({ length: count }, () => ({
+      type: 'USD',
+      value: 100,
       description: null,
     })),
   });
@@ -152,12 +262,14 @@ describe('ChallengeCompletionService', () => {
           predecessor: null,
           constraints: [],
         }),
+      setCheckpointWinners: jest.fn().mockResolvedValue(undefined),
     };
 
     reviewService = {
       generateReviewSummaries: jest.fn().mockResolvedValue(summaries),
       getScorecardIdByName: jest.fn().mockResolvedValue(null),
       createPendingReview: jest.fn().mockResolvedValue(true),
+      getTopCheckpointReviewScores: jest.fn().mockResolvedValue([]),
     };
 
     resourcesService = {

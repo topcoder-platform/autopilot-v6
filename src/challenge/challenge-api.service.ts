@@ -1252,7 +1252,9 @@ export class ChallengeApiService {
           },
         });
 
-        await tx.challengeWinner.deleteMany({ where: { challengeId } });
+        await tx.challengeWinner.deleteMany({
+          where: { challengeId, type: PrizeSetTypeEnum.PLACEMENT },
+        });
 
         if (winners.length) {
           await tx.challengeWinner.createMany({
@@ -1278,6 +1280,52 @@ export class ChallengeApiService {
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('challenge.completeChallenge', {
+        challengeId,
+        status: 'ERROR',
+        source: ChallengeApiService.name,
+        details: {
+          winnersCount: winners.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async setCheckpointWinners(
+    challengeId: string,
+    winners: IChallengeWinner[],
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.challengeWinner.deleteMany({
+          where: { challengeId, type: PrizeSetTypeEnum.CHECKPOINT },
+        });
+
+        if (winners.length) {
+          await tx.challengeWinner.createMany({
+            data: winners.map((winner) => ({
+              challengeId,
+              userId: winner.userId,
+              handle: winner.handle,
+              placement: winner.placement,
+              type: PrizeSetTypeEnum.CHECKPOINT,
+              createdBy: 'Autopilot',
+              updatedBy: 'Autopilot',
+            })),
+          });
+        }
+      });
+
+      void this.dbLogger.logAction('challenge.setCheckpointWinners', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ChallengeApiService.name,
+        details: { winnersCount: winners.length },
+      });
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('challenge.setCheckpointWinners', {
         challengeId,
         status: 'ERROR',
         source: ChallengeApiService.name,

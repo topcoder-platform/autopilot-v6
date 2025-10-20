@@ -18,6 +18,7 @@ import {
   AutopilotOperator,
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
+import { FinanceApiService } from '../../finance/finance-api.service';
 
 type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
   ReturnType<T>,
@@ -83,6 +84,7 @@ describe('SchedulerService (review phase deferral)', () => {
   let challengeApiService: ChallengeApiServiceMock;
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
+  let financeApiService: jest.Mocked<FinanceApiService>;
   let reviewService: ReviewServiceMock;
   let resourcesService: jest.Mocked<ResourcesService>;
   let phaseChangeNotificationService: jest.Mocked<PhaseChangeNotificationService>;
@@ -107,7 +109,12 @@ describe('SchedulerService (review phase deferral)', () => {
 
     challengeCompletionService = {
       finalizeChallenge: jest.fn().mockResolvedValue(true),
+      assignCheckpointWinners: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<ChallengeCompletionService>;
+
+    financeApiService = {
+      generateChallengePayments: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<FinanceApiService>;
 
     reviewService = {
       getPendingReviewCount:
@@ -140,6 +147,7 @@ describe('SchedulerService (review phase deferral)', () => {
       challengeApiService as unknown as ChallengeApiService,
       phaseReviewService,
       challengeCompletionService,
+      financeApiService,
       reviewService as unknown as ReviewService,
       resourcesService,
       phaseChangeNotificationService,
@@ -223,6 +231,52 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.phaseId,
       'close',
     );
+  });
+
+  it('assigns checkpoint winners after closing checkpoint review', async () => {
+    const payload = createPayload({
+      phaseId: 'checkpoint-phase',
+      phaseTypeName: 'Checkpoint Review',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Checkpoint Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed checkpoint review',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Checkpoint Review',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+        createPhase({
+          id: 'next-phase',
+          phaseId: 'next-phase',
+          name: 'Final Review',
+          isOpen: true,
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(
+      challengeCompletionService.assignCheckpointWinners,
+    ).toHaveBeenCalledWith(payload.challengeId, payload.phaseId);
   });
 
   it('defers closing appeals phases when pending appeal responses exist', async () => {
