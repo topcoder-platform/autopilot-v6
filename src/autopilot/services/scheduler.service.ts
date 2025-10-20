@@ -1508,7 +1508,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       await this.challengeApiService.cancelChallenge(
         data.challengeId,
-        ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+        ChallengeStatusEnum.CANCELLED_FAILED_SCREENING,
       );
 
       cancellationSucceeded = true;

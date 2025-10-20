@@ -4,6 +4,7 @@ jest.mock('../../kafka/kafka.service', () => ({
   })),
 }));
 
+import { ChallengeStatusEnum } from '@prisma/client';
 import { SchedulerService } from './scheduler.service';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
@@ -13,7 +14,10 @@ import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { PhaseChangeNotificationService } from './phase-change-notification.service';
 import { ConfigService } from '@nestjs/config';
-import type { IPhase } from '../../challenge/interfaces/challenge.interface';
+import type {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 import {
   AutopilotOperator,
   PhaseTransitionPayload,
@@ -32,12 +36,18 @@ type ChallengeApiServiceMock = {
   getPhaseDetails: MockedMethod<ChallengeApiService['getPhaseDetails']>;
   advancePhase: MockedMethod<ChallengeApiService['advancePhase']>;
   getChallengePhases: MockedMethod<ChallengeApiService['getChallengePhases']>;
+  getChallengeById: MockedMethod<ChallengeApiService['getChallengeById']>;
+  cancelChallenge: MockedMethod<ChallengeApiService['cancelChallenge']>;
+  createPostMortemPhase: MockedMethod<ChallengeApiService['createPostMortemPhase']>;
 };
 
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
+  getActiveContestSubmissionIds: MockedMethod<ReviewService['getActiveContestSubmissionIds']>;
+  getFailedScreeningSubmissionIds: MockedMethod<ReviewService['getFailedScreeningSubmissionIds']>;
+  getPassedScreeningSubmissionIds: MockedMethod<ReviewService['getPassedScreeningSubmissionIds']>;
 };
 
 type KafkaServiceMock = {
@@ -101,7 +111,23 @@ describe('SchedulerService (review phase deferral)', () => {
       advancePhase: createMockMethod<ChallengeApiService['advancePhase']>(),
       getChallengePhases:
         createMockMethod<ChallengeApiService['getChallengePhases']>(),
+      getChallengeById:
+        createMockMethod<ChallengeApiService['getChallengeById']>(),
+      cancelChallenge:
+        createMockMethod<ChallengeApiService['cancelChallenge']>(),
+      createPostMortemPhase:
+        createMockMethod<ChallengeApiService['createPostMortemPhase']>(),
     };
+    challengeApiService.cancelChallenge.mockResolvedValue(undefined);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: 'challenge-1',
+      phases: [],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    challengeApiService.createPostMortemPhase.mockResolvedValue(
+      createPhase({ name: 'Post-Mortem' }),
+    );
 
     phaseReviewService = {
       handlePhaseOpened: jest.fn(),
@@ -123,9 +149,23 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getPendingAppealCount']>(),
       getTotalAppealCount:
         createMockMethod<ReviewService['getTotalAppealCount']>(),
+      getActiveContestSubmissionIds:
+        createMockMethod<ReviewService['getActiveContestSubmissionIds']>(),
+      getFailedScreeningSubmissionIds:
+        createMockMethod<ReviewService['getFailedScreeningSubmissionIds']>(),
+      getPassedScreeningSubmissionIds:
+        createMockMethod<ReviewService['getPassedScreeningSubmissionIds']>(),
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(),
+    );
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(
+      new Set(),
+    );
 
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
@@ -157,6 +197,7 @@ describe('SchedulerService (review phase deferral)', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.restoreAllMocks();
   });
 
   it('defers closing review phases when pending reviews exist', async () => {
@@ -479,5 +520,97 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
       payload.challengeId,
     );
+  });
+
+  it('cancels challenge as failed screening when all active submissions fail screening', async () => {
+    const payload = createPayload({
+      phaseId: 'screening-phase',
+      phaseTypeName: 'Screening',
+    });
+
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getActiveContestSubmissionIds.mockResolvedValue([
+      'submission-1',
+      'submission-2',
+    ]);
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
+      new Set(['submission-1', 'submission-2']),
+    );
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(
+      new Set(),
+    );
+
+    const challenge = {
+      id: payload.challengeId,
+      phases: [],
+      reviewers: [],
+      legacy: { screeningScorecardId: 'screening-scorecard' },
+    } as unknown as IChallenge;
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const postMortemPhase = createPhase({
+      id: 'post-mortem-phase',
+      phaseId: 'post-mortem-template',
+      name: 'Post-Mortem',
+      isOpen: true,
+    });
+    challengeApiService.createPostMortemPhase.mockResolvedValue(
+      postMortemPhase,
+    );
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          name: 'Screening',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    const coverageSpy = jest
+      .spyOn(scheduler as any, 'verifyReviewerCoverage')
+      .mockResolvedValue({ satisfied: true, expected: 0, actual: 0 });
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('post-mortem-scheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+      payload.challengeId,
+      ChallengeStatusEnum.CANCELLED_FAILED_SCREENING,
+    );
+    expect(reviewService.getFailedScreeningSubmissionIds).toHaveBeenCalledWith(
+      payload.challengeId,
+      ['screening-scorecard'],
+    );
+    expect(
+      financeApiService.generateChallengePayments,
+    ).toHaveBeenCalledWith(payload.challengeId);
+    expect(challengeApiService.createPostMortemPhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      expect.any(Number),
+    );
+    expect(scheduleSpy).toHaveBeenCalled();
+
+    coverageSpy.mockRestore();
+    scheduleSpy.mockRestore();
   });
 });
