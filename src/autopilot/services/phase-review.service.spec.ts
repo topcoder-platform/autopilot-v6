@@ -11,7 +11,10 @@ import {
 import { ResourcesService } from '../../resources/resources.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
-import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
+import {
+  POST_MORTEM_REVIEWER_ROLE_NAME,
+  ITERATIVE_REVIEW_PHASE_NAME,
+} from '../constants/review.constants';
 
 const basePhase = {
   id: 'phase-1',
@@ -604,6 +607,37 @@ describe('PhaseReviewService', () => {
       checkpointPhase.id,
       'checkpoint-scorecard',
       challenge.id,
+    );
+  });
+
+  it('does not create pending reviews when an iterative review phase opens', async () => {
+    const iterativePhase = {
+      ...basePhase,
+      id: 'iterative-phase',
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+    };
+
+    const challenge = buildChallenge({});
+    challenge.phases = [iterativePhase];
+
+    await service.handlePhaseOpenedForChallenge(
+      challenge,
+      iterativePhase.id,
+    );
+
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    expect(dbLogger.logAction).toHaveBeenCalledWith(
+      'review.preparePendingReviews',
+      expect.objectContaining({
+        challengeId: challenge.id,
+        status: 'INFO',
+        source: PhaseReviewService.name,
+        details: expect.objectContaining({
+          phaseId: iterativePhase.id,
+          phaseName: ITERATIVE_REVIEW_PHASE_NAME,
+          reason: 'iterative-phase-delegated',
+        }),
+      }),
     );
   });
 });

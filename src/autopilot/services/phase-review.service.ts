@@ -15,6 +15,7 @@ import {
   APPROVAL_PHASE_NAMES,
   POST_MORTEM_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
+  ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
@@ -70,6 +71,18 @@ export class PhaseReviewService {
     const isApprovalPhase = APPROVAL_PHASE_NAMES.has(phase.name);
 
     if (!isReviewPhase && !isScreeningPhase && !isApprovalPhase) {
+      return;
+    }
+
+    if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'iterative-phase-delegated',
+      });
+      this.logger.debug(
+        `Skipping bulk pending review creation for iterative review phase ${phase.id} on challenge ${challengeId}; delegated to iterative workflow.`,
+      );
       return;
     }
 
