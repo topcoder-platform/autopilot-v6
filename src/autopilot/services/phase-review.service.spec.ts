@@ -10,6 +10,7 @@ import {
 } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
+import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 
 const basePhase = {
@@ -95,6 +96,7 @@ describe('PhaseReviewService', () => {
   let resourcesService: jest.Mocked<ResourcesService>;
   let configService: jest.Mocked<ConfigService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
+  let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
 
   beforeAll(() => {
     loggerLogSpy = jest
@@ -138,6 +140,9 @@ describe('PhaseReviewService', () => {
     challengeCompletionService = {
       finalizeChallenge: jest.fn(),
     } as unknown as jest.Mocked<ChallengeCompletionService>;
+    dbLogger = {
+      logAction: jest.fn(),
+    } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
     resourcesService.getReviewerResources.mockResolvedValue([
@@ -170,6 +175,7 @@ describe('PhaseReviewService', () => {
       resourcesService,
       configService,
       challengeCompletionService,
+      dbLogger,
     );
   });
 

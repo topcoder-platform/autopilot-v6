@@ -23,6 +23,7 @@ import {
 } from '../utils/reviewer.utils';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
 import { ChallengeCompletionService } from './challenge-completion.service';
+import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 
 @Injectable()
 export class PhaseReviewService {
@@ -34,6 +35,7 @@ export class PhaseReviewService {
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
     private readonly challengeCompletionService: ChallengeCompletionService,
+    private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
 
   async handlePhaseOpened(challengeId: string, phaseId: string): Promise<void> {
@@ -50,6 +52,10 @@ export class PhaseReviewService {
     const phase = challenge.phases.find((p) => p.id === phaseId);
 
     if (!phase) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId,
+        reason: 'phase-not-found',
+      });
       this.logger.warn(
         `Unable to locate phase ${phaseId} for challenge ${challengeId} when creating pending reviews`,
       );
@@ -104,6 +110,11 @@ export class PhaseReviewService {
       }
 
       if (!scorecardId) {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'missing-post-mortem-scorecard',
+        });
         this.logger.warn(
           `Post-mortem scorecard is not configured; skipping review creation for challenge ${challengeId}, phase ${phase.id}.`,
         );
@@ -123,6 +134,12 @@ export class PhaseReviewService {
         );
 
       if (!reviewerResources.length) {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'no-post-mortem-resources',
+          candidateRoles: ['Reviewer', 'Copilot'],
+        });
         this.logger.log(
           `No resources found for ${POST_MORTEM_REVIEWER_ROLE_NAME} role on challenge ${challengeId}; skipping review creation for phase ${phase.id}.`,
         );
@@ -152,9 +169,27 @@ export class PhaseReviewService {
       }
 
       if (createdCount > 0) {
+        this.logPhaseAction('SUCCESS', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reviewerResourceCount: reviewerResources.length,
+          submissionCount: 0,
+          createdCount,
+          postMortem: true,
+        });
         this.logger.log(
           `Created ${createdCount} post-mortem pending review(s) for challenge ${challengeId}, phase ${phase.id}.`,
         );
+      } else {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reviewerResourceCount: reviewerResources.length,
+          submissionCount: 0,
+          createdCount,
+          postMortem: true,
+          reason: 'no-new-pending-reviews',
+        });
       }
       return;
     }
@@ -168,6 +203,11 @@ export class PhaseReviewService {
     ).filter((config) => Boolean(config.scorecardId));
 
     if (!reviewerConfigs.length) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'missing-reviewer-configs',
+      });
       this.logger.log(
         `No member review configurations found for phase ${phase.name} (${phase.id}) on challenge ${challengeId}; skipping review creation`,
       );
@@ -188,6 +228,11 @@ export class PhaseReviewService {
       );
 
       if (uniqueScorecards.length === 0) {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'missing-screening-scorecards',
+        });
         this.logger.warn(
           `Reviewer configs missing scorecard IDs for challenge ${challengeId}, phase ${phase.id}`,
         );
@@ -215,6 +260,11 @@ export class PhaseReviewService {
       );
     }
     if (!scorecardId) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'missing-scorecard-selection',
+      });
       return;
     }
 
@@ -225,6 +275,12 @@ export class PhaseReviewService {
     );
 
     if (!reviewerResources.length) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'no-reviewer-resources',
+        rolesRequested: roleNames,
+      });
       this.logger.log(
         `No reviewer resources found for challenge ${challengeId} and phase ${phase.name}`,
       );
@@ -241,6 +297,11 @@ export class PhaseReviewService {
         );
 
         if (!passingSummaries.length) {
+          this.logPhaseAction('INFO', challengeId, {
+            phaseId: phase.id,
+            phaseName: phase.name,
+            reason: 'no-passing-submissions',
+          });
           this.logger.log(
             `No passing submissions detected for challenge ${challengeId}; cancelling challenge and replacing Approval phase ${phase.id} with Post-Mortem.`,
           );
@@ -272,6 +333,11 @@ export class PhaseReviewService {
           this.selectWinningApprovalSummary(passingSummaries);
 
         if (!winningSummary?.submissionId) {
+          this.logPhaseAction('INFO', challengeId, {
+            phaseId: phase.id,
+            phaseName: phase.name,
+            reason: 'approval-submission-missing',
+          });
           this.logger.warn(
             `Approval phase opened for challenge ${challengeId}, but no submission ID could be determined from passing summaries; skipping review creation for phase ${phase.id}.`,
           );
@@ -303,6 +369,11 @@ export class PhaseReviewService {
       );
 
       if (!screeningPhase?.phaseId) {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'missing-checkpoint-screening-phase',
+        });
         this.logger.warn(
           `Checkpoint Review opened, but no Checkpoint Screening phase found for challenge ${challengeId}; skipping review creation for phase ${phase.id}`,
         );
@@ -324,6 +395,11 @@ export class PhaseReviewService {
       )[0];
 
       if (!screeningScorecardId) {
+        this.logPhaseAction('INFO', challengeId, {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'missing-checkpoint-screening-scorecard',
+        });
         this.logger.warn(
           `Checkpoint Review opened, but no screening scorecard configured for challenge ${challengeId}; skipping review creation for phase ${phase.id}`,
         );
@@ -388,6 +464,12 @@ export class PhaseReviewService {
     }
 
     if (!submissionIds.length) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'no-submissions-found',
+        reviewerResourceCount: reviewerResources.length,
+      });
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,
       );
@@ -398,6 +480,7 @@ export class PhaseReviewService {
       phase.id,
       challengeId,
     );
+    const existingPairCount = existingPairs.size;
 
     let createdCount = 0;
     for (const resource of reviewerResources) {
@@ -430,10 +513,41 @@ export class PhaseReviewService {
     }
 
     if (createdCount > 0) {
+      this.logPhaseAction('SUCCESS', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reviewerResourceCount: reviewerResources.length,
+        submissionCount: submissionIds.length,
+        existingPairCount,
+        createdCount,
+      });
       this.logger.log(
         `Created ${createdCount} pending review(s) for challenge ${challengeId}, phase ${phase.id}`,
       );
+    } else {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reviewerResourceCount: reviewerResources.length,
+        submissionCount: submissionIds.length,
+        existingPairCount,
+        createdCount,
+        reason: 'no-new-pending-reviews',
+      });
     }
+  }
+
+  private logPhaseAction(
+    status: 'SUCCESS' | 'ERROR' | 'INFO',
+    challengeId: string,
+    details: Record<string, unknown>,
+  ): void {
+    void this.dbLogger.logAction('review.preparePendingReviews', {
+      challengeId,
+      status,
+      source: PhaseReviewService.name,
+      details,
+    });
   }
 
   private async excludeFailedScreeningSubmissions(
