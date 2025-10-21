@@ -9,10 +9,7 @@ export function getMemberReviewerConfigs(
   }
 
   return reviewers.filter(
-    (reviewer) =>
-      reviewer.isMemberReview &&
-      reviewer.phaseId === phaseTemplateId &&
-      reviewer.shouldOpenOpportunity !== false,
+    (reviewer) => reviewer.isMemberReview && reviewer.phaseId === phaseTemplateId,
   );
 }
 
@@ -26,11 +23,7 @@ export function getReviewerConfigsForPhase(
     return [];
   }
 
-  return reviewers.filter(
-    (reviewer) =>
-      reviewer.phaseId === phaseTemplateId &&
-      reviewer.shouldOpenOpportunity !== false,
-  );
+  return reviewers.filter((reviewer) => reviewer.phaseId === phaseTemplateId);
 }
 
 export function getRequiredReviewerCountForPhase(
@@ -44,7 +37,6 @@ export function getRequiredReviewerCountForPhase(
   }
 
   return configs
-    .filter((c) => c.shouldOpenOpportunity !== false)
     .reduce((total, config) => {
       const count = config.memberReviewerCount ?? 1;
       return total + Math.max(count, 0);
