@@ -15,6 +15,7 @@ import {
   PHASE_ROLE_MAP,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
+  APPROVAL_PHASE_NAMES,
 } from '../constants/review.constants';
 import { First2FinishService } from './first2finish.service';
 import { SchedulerService } from './scheduler.service';
@@ -67,7 +68,7 @@ export class ResourceEventHandler {
       const resource = await this.resourcesService.getResourceById(resourceId);
       const roleName = resource?.roleName
         ? resource.roleName.trim()
-        : await this.resourcesService.getRoleNameById(payload.roleId);
+        : (await this.resourcesService.getRoleNameById(payload.roleId))?.trim();
 
       if (resource && resource.challengeId !== challengeId) {
         this.logger.warn(
@@ -96,6 +97,40 @@ export class ResourceEventHandler {
           `Skipping resource create for challenge ${challengeId} with status ${challenge.status}.`,
         );
         return;
+      }
+
+      if (roleName === 'Approver') {
+        const approvalPhases =
+          challenge.phases?.filter(
+            (phase) => phase.isOpen && APPROVAL_PHASE_NAMES.has(phase.name),
+          ) ?? [];
+
+        for (const phase of approvalPhases) {
+          try {
+            const reassigned =
+              await this.reviewService.reassignPendingReviewsToResource(
+                phase.id,
+                resourceId,
+                challengeId,
+              );
+
+            if (reassigned > 0) {
+              this.logger.log(
+                `Reassigned ${reassigned} pending Approval review(s) on challenge ${challengeId} to resource ${resourceId}.`,
+              );
+            } else {
+              this.logger.debug(
+                `No pending Approval reviews required reassignment for challenge ${challengeId}, phase ${phase.id}.`,
+              );
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to reassign pending Approval reviews for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
       }
 
       await this.maybeOpenDeferredReviewPhases(challenge);

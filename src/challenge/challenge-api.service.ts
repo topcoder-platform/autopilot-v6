@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+  APPROVAL_PHASE_NAMES,
 } from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
@@ -1005,6 +1006,7 @@ export class ChallengeApiService {
   ): Promise<IPhase> {
     const now = new Date();
     const end = new Date(now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000);
+    let closedApprovalPhaseCount = 0;
 
     try {
       const { createdPhaseId } = await this.prisma.$transaction(async (tx) => {
@@ -1027,6 +1029,37 @@ export class ChallengeApiService {
           throw new NotFoundException(
             `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId}.`,
           );
+        }
+
+        const updatedPhaseNames = new Set(challenge.currentPhaseNames ?? []);
+
+        if (openImmediately) {
+          const approvalsToClose = challenge.phases.filter(
+            (phase) =>
+              APPROVAL_PHASE_NAMES.has(phase.name) &&
+              (phase.isOpen || !phase.actualEndDate),
+          );
+
+          if (approvalsToClose.length > 0) {
+            closedApprovalPhaseCount = approvalsToClose.length;
+            await tx.challengePhase.updateMany({
+              where: { id: { in: approvalsToClose.map((phase) => phase.id) } },
+              data: {
+                isOpen: false,
+                actualStartDate: now,
+                actualEndDate: now,
+                updatedBy: 'Autopilot',
+              },
+            });
+
+            for (const approvalPhase of approvalsToClose) {
+              updatedPhaseNames.delete(approvalPhase.name);
+            }
+
+            this.logger.log(
+              `Closed ${approvalsToClose.length} Approval phase(s) prior to opening Post-Mortem for challenge ${challengeId}.`,
+            );
+          }
         }
 
         // If a Post-Mortem already exists, return it idempotently.
@@ -1066,11 +1099,10 @@ export class ChallengeApiService {
 
         // Maintain currentPhaseNames only if opening immediately
         if (openImmediately) {
-          const phaseNames = new Set(challenge.currentPhaseNames ?? []);
-          phaseNames.add(postMortemPhaseType.name);
+          updatedPhaseNames.add(postMortemPhaseType.name);
           await tx.challenge.update({
             where: { id: challengeId },
-            data: { currentPhaseNames: Array.from(phaseNames) },
+            data: { currentPhaseNames: Array.from(updatedPhaseNames) },
           });
         }
 
@@ -1104,6 +1136,7 @@ export class ChallengeApiService {
           preserveFuturePhases: true,
           openImmediately,
           predecessorPhaseId,
+          closedApprovalPhaseCount,
         },
       });
 

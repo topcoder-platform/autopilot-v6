@@ -15,6 +15,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let challengePhaseUpdate: jest.Mock;
   let challengePhaseCreate: jest.Mock;
   let challengePhaseDeleteMany: jest.Mock;
+  let challengePhaseUpdateMany: jest.Mock;
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
   let txChallengeFindUnique: jest.Mock;
@@ -29,6 +30,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     challengePhaseUpdate = jest.fn().mockResolvedValue(undefined);
     challengePhaseCreate = jest.fn().mockResolvedValue({ id: 'new-phase' });
     challengePhaseDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
+    challengePhaseUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
     challengeUpdate = jest.fn().mockResolvedValue(undefined);
 
     challengeFindUnique = jest.fn();
@@ -42,6 +44,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       },
       challengePhase: {
         update: challengePhaseUpdate,
+        updateMany: challengePhaseUpdateMany,
         create: challengePhaseCreate,
         deleteMany: challengePhaseDeleteMany,
       },
@@ -60,6 +63,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         },
         challengePhase: {
           update: challengePhaseUpdate,
+          updateMany: challengePhaseUpdateMany,
           create: challengePhaseCreate,
           deleteMany: challengePhaseDeleteMany,
         },
@@ -554,6 +558,182 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       );
     });
   });
+
+  describe('createPostMortemPhasePreserving', () => {
+    const buildPhase = (overrides: Partial<any> = {}) => {
+      const scheduledStart = new Date('2025-09-25T00:00:00.000Z');
+      return {
+        id: 'phase-default',
+        phaseId: 'template-default',
+        name: 'Generic Phase',
+        description: null,
+        isOpen: false,
+        predecessor: null,
+        duration: 3600,
+        scheduledStartDate: scheduledStart,
+        scheduledEndDate: new Date(scheduledStart.getTime() + 3600 * 1000),
+        actualStartDate: null,
+        actualEndDate: null,
+        constraints: [],
+        ...overrides,
+      };
+    };
+
+    it('closes open Approval phases when opening Post-Mortem immediately', async () => {
+      const challengeId = 'challenge-close-approval';
+      const predecessorPhase = buildPhase({
+        id: 'phase-review',
+        phaseId: 'template-review',
+        name: 'Review',
+        actualEndDate: new Date('2025-09-25T03:00:00.000Z'),
+      });
+      const approvalPhase = buildPhase({
+        id: 'phase-approval',
+        phaseId: 'template-approval',
+        name: 'Approval',
+        isOpen: true,
+      });
+
+      txChallengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [predecessorPhase, approvalPhase],
+        currentPhaseNames: ['Approval'],
+      } as any);
+
+      const postMortemPhaseType = {
+        id: 'template-postmortem',
+        name: 'Post-Mortem',
+        description: 'Post-Mortem phase',
+      };
+      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+
+      const createdPostMortem = {
+        id: 'phase-postmortem',
+      };
+      challengePhaseCreate.mockResolvedValueOnce(createdPostMortem as any);
+
+      const scheduledEnd = new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000);
+      challengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [
+          predecessorPhase,
+          {
+            ...createdPostMortem,
+            phaseId: postMortemPhaseType.id,
+            name: postMortemPhaseType.name,
+            description: postMortemPhaseType.description,
+            isOpen: true,
+            duration: 72 * 60 * 60,
+            scheduledStartDate: fixedNow,
+            scheduledEndDate: scheduledEnd,
+            actualStartDate: fixedNow,
+            actualEndDate: null,
+            predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
+            constraints: [],
+          },
+        ],
+      } as any);
+
+      const result = await service.createPostMortemPhasePreserving(
+        challengeId,
+        predecessorPhase.id,
+        72,
+        true,
+      );
+
+      expect(challengePhaseUpdateMany).toHaveBeenCalledWith({
+        where: { id: { in: [approvalPhase.id] } },
+        data: expect.objectContaining({
+          isOpen: false,
+          actualStartDate: fixedNow,
+          actualEndDate: fixedNow,
+          updatedBy: 'Autopilot',
+        }),
+      });
+      expect(challengeUpdate).toHaveBeenCalledWith({
+        where: { id: challengeId },
+        data: { currentPhaseNames: ['Post-Mortem'] },
+      });
+      expect(result.id).toBe(createdPostMortem.id);
+      expect(dbLogger.logAction).toHaveBeenLastCalledWith(
+        'challenge.createPostMortemPhase',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            closedApprovalPhaseCount: 1,
+            postMortemPhaseId: createdPostMortem.id,
+          }),
+        }),
+      );
+    });
+
+    it('does not close approval phases when not opening immediately', async () => {
+      const challengeId = 'challenge-preserve';
+      const predecessorPhase = buildPhase({
+        id: 'phase-submission',
+        phaseId: 'template-submission',
+        name: 'Submission',
+      });
+      const approvalPhase = buildPhase({
+        id: 'phase-approval',
+        phaseId: 'template-approval',
+        name: 'Approval',
+        isOpen: true,
+      });
+
+      txChallengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [predecessorPhase, approvalPhase],
+        currentPhaseNames: ['Approval'],
+      } as any);
+
+      const postMortemPhaseType = {
+        id: 'template-postmortem',
+        name: 'Post-Mortem',
+        description: 'Post-Mortem phase',
+      };
+      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+
+      const createdPostMortem = { id: 'phase-postmortem' };
+      challengePhaseCreate.mockResolvedValueOnce(createdPostMortem as any);
+
+      const scheduledEnd = new Date(fixedNow.getTime() + 48 * 60 * 60 * 1000);
+      challengeFindUnique.mockResolvedValueOnce({
+        id: challengeId,
+        phases: [
+          predecessorPhase,
+          approvalPhase,
+          {
+            ...createdPostMortem,
+            phaseId: postMortemPhaseType.id,
+            name: postMortemPhaseType.name,
+            description: postMortemPhaseType.description,
+            isOpen: false,
+            duration: 48 * 60 * 60,
+            scheduledStartDate: fixedNow,
+            scheduledEndDate: scheduledEnd,
+            actualStartDate: null,
+            actualEndDate: null,
+            predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
+            constraints: [],
+          },
+        ],
+      } as any);
+
+      challengePhaseUpdateMany.mockClear();
+      challengeUpdate.mockClear();
+
+      const result = await service.createPostMortemPhasePreserving(
+        challengeId,
+        predecessorPhase.id,
+        48,
+        false,
+      );
+
+      expect(challengePhaseUpdateMany).not.toHaveBeenCalled();
+      expect(challengeUpdate).not.toHaveBeenCalled();
+      expect(result.id).toBe(createdPostMortem.id);
+    });
+  });
 });
 
 describe('ChallengeApiService - end date handling', () => {
@@ -627,7 +807,7 @@ describe('ChallengeApiService - end date handling', () => {
       },
     });
     expect(challengeWinnerDeleteMany).toHaveBeenCalledWith({
-      where: { challengeId: 'challenge-123' },
+      where: { challengeId: 'challenge-123', type: 'PLACEMENT' },
     });
     expect(challengeWinnerCreateMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([

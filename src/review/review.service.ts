@@ -1186,6 +1186,70 @@ export class ReviewService {
     }
   }
 
+  async reassignPendingReviewsToResource(
+    phaseId: string,
+    resourceId: string,
+    challengeId: string,
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+    const trimmedResourceId = resourceId?.trim();
+
+    if (!trimmedPhaseId || !trimmedResourceId) {
+      return 0;
+    }
+
+    const query = Prisma.sql`
+      UPDATE ${ReviewService.REVIEW_TABLE}
+      SET
+        "resourceId" = ${trimmedResourceId},
+        "updatedAt" = NOW()
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
+        AND (
+          "resourceId" IS DISTINCT FROM ${trimmedResourceId}
+        )
+    `;
+
+    try {
+      const reassigned = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction(
+        'review.reassignPendingReviewsToResource',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            resourceId: trimmedResourceId,
+            reassignedCount: reassigned,
+          },
+        },
+      );
+
+      return reassigned;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'review.reassignPendingReviewsToResource',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            resourceId: trimmedResourceId,
+            error: err.message,
+          },
+        },
+      );
+      throw err;
+    }
+  }
+
   async getActiveSubmissionCount(challengeId: string): Promise<number> {
     const query = Prisma.sql`
       SELECT COUNT(*)::int AS count

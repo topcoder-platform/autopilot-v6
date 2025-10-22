@@ -285,4 +285,70 @@ describe('ReviewService', () => {
       );
     });
   });
+
+  describe('reassignPendingReviewsToResource', () => {
+    const phaseId = 'phase-approval';
+    const resourceId = 'resource-987';
+
+    it('returns 0 when phaseId or resourceId is missing', async () => {
+      const result = await service.reassignPendingReviewsToResource(
+        '   ',
+        resourceId,
+        challengeId,
+      );
+
+      expect(result).toBe(0);
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+      expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
+    });
+
+    it('updates pending reviews and logs success', async () => {
+      prismaMock.$executeRaw.mockResolvedValueOnce(2);
+
+      const result = await service.reassignPendingReviewsToResource(
+        phaseId,
+        resourceId,
+        challengeId,
+      );
+
+      expect(result).toBe(2);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.reassignPendingReviewsToResource',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            phaseId,
+            resourceId,
+            reassignedCount: 2,
+          }),
+        }),
+      );
+    });
+
+    it('logs error and rethrows when update fails', async () => {
+      const error = new Error('update failed');
+      prismaMock.$executeRaw.mockRejectedValueOnce(error);
+
+      await expect(
+        service.reassignPendingReviewsToResource(
+          phaseId,
+          resourceId,
+          challengeId,
+        ),
+      ).rejects.toThrow('update failed');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.reassignPendingReviewsToResource',
+        expect.objectContaining({
+          status: 'ERROR',
+          details: expect.objectContaining({
+            phaseId,
+            resourceId,
+            error: 'update failed',
+          }),
+        }),
+      );
+    });
+  });
 });
