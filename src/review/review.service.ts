@@ -1381,14 +1381,38 @@ export class ReviewService {
         s."legacySubmissionId" AS "legacySubmissionId",
         s."memberId" AS "memberId",
         s."submittedDate" AS "submittedDate",
-        COALESCE(AVG(r."finalScore"), 0) AS "aggregateScore",
-        MAX(r."scorecardId") AS "scorecardId",
-        MAX(sc."legacyId") AS "scorecardLegacyId",
-        MAX(sc."minimumPassingScore") AS "minimumPassingScore"
+        COALESCE(
+          AVG(
+            CASE
+              WHEN UPPER((sc."type")::text) = 'REVIEW'
+              THEN r."finalScore"
+            END
+          ),
+          0
+        ) AS "aggregateScore",
+        MAX(
+          CASE
+            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            THEN r."scorecardId"
+          END
+        ) AS "scorecardId",
+        MAX(
+          CASE
+            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            THEN sc."legacyId"
+          END
+        ) AS "scorecardLegacyId",
+        MAX(
+          CASE
+            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            THEN sc."minimumPassingScore"
+          END
+        ) AS "minimumPassingScore"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       LEFT JOIN ${ReviewService.REVIEW_TABLE} r
         ON r."submissionId" = s."id"
         AND (r."status"::text = 'COMPLETED')
+        AND r."committed" = true
       LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
         ON sc."id" = r."scorecardId"
       WHERE s."challengeId" = ${challengeId}
