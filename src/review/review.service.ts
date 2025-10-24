@@ -52,6 +52,18 @@ interface SubmissionAggregationRecord {
   minimumPassingScore: number | string | null;
 }
 
+interface ReviewSummationSummaryRecord {
+  submissionId: string;
+  legacySubmissionId: string | null;
+  memberId: string | null;
+  submittedDate: Date | null;
+  aggregateScore: number | string | null;
+  scorecardId: string | null;
+  scorecardLegacyId: string | null;
+  isPassing: boolean | null;
+  minimumPassingScore: number | string | null;
+}
+
 export interface SubmissionSummary {
   submissionId: string;
   legacySubmissionId: string | null;
@@ -1375,6 +1387,81 @@ export class ReviewService {
       return [];
     }
 
+    let summaries =
+      await this.getSummariesFromReviewSummations(challengeId);
+
+    if (!summaries.length) {
+      summaries = await this.rebuildSummariesFromReviews(challengeId);
+    }
+
+    void this.dbLogger.logAction('review.generateReviewSummaries', {
+      challengeId,
+      status: 'SUCCESS',
+      source: ReviewService.name,
+      details: {
+        submissionCount: summaries.length,
+        passingCount: summaries.filter((summary) => summary.isPassing).length,
+      },
+    });
+
+    return summaries;
+  }
+
+  private async getSummariesFromReviewSummations(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
+    const rows =
+      await this.prisma.$queryRaw<ReviewSummationSummaryRecord[]>(Prisma.sql`
+        SELECT
+          s."id" AS "submissionId",
+          s."legacySubmissionId" AS "legacySubmissionId",
+          s."memberId" AS "memberId",
+          s."submittedDate" AS "submittedDate",
+          rs."aggregateScore" AS "aggregateScore",
+          rs."scorecardId" AS "scorecardId",
+          rs."scorecardLegacyId" AS "scorecardLegacyId",
+          rs."isPassing" AS "isPassing",
+          sc."minimumPassingScore" AS "minimumPassingScore"
+        FROM ${ReviewService.REVIEW_SUMMATION_TABLE} rs
+        INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+          ON s."id" = rs."submissionId"
+        LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+          ON sc."id" = rs."scorecardId"
+        WHERE s."challengeId" = ${challengeId}
+          AND rs."isFinal" = true
+      `);
+
+    if (!rows.length) {
+      return [];
+    }
+
+    return rows.map((row) => {
+      const aggregateScore = Number(row.aggregateScore ?? 0);
+      const passingScore = this.resolvePassingScore(row.minimumPassingScore);
+      const isPassing =
+        typeof row.isPassing === 'boolean'
+          ? row.isPassing
+          : aggregateScore >= passingScore;
+
+      return {
+        submissionId: row.submissionId,
+        legacySubmissionId: row.legacySubmissionId ?? null,
+        memberId: row.memberId ?? null,
+        submittedDate: row.submittedDate
+          ? new Date(row.submittedDate)
+          : null,
+        aggregateScore,
+        scorecardId: row.scorecardId ?? null,
+        scorecardLegacyId: row.scorecardLegacyId ?? null,
+        passingScore,
+        isPassing,
+      };
+    });
+  }
+
+  private async rebuildSummariesFromReviews(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
     const aggregationQuery = Prisma.sql`
       SELECT
         s."id" AS "submissionId",
@@ -1442,6 +1529,10 @@ export class ReviewService {
       };
     });
 
+    if (!summaries.length) {
+      return summaries;
+    }
+
     const now = new Date();
 
     await this.prisma.$transaction(async (tx) => {
@@ -1490,16 +1581,6 @@ export class ReviewService {
           `,
         );
       }
-    });
-
-    void this.dbLogger.logAction('review.generateReviewSummaries', {
-      challengeId,
-      status: 'SUCCESS',
-      source: ReviewService.name,
-      details: {
-        submissionCount: summaries.length,
-        passingCount: summaries.filter((summary) => summary.isPassing).length,
-      },
     });
 
     return summaries;
