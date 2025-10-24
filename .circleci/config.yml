@@ -6,7 +6,7 @@ defaults: &defaults
 install_dependency: &install_dependency
   name: Installation of build and deployment dependencies.
   command: |
-    sudo rm -f /etc/apt/sources.list.d/github_git-lfs.list
+    # sudo rm -f /etc/apt/sources.list.d/github_git-lfs.list
     sudo apt update
     sudo apt install -y jq python3-pip
     pip3 install awscli --upgrade
