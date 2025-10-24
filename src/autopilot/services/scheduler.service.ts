@@ -37,7 +37,10 @@ import {
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
 import { PhaseChangeNotificationService } from './phase-change-notification.service';
-import { getNormalizedStringArray } from '../utils/config.utils';
+import {
+  getNormalizedStringArray,
+  isActiveStatus,
+} from '../utils/config.utils';
 import {
   getMemberReviewerConfigs,
   getReviewerConfigsForPhase,
@@ -1080,6 +1083,74 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         },
       );
     }
+  }
+
+  public async evaluateManualPhaseCompletion(
+    challenge: IChallenge,
+  ): Promise<void> {
+    if (!challenge) {
+      return;
+    }
+
+    if (!isActiveStatus(challenge.status)) {
+      return;
+    }
+
+    const phases = challenge.phases ?? [];
+    if (phases.length === 0) {
+      return;
+    }
+
+    const openPhase = phases.find((phase) => phase.isOpen);
+    if (openPhase) {
+      this.logger.debug?.(
+        `[MANUAL COMPLETION] Skipping challenge ${challenge.id}; phase ${openPhase.name} (${openPhase.id}) is still open.`,
+      );
+      return;
+    }
+
+    const incompletePhase = phases.find(
+      (phase) => !phase.actualEndDate && !phase.isOpen,
+    );
+    if (incompletePhase) {
+      this.logger.debug?.(
+        `[MANUAL COMPLETION] Skipping challenge ${challenge.id}; phase ${incompletePhase.name} (${incompletePhase.id}) has no actual end date.`,
+      );
+      return;
+    }
+
+    const completedPhases = phases
+      .filter((phase) => Boolean(phase.actualEndDate))
+      .sort((a, b) => {
+        const aTime = a.actualEndDate
+          ? new Date(a.actualEndDate).getTime()
+          : 0;
+        const bTime = b.actualEndDate
+          ? new Date(b.actualEndDate).getTime()
+          : 0;
+        return aTime - bTime;
+      });
+
+    const lastClosedPhase = completedPhases.at(-1);
+    if (!lastClosedPhase) {
+      return;
+    }
+
+    if (
+      this.finalizationAttempts.has(challenge.id) ||
+      this.finalizationRetryTimers.has(challenge.id)
+    ) {
+      this.logger.debug?.(
+        `[MANUAL COMPLETION] Challenge ${challenge.id} is already queued for finalization; skipping duplicate trigger.`,
+      );
+      return;
+    }
+
+    const phaseLabel = `${lastClosedPhase.name} (${lastClosedPhase.id})`;
+    this.logger.log(
+      `[MANUAL COMPLETION] Detected that all phases are closed for challenge ${challenge.id}. Last phase closed: ${phaseLabel}. Triggering finalization.`,
+    );
+    await this.attemptChallengeFinalization(challenge.id);
   }
 
   private async attemptChallengeFinalization(

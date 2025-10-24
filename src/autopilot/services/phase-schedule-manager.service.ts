@@ -382,6 +382,18 @@ export class PhaseScheduleManager {
           `[MANUAL PHASE DETECTION] No open phases requiring scorecards found for challenge ${challengeDetails.id}`,
         );
       }
+
+      try {
+        await this.schedulerService.evaluateManualPhaseCompletion(
+          challengeDetails,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[MANUAL COMPLETION] Failed to evaluate manual completion for challenge ${challengeDetails.id}: ${err.message}`,
+          err.stack,
+        );
+      }
     } catch (error) {
       const err = error as Error;
       this.logger.error(
