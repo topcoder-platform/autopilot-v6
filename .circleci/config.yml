@@ -9,7 +9,7 @@ install_dependency: &install_dependency
     sudo rm -f /etc/apt/sources.list.d/github_git-lfs.list
     sudo apt update
     sudo apt install -y jq python3-pip
-    sudo pip3 install awscli --upgrade
+    pip3 install awscli --upgrade
 install_deploysuite: &install_deploysuite
   name: Installation of install_deploysuite.
   command: |
