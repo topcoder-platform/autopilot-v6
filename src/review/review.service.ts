@@ -1384,7 +1384,7 @@ export class ReviewService {
         COALESCE(
           AVG(
             CASE
-              WHEN UPPER((sc."type")::text) = 'REVIEW'
+              WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
               THEN r."finalScore"
             END
           ),
@@ -1392,19 +1392,19 @@ export class ReviewService {
         ) AS "aggregateScore",
         MAX(
           CASE
-            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
             THEN r."scorecardId"
           END
         ) AS "scorecardId",
         MAX(
           CASE
-            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
             THEN sc."legacyId"
           END
         ) AS "scorecardLegacyId",
         MAX(
           CASE
-            WHEN UPPER((sc."type")::text) = 'REVIEW'
+            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
             THEN sc."minimumPassingScore"
           END
         ) AS "minimumPassingScore"
