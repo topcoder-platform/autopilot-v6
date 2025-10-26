@@ -20,7 +20,6 @@ import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
-  POST_MORTEM_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
@@ -29,6 +28,7 @@ import {
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
   getRoleNamesForPhase,
+  isPostMortemPhaseName,
 } from '../constants/review.constants';
 import { ResourcesService } from '../../resources/resources.service';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
@@ -961,7 +961,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 err.stack,
               );
             }
-          } else if (phaseName === POST_MORTEM_PHASE_NAME) {
+          } else if (isPostMortemPhaseName(phaseName)) {
             try {
               await this.handlePostMortemPhaseClosed(data);
               skipFinalization = true;
@@ -1357,7 +1357,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     let postMortemPhase =
-      challenge.phases?.find((p) => p.name === POST_MORTEM_PHASE_NAME) ?? null;
+      challenge.phases?.find((p) => isPostMortemPhaseName(p.name)) ?? null;
 
     if (!postMortemPhase) {
       try {
@@ -1883,7 +1883,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       const roleNames =
-        phaseName === POST_MORTEM_PHASE_NAME && this.postMortemRoles.length
+        isPostMortemPhaseName(phaseName) && this.postMortemRoles.length
           ? this.postMortemRoles
           : getRoleNamesForPhase(phaseName);
 

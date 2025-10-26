@@ -13,6 +13,8 @@ import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  POST_MORTEM_PHASE_NAMES,
+  isPostMortemPhaseName,
 } from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
@@ -859,8 +861,8 @@ export class ChallengeApiService {
           const submissionPhase = challenge.phases[submissionPhaseIndex];
 
           const futurePhases = challenge.phases.slice(submissionPhaseIndex + 1);
-          const postMortemPhases = futurePhases.filter(
-            (phase) => phase.name === 'Post-Mortem',
+          const postMortemPhases = futurePhases.filter((phase) =>
+            isPostMortemPhaseName(phase.name),
           );
           const existingPostMortem = postMortemPhases[0] ?? null;
 
@@ -871,7 +873,7 @@ export class ChallengeApiService {
           }
 
           const phasesToDelete = futurePhases
-            .filter((phase) => phase.name !== 'Post-Mortem')
+            .filter((phase) => !isPostMortemPhaseName(phase.name))
             .map((phase) => phase.id);
 
           if (phasesToDelete.length) {
@@ -906,8 +908,8 @@ export class ChallengeApiService {
             return { postMortemPhaseId: existingPostMortem.id };
           }
 
-          const postMortemPhaseType = await tx.phase.findUnique({
-            where: { name: 'Post-Mortem' },
+          const postMortemPhaseType = await tx.phase.findFirst({
+            where: { name: { in: Array.from(POST_MORTEM_PHASE_NAMES) } },
           });
 
           if (!postMortemPhaseType) {
@@ -1063,15 +1065,15 @@ export class ChallengeApiService {
         }
 
         // If a Post-Mortem already exists, return it idempotently.
-        const existing = challenge.phases.find(
-          (phase) => phase.name === 'Post-Mortem',
+        const existing = challenge.phases.find((phase) =>
+          isPostMortemPhaseName(phase.name),
         );
         if (existing) {
           return { createdPhaseId: existing.id };
         }
 
-        const postMortemPhaseType = await tx.phase.findUnique({
-          where: { name: 'Post-Mortem' },
+        const postMortemPhaseType = await tx.phase.findFirst({
+          where: { name: { in: Array.from(POST_MORTEM_PHASE_NAMES) } },
         });
 
         if (!postMortemPhaseType) {

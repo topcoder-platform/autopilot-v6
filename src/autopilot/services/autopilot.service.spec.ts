@@ -7,7 +7,10 @@ import type {
   ReviewCompletedPayload,
   SubmissionAggregatePayload,
 } from '../interfaces/autopilot.interface';
-import { POST_MORTEM_PHASE_NAME } from '../constants/review.constants';
+import {
+  POST_MORTEM_PHASE_NAME,
+  POST_MORTEM_PHASE_ALTERNATE_NAME,
+} from '../constants/review.constants';
 import type { PhaseScheduleManager } from './phase-schedule-manager.service';
 import type { ResourceEventHandler } from './resource-event-handler.service';
 import type { First2FinishService } from './first2finish.service';
@@ -232,6 +235,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           baseCoefficient: null,
           incrementalCoefficient: null,
           type: null,
+          shouldOpenOpportunity: false,
           aiWorkflowId: null,
         },
       ],
@@ -400,10 +404,10 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   });
 
   describe('handleReviewCompleted (post-mortem)', () => {
-    const buildPhase = (): IPhase => ({
+    const buildPhase = (name = POST_MORTEM_PHASE_NAME): IPhase => ({
       id: 'phase-1',
       phaseId: 'template-1',
-      name: POST_MORTEM_PHASE_NAME,
+      name,
       description: null,
       isOpen: true,
       duration: 0,
@@ -515,6 +519,29 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           challengeId: 'challenge-1',
           phaseId: 'phase-1',
           phaseTypeName: POST_MORTEM_PHASE_NAME,
+          state: 'END',
+        }),
+      );
+    });
+
+    it('closes the phase when the Post-mortem alias is used', async () => {
+      const postMortemAliasPhase = buildPhase(
+        POST_MORTEM_PHASE_ALTERNATE_NAME,
+      );
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildChallenge(postMortemAliasPhase),
+      );
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const advancePhaseMock = schedulerService.advancePhase as jest.Mock;
+
+      expect(advancePhaseMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: 'phase-1',
+          phaseTypeName: POST_MORTEM_PHASE_ALTERNATE_NAME,
           state: 'END',
         }),
       );

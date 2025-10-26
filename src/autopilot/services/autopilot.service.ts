@@ -24,7 +24,7 @@ import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
-  POST_MORTEM_PHASE_NAME,
+  isPostMortemPhaseName,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
@@ -257,7 +257,7 @@ export class AutopilotService {
         return;
       }
 
-      if (phase.name === POST_MORTEM_PHASE_NAME) {
+      if (isPostMortemPhaseName(phase.name)) {
         const pendingPostMortemReviews =
           await this.reviewService.getPendingReviewCount(phase.id, challengeId);
 

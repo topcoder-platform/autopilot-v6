@@ -13,7 +13,7 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
-  POST_MORTEM_PHASE_NAME,
+  isPostMortemPhaseName,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
@@ -87,7 +87,7 @@ export class PhaseReviewService {
     }
 
     // Special handling for Post-Mortem: create challenge-level pending reviews (no submissions)
-    if (phase.name === POST_MORTEM_PHASE_NAME) {
+    if (isPostMortemPhaseName(phase.name)) {
       // Determine scorecard
       let scorecardId: string | null = null;
       if (isTopgearTaskChallenge(challenge.type)) {
