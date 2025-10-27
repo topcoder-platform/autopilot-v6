@@ -1429,6 +1429,10 @@ export class ReviewService {
           ON sc."id" = rs."scorecardId"
         WHERE s."challengeId" = ${challengeId}
           AND rs."isFinal" = true
+          AND (
+            s."type" IS NULL
+            OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+          )
       `);
 
     if (!rows.length) {
@@ -1503,6 +1507,10 @@ export class ReviewService {
       LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
         ON sc."id" = r."scorecardId"
       WHERE s."challengeId" = ${challengeId}
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
       GROUP BY s."id", s."legacySubmissionId", s."memberId", s."submittedDate"
     `;
 
@@ -1543,6 +1551,10 @@ export class ReviewService {
             SELECT "id"
             FROM ${ReviewService.SUBMISSION_TABLE}
             WHERE "challengeId" = ${challengeId}
+              AND (
+                "type" IS NULL
+                OR UPPER(("type")::text) = 'CONTEST_SUBMISSION'
+              )
           )
         `,
       );
