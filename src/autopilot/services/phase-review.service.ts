@@ -25,6 +25,7 @@ import {
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
+import { ReviewSummationApiService } from './review-summation-api.service';
 
 @Injectable()
 export class PhaseReviewService {
@@ -36,6 +37,7 @@ export class PhaseReviewService {
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
     private readonly challengeCompletionService: ChallengeCompletionService,
+    private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
 
@@ -303,6 +305,7 @@ export class PhaseReviewService {
     let submissionIds: string[] = [];
     if (isApprovalPhase) {
       try {
+        await this.reviewSummationApiService.finalizeSummations(challengeId);
         const summaries =
           await this.reviewService.generateReviewSummaries(challengeId);
         const passingSummaries = summaries.filter(

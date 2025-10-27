@@ -17,6 +17,7 @@ import { MembersModule } from '../members/members.module';
 import { Auth0Module } from '../auth/auth0.module';
 import { PhaseChangeNotificationService } from './services/phase-change-notification.service';
 import { FinanceModule } from '../finance/finance.module';
+import { ReviewSummationApiService } from './services/review-summation-api.service';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { FinanceModule } from '../finance/finance.module';
     ReviewAssignmentService,
     ChallengeCompletionService,
     PhaseChangeNotificationService,
+    ReviewSummationApiService,
   ],
   exports: [AutopilotService, SchedulerService],
 })

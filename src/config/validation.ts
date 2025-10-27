@@ -63,6 +63,11 @@ export const validationSchema = Joi.object({
     .integer()
     .positive()
     .default(5 * 60 * 1000),
+  REVIEW_SUMMATION_API_URL: Joi.string().uri().optional(),
+  REVIEW_SUMMATION_API_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .default(15000),
   POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   TOPGEAR_POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   POST_MORTEM_DURATION_HOURS: Joi.number().integer().positive().default(72),

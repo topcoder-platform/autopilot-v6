@@ -10,6 +10,7 @@ import {
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { FinanceApiService } from '../../finance/finance-api.service';
+import { ReviewSummationApiService } from './review-summation-api.service';
 import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 
 @Injectable()
@@ -21,6 +22,7 @@ export class ChallengeCompletionService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly financeApiService: FinanceApiService,
+    private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -276,6 +278,8 @@ export class ChallengeCompletionService {
       );
       return true;
     }
+
+    await this.reviewSummationApiService.finalizeSummations(challengeId);
 
     const summaries =
       await this.reviewService.generateReviewSummaries(challengeId);
