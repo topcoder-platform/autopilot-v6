@@ -41,6 +41,28 @@ export class ReviewSummationApiService {
     return `${normalizedBase}${normalizedPath}`;
   }
 
+  private sanitizeHeaders(
+    headers: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined {
+    if (!headers) {
+      return undefined;
+    }
+
+    return Object.entries(headers).reduce<Record<string, unknown>>(
+      (sanitized, [key, value]) => {
+        const lowerKey = key.toLowerCase();
+        if (lowerKey === 'authorization' || lowerKey === 'set-cookie') {
+          sanitized[key] = '[redacted]';
+        } else {
+          sanitized[key] = value;
+        }
+
+        return sanitized;
+      },
+      {},
+    );
+  }
+
   async finalizeSummations(challengeId: string): Promise<boolean> {
     const url = this.buildUrl(
       `/reviewSummations/challenges/${challengeId}/final`,
@@ -59,20 +81,49 @@ export class ReviewSummationApiService {
     }
 
     let token: string | undefined;
+    const requestLog: {
+      method: string;
+      url: string;
+      body: null;
+      headers: Record<string, unknown>;
+      timeoutMs: number;
+    } = {
+      method: 'POST',
+      url,
+      body: null,
+      headers: {
+        Authorization: '[not available]',
+        'Content-Type': 'application/json',
+      },
+      timeoutMs: this.timeoutMs,
+    };
 
     try {
       token = await this.auth0Service.getAccessToken();
+      if (token) {
+        requestLog.headers.Authorization = 'Bearer [redacted]';
+      }
+
+      const axiosHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        axiosHeaders.Authorization = `Bearer ${token}`;
+      }
+
+      const axiosConfig = {
+        headers: axiosHeaders,
+        timeout: this.timeoutMs,
+      };
+
       const response = await firstValueFrom(
-        this.httpService.post(url, undefined, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: this.timeoutMs,
-        }),
+        this.httpService.post(url, undefined, axiosConfig),
       );
 
       const status = response.status;
+      const sanitizedResponseHeaders = this.sanitizeHeaders(
+        response.headers as Record<string, unknown> | undefined,
+      );
       await this.dbLogger.logAction('reviewSummation.finalize', {
         challengeId,
         status: 'SUCCESS',
@@ -80,6 +131,12 @@ export class ReviewSummationApiService {
         details: {
           url,
           status,
+          request: requestLog,
+          response: {
+            status,
+            data: response.data ?? null,
+            headers: sanitizedResponseHeaders,
+          },
         },
       });
 
@@ -92,6 +149,9 @@ export class ReviewSummationApiService {
       const message = err?.message || 'Unknown error';
       const status = err?.response?.status;
       const data = err?.response?.data;
+      const sanitizedResponseHeaders = this.sanitizeHeaders(
+        err?.response?.headers,
+      );
 
       this.logger.error(
         `Failed to finalize review summations for challenge ${challengeId}: ${message}`,
@@ -104,9 +164,11 @@ export class ReviewSummationApiService {
         source: ReviewSummationApiService.name,
         details: {
           url,
+          request: requestLog,
           error: message,
           status,
           response: data,
+          responseHeaders: sanitizedResponseHeaders,
         },
       });
 

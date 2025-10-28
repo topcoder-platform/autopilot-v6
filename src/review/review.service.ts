@@ -41,15 +41,17 @@ interface AppealCountRecord {
   count: number | string;
 }
 
-interface SubmissionAggregationRecord {
+interface ReviewAggregationRow {
   submissionId: string;
   legacySubmissionId: string | null;
   memberId: string | null;
   submittedDate: Date | null;
-  aggregateScore: number | string | null;
+  finalScore: number | string | null;
   scorecardId: string | null;
   scorecardLegacyId: string | null;
   minimumPassingScore: number | string | null;
+  reviewTypeName: string | null;
+  scorecardType: string | null;
 }
 
 interface ReviewSummationSummaryRecord {
@@ -82,10 +84,29 @@ export class ReviewService {
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
+  private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
   private static readonly APPEAL_TABLE = Prisma.sql`"appeal"`;
   private static readonly APPEAL_RESPONSE_TABLE = Prisma.sql`"appealResponse"`;
   private static readonly REVIEW_ITEM_COMMENT_TABLE = Prisma.sql`"reviewItemComment"`;
   private static readonly REVIEW_ITEM_TABLE = Prisma.sql`"reviewItem"`;
+  private static readonly FINAL_REVIEW_TYPE_NAMES = new Set<string>([
+    'REVIEW',
+    'REGULAR REVIEW',
+    'ITERATIVE REVIEW',
+    'PEER REVIEW',
+    'POST-MORTEM REVIEW',
+    'COMMITTEE REVIEW',
+    'FINAL REVIEW',
+  ]);
+  private static readonly EXCLUDED_REVIEW_TYPE_NAMES = new Set<string>([
+    'SCREENING',
+    'CHECKPOINT SCREENING',
+  ]);
+  private static readonly REVIEW_SCORECARD_TYPES = new Set<string>([
+    'REVIEW',
+    'REGULAR_REVIEW',
+    'ITERATIVE_REVIEW',
+  ]);
 
   constructor(
     private readonly prisma: ReviewPrismaService,
@@ -103,6 +124,56 @@ export class ReviewService {
       typeof value === 'number' ? value : Number(value);
 
     return Number.isFinite(numericValue) ? numericValue : 50;
+  }
+
+  private static normalizeTypeName(
+    value: string | null | undefined,
+  ): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    return trimmed.toUpperCase();
+  }
+
+  private static isFinalReviewType(value: string | null | undefined): boolean {
+    const normalized = ReviewService.normalizeTypeName(value);
+    if (!normalized) {
+      return false;
+    }
+
+    if (ReviewService.EXCLUDED_REVIEW_TYPE_NAMES.has(normalized)) {
+      return false;
+    }
+
+    return ReviewService.FINAL_REVIEW_TYPE_NAMES.has(normalized);
+  }
+
+  private static isScreeningReviewType(
+    value: string | null | undefined,
+  ): boolean {
+    const normalized = ReviewService.normalizeTypeName(value);
+    if (!normalized) {
+      return false;
+    }
+
+    return ReviewService.EXCLUDED_REVIEW_TYPE_NAMES.has(normalized);
+  }
+
+  private static isReviewScorecardType(
+    value: string | null | undefined,
+  ): boolean {
+    const normalized = ReviewService.normalizeTypeName(value);
+    if (!normalized) {
+      return false;
+    }
+
+    return ReviewService.REVIEW_SCORECARD_TYPES.has(normalized);
   }
 
   private buildPendingReviewLockId(
@@ -1489,39 +1560,18 @@ export class ReviewService {
   private async fetchSummariesFromReviews(
     challengeId: string,
   ): Promise<SubmissionSummary[]> {
-    const aggregationQuery = Prisma.sql`
+    const baseQuery = Prisma.sql`
       SELECT
         s."id" AS "submissionId",
         s."legacySubmissionId" AS "legacySubmissionId",
         s."memberId" AS "memberId",
         s."submittedDate" AS "submittedDate",
-        COALESCE(
-          AVG(
-            CASE
-              WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
-              THEN r."finalScore"
-            END
-          ),
-          0
-        ) AS "aggregateScore",
-        MAX(
-          CASE
-            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
-            THEN r."scorecardId"
-          END
-        ) AS "scorecardId",
-        MAX(
-          CASE
-            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
-            THEN sc."legacyId"
-          END
-        ) AS "scorecardLegacyId",
-        MAX(
-          CASE
-            WHEN UPPER((sc."type")::text) IN ('REVIEW', 'REGULAR_REVIEW', 'ITERATIVE_REVIEW')
-            THEN sc."minimumPassingScore"
-          END
-        ) AS "minimumPassingScore"
+        r."finalScore" AS "finalScore",
+        r."scorecardId" AS "scorecardId",
+        sc."legacyId" AS "scorecardLegacyId",
+        sc."minimumPassingScore" AS "minimumPassingScore",
+        sc."type" AS "scorecardType",
+        rt."name" AS "reviewTypeName"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       LEFT JOIN ${ReviewService.REVIEW_TABLE} r
         ON r."submissionId" = s."id"
@@ -1529,35 +1579,160 @@ export class ReviewService {
         AND r."committed" = true
       LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
         ON sc."id" = r."scorecardId"
+      LEFT JOIN ${ReviewService.REVIEW_TYPE_TABLE} rt
+        ON rt."id" = r."typeId"
       WHERE s."challengeId" = ${challengeId}
         AND (
           s."type" IS NULL
           OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
         )
-      GROUP BY s."id", s."legacySubmissionId", s."memberId", s."submittedDate"
     `;
 
-    const aggregationRows =
-      await this.prisma.$queryRaw<SubmissionAggregationRecord[]>(
-        aggregationQuery,
-      );
-    return aggregationRows.map((row) => {
-      const aggregateScore = Number(row.aggregateScore ?? 0);
-      const passingScore = this.resolvePassingScore(row.minimumPassingScore);
-      const isPassing = aggregateScore >= passingScore;
+    const rows = await this.prisma.$queryRaw<ReviewAggregationRow[]>(baseQuery);
+    if (!rows.length) {
+      return [];
+    }
 
-      return {
-        submissionId: row.submissionId,
-        legacySubmissionId: row.legacySubmissionId ?? null,
-        memberId: row.memberId ?? null,
-        submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+    interface SubmissionAccumulator {
+      submissionId: string;
+      legacySubmissionId: string | null;
+      memberId: string | null;
+      submittedDate: Date | null;
+      primarySum: number;
+      primaryCount: number;
+      primaryScorecardId: string | null;
+      primaryScorecardLegacyId: string | null;
+      primaryPassingScore: number | null;
+      fallbackSum: number;
+      fallbackCount: number;
+      fallbackScorecardId: string | null;
+      fallbackScorecardLegacyId: string | null;
+      fallbackPassingScore: number | null;
+    }
+
+    const summariesBySubmission = new Map<string, SubmissionAccumulator>();
+
+    for (const row of rows) {
+      const submissionId = row.submissionId;
+      if (!submissionId) {
+        continue;
+      }
+
+      let accumulator = summariesBySubmission.get(submissionId);
+      if (!accumulator) {
+        accumulator = {
+          submissionId,
+          legacySubmissionId: row.legacySubmissionId ?? null,
+          memberId: row.memberId ?? null,
+          submittedDate: row.submittedDate
+            ? new Date(row.submittedDate)
+            : null,
+          primarySum: 0,
+          primaryCount: 0,
+          primaryScorecardId: null,
+          primaryScorecardLegacyId: null,
+          primaryPassingScore: null,
+          fallbackSum: 0,
+          fallbackCount: 0,
+          fallbackScorecardId: null,
+          fallbackScorecardLegacyId: null,
+          fallbackPassingScore: null,
+        };
+        summariesBySubmission.set(submissionId, accumulator);
+      } else {
+        if (!accumulator.legacySubmissionId && row.legacySubmissionId) {
+          accumulator.legacySubmissionId = row.legacySubmissionId;
+        }
+        if (!accumulator.memberId && row.memberId) {
+          accumulator.memberId = row.memberId;
+        }
+        if (!accumulator.submittedDate && row.submittedDate) {
+          accumulator.submittedDate = new Date(row.submittedDate);
+        }
+      }
+
+      const numericScore = Number(row.finalScore ?? Number.NaN);
+      const hasScore = Number.isFinite(numericScore);
+      const reviewTypeName = row.reviewTypeName ?? null;
+      const scorecardType = row.scorecardType ?? null;
+
+      if (
+        hasScore &&
+        ReviewService.isFinalReviewType(reviewTypeName)
+      ) {
+        accumulator.primarySum += numericScore;
+        accumulator.primaryCount += 1;
+        if (!accumulator.primaryScorecardId && row.scorecardId) {
+          accumulator.primaryScorecardId = row.scorecardId;
+        }
+        if (!accumulator.primaryScorecardLegacyId && row.scorecardLegacyId) {
+          accumulator.primaryScorecardLegacyId = row.scorecardLegacyId;
+        }
+        if (accumulator.primaryPassingScore === null) {
+          accumulator.primaryPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      } else if (
+        hasScore &&
+        ReviewService.isReviewScorecardType(scorecardType) &&
+        !ReviewService.isScreeningReviewType(reviewTypeName)
+      ) {
+        accumulator.fallbackSum += numericScore;
+        accumulator.fallbackCount += 1;
+        if (!accumulator.fallbackScorecardId && row.scorecardId) {
+          accumulator.fallbackScorecardId = row.scorecardId;
+        }
+        if (
+          !accumulator.fallbackScorecardLegacyId &&
+          row.scorecardLegacyId
+        ) {
+          accumulator.fallbackScorecardLegacyId = row.scorecardLegacyId;
+        }
+        if (accumulator.fallbackPassingScore === null) {
+          accumulator.fallbackPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      }
+    }
+
+    const summaries: SubmissionSummary[] = [];
+
+    for (const accumulator of summariesBySubmission.values()) {
+      let total = accumulator.primarySum;
+      let count = accumulator.primaryCount;
+      let scorecardId = accumulator.primaryScorecardId;
+      let scorecardLegacyId = accumulator.primaryScorecardLegacyId;
+      let passingScore = accumulator.primaryPassingScore;
+
+      if (count === 0 && accumulator.fallbackCount > 0) {
+        total = accumulator.fallbackSum;
+        count = accumulator.fallbackCount;
+        scorecardId = scorecardId ?? accumulator.fallbackScorecardId;
+        scorecardLegacyId =
+          scorecardLegacyId ?? accumulator.fallbackScorecardLegacyId;
+        passingScore = passingScore ?? accumulator.fallbackPassingScore;
+      }
+
+      const resolvedPassingScore =
+        passingScore ?? this.resolvePassingScore(null);
+      const aggregateScore = count > 0 ? total / count : 0;
+
+      summaries.push({
+        submissionId: accumulator.submissionId,
+        legacySubmissionId: accumulator.legacySubmissionId ?? null,
+        memberId: accumulator.memberId ?? null,
+        submittedDate: accumulator.submittedDate ?? null,
         aggregateScore,
-        scorecardId: row.scorecardId ?? null,
-        scorecardLegacyId: row.scorecardLegacyId ?? null,
-        passingScore,
-        isPassing,
-      };
-    });
+        scorecardId: scorecardId ?? null,
+        scorecardLegacyId: scorecardLegacyId ?? null,
+        passingScore: resolvedPassingScore,
+        isPassing: aggregateScore >= resolvedPassingScore,
+      });
+    }
+
+    return summaries;
   }
 
   private async replaceReviewSummations(
