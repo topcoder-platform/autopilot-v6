@@ -1571,7 +1571,7 @@ export class ReviewService {
         sc."legacyId" AS "scorecardLegacyId",
         sc."minimumPassingScore" AS "minimumPassingScore",
         sc."type" AS "scorecardType",
-        rt."name" AS "reviewTypeName"
+        COALESCE(rt."name", r."typeId") AS "reviewTypeName"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       LEFT JOIN ${ReviewService.REVIEW_TABLE} r
         ON r."submissionId" = s."id"
