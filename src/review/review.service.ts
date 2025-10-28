@@ -1389,9 +1389,31 @@ export class ReviewService {
 
     let summaries =
       await this.getSummariesFromReviewSummations(challengeId);
+    let usedRebuild = false;
 
     if (!summaries.length) {
       summaries = await this.rebuildSummariesFromReviews(challengeId);
+      usedRebuild = summaries.length > 0;
+    } else if (summaries.every((summary) => !summary.isPassing)) {
+      const recalculatedSummaries =
+        await this.fetchSummariesFromReviews(challengeId);
+      const hasRecalculatedSummaries = recalculatedSummaries.length > 0;
+      const recalculatedHasPassing = recalculatedSummaries.some(
+        (summary) => summary.isPassing,
+      );
+
+      const summariesDiffer =
+        hasRecalculatedSummaries &&
+        !this.areSummariesEquivalent(summaries, recalculatedSummaries);
+
+      if (hasRecalculatedSummaries && (recalculatedHasPassing || summariesDiffer)) {
+        await this.replaceReviewSummations(
+          challengeId,
+          recalculatedSummaries,
+        );
+        summaries = recalculatedSummaries;
+        usedRebuild = true;
+      }
     }
 
     void this.dbLogger.logAction('review.generateReviewSummaries', {
@@ -1401,6 +1423,7 @@ export class ReviewService {
       details: {
         submissionCount: summaries.length,
         passingCount: summaries.filter((summary) => summary.isPassing).length,
+        rebuiltFromReviews: usedRebuild,
       },
     });
 
@@ -1463,7 +1486,7 @@ export class ReviewService {
     });
   }
 
-  private async rebuildSummariesFromReviews(
+  private async fetchSummariesFromReviews(
     challengeId: string,
   ): Promise<SubmissionSummary[]> {
     const aggregationQuery = Prisma.sql`
@@ -1518,8 +1541,7 @@ export class ReviewService {
       await this.prisma.$queryRaw<SubmissionAggregationRecord[]>(
         aggregationQuery,
       );
-
-    const summaries: SubmissionSummary[] = aggregationRows.map((row) => {
+    return aggregationRows.map((row) => {
       const aggregateScore = Number(row.aggregateScore ?? 0);
       const passingScore = this.resolvePassingScore(row.minimumPassingScore);
       const isPassing = aggregateScore >= passingScore;
@@ -1536,13 +1558,13 @@ export class ReviewService {
         isPassing,
       };
     });
+  }
 
-    if (!summaries.length) {
-      return summaries;
-    }
-
+  private async replaceReviewSummations(
+    challengeId: string,
+    summaries: SubmissionSummary[],
+  ): Promise<void> {
     const now = new Date();
-
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw(
         Prisma.sql`
@@ -1594,6 +1616,17 @@ export class ReviewService {
         );
       }
     });
+  }
+
+  private async rebuildSummariesFromReviews(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
+    const summaries = await this.fetchSummariesFromReviews(challengeId);
+    if (!summaries.length) {
+      return summaries;
+    }
+
+    await this.replaceReviewSummations(challengeId, summaries);
 
     return summaries;
   }
@@ -1832,5 +1865,56 @@ export class ReviewService {
       });
       throw err;
     }
+  }
+
+  private areSummariesEquivalent(
+    current: SubmissionSummary[],
+    next: SubmissionSummary[],
+  ): boolean {
+    if (current.length !== next.length) {
+      return false;
+    }
+
+    const normalize = (summary: SubmissionSummary) => ({
+      submissionId: summary.submissionId,
+      legacySubmissionId: summary.legacySubmissionId ?? null,
+      memberId: summary.memberId ?? null,
+      submittedDate: summary.submittedDate
+        ? summary.submittedDate.getTime()
+        : null,
+      aggregateScore: summary.aggregateScore,
+      scorecardId: summary.scorecardId ?? null,
+      scorecardLegacyId: summary.scorecardLegacyId ?? null,
+      passingScore: summary.passingScore,
+      isPassing: summary.isPassing,
+    });
+
+    const sortBySubmissionId = (
+      a: ReturnType<typeof normalize>,
+      b: ReturnType<typeof normalize>,
+    ) => {
+      if (a.submissionId === b.submissionId) {
+        return 0;
+      }
+      return a.submissionId > b.submissionId ? 1 : -1;
+    };
+
+    const normalizedCurrent = current.map(normalize).sort(sortBySubmissionId);
+    const normalizedNext = next.map(normalize).sort(sortBySubmissionId);
+
+    return normalizedCurrent.every((entry, index) => {
+      const other = normalizedNext[index];
+      return (
+        entry.submissionId === other.submissionId &&
+        entry.legacySubmissionId === other.legacySubmissionId &&
+        entry.memberId === other.memberId &&
+        entry.submittedDate === other.submittedDate &&
+        entry.aggregateScore === other.aggregateScore &&
+        entry.scorecardId === other.scorecardId &&
+        entry.scorecardLegacyId === other.scorecardLegacyId &&
+        entry.passingScore === other.passingScore &&
+        entry.isPassing === other.isPassing
+      );
+    });
   }
 }
