@@ -294,20 +294,24 @@ export class AutopilotService {
         return;
       }
 
-      // Special handling: Approval phase pass/fail adds additional Approval if failed
+      // Approval: compare against minimum passing score and create a follow-up Approval phase if it fails
       if (APPROVAL_PHASE_NAMES.has(phase.name)) {
-        const passingScore = await this.reviewService.getScorecardPassingScore(
-          review.scorecardId,
-        );
-        const rawScore =
-          typeof review.score === 'number'
-            ? review.score
-            : Number(review.score ?? payload.initialScore ?? 0);
-        const finalScore = Number.isFinite(rawScore)
-          ? Number(rawScore)
-          : Number(payload.initialScore ?? 0);
+        const scorecardId = review.scorecardId ?? payload.scorecardId ?? null;
+        const passingScore =
+          await this.reviewService.getScorecardPassingScore(scorecardId);
 
-        // Close current approval phase
+        const normalizedScore = (() => {
+          if (typeof review.score === 'number') {
+            return review.score;
+          }
+          const numeric = Number(review.score ?? payload.initialScore ?? 0);
+          if (Number.isFinite(numeric)) {
+            return numeric;
+          }
+          const fallback = Number(payload.initialScore ?? 0);
+          return Number.isFinite(fallback) ? fallback : 0;
+        })();
+
         await this.schedulerService.advancePhase({
           projectId: challenge.projectId,
           challengeId: challenge.id,
@@ -318,37 +322,44 @@ export class AutopilotService {
           projectStatus: challenge.status,
         });
 
-        if (finalScore >= passingScore) {
+        if (normalizedScore >= passingScore) {
           this.logger.log(
-            `Approval review passed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
+            `Approval review passed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}).`,
           );
-        } else {
-          this.logger.log(
-            `Approval review failed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}). Creating another Approval phase.`,
-          );
-          try {
-            const nextApproval =
-              await this.challengeApiService.createIterativeReviewPhase(
-                challenge.id,
-                phase.id,
-                phase.phaseId!,
-                phase.name,
-                phase.description ?? null,
-                Math.max(phase.duration || 0, 1),
-              );
+          return;
+        }
 
-            // Create pending reviews for the newly opened Approval
-            await this.phaseReviewService.handlePhaseOpened(
-              challenge.id,
-              nextApproval.id,
-            );
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to create next Approval phase for challenge ${challenge.id}: ${err.message}`,
-              err.stack,
-            );
-          }
+        this.logger.log(
+          `Approval review failed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}). Creating another Approval phase.`,
+        );
+
+        if (!phase.phaseId) {
+          this.logger.error(
+            `Cannot create follow-up Approval phase for challenge ${challenge.id}; missing phase template ID on phase ${phase.id}.`,
+          );
+          return;
+        }
+
+        try {
+          const nextApproval = await this.challengeApiService.createApprovalPhase(
+            challenge.id,
+            phase.id,
+            phase.phaseId,
+            phase.name,
+            phase.description ?? null,
+            Math.max(phase.duration || 0, 1),
+          );
+
+          await this.phaseReviewService.handlePhaseOpened(
+            challenge.id,
+            nextApproval.id,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to create follow-up Approval phase for challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
         }
         return;
       }

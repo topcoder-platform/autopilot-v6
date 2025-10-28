@@ -106,6 +106,8 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getChallengeById: jest.fn(),
       advancePhase: jest.fn(),
       getPhaseTypeName: jest.fn(),
+      createIterativeReviewPhase: jest.fn(),
+      createApprovalPhase: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
     reviewService = {
@@ -399,6 +401,171 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           challengeId: 'challenge-1',
           phaseId: reviewPhase.id,
         }),
+      );
+    });
+  });
+
+  describe('handleReviewCompleted (approval phase)', () => {
+    const buildApprovalPhase = (): IPhase => ({
+      id: 'phase-approval',
+      phaseId: 'template-approval',
+      name: 'Approval',
+      description: 'Approval Phase',
+      isOpen: true,
+      duration: 7200,
+      scheduledStartDate: new Date().toISOString(),
+      scheduledEndDate: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+      actualStartDate: new Date().toISOString(),
+      actualEndDate: null,
+      predecessor: null,
+      constraints: [],
+    });
+
+    const buildChallenge = (phase: IPhase): IChallenge => ({
+      id: 'challenge-approval',
+      name: 'Approval Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 999,
+      typeId: 'type-approval',
+      trackId: 'track-approval',
+      timelineTemplateId: 'timeline-approval',
+      currentPhaseNames: [phase.name],
+      tags: [],
+      groups: [],
+      submissionStartDate: new Date().toISOString(),
+      submissionEndDate: new Date().toISOString(),
+      registrationStartDate: new Date().toISOString(),
+      registrationEndDate: new Date().toISOString(),
+      startDate: new Date().toISOString(),
+      endDate: null,
+      legacyId: null,
+      status: 'ACTIVE',
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: {},
+      phases: [phase],
+      reviewers: [],
+      winners: [],
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: 'DEVELOP',
+      type: 'Standard',
+      legacy: {},
+      task: {},
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      overview: {},
+      numOfSubmissions: 1,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+    });
+
+    const buildPayload = (
+      overrides: Partial<ReviewCompletedPayload> = {},
+    ): ReviewCompletedPayload => ({
+      challengeId: 'challenge-approval',
+      reviewId: 'review-approval',
+      submissionId: 'submission-approval',
+      phaseId: 'phase-approval',
+      scorecardId: 'scorecard-approval',
+      reviewerResourceId: 'resource-approval',
+      reviewerHandle: 'approver',
+      reviewerMemberId: '123',
+      submitterHandle: 'submitter',
+      submitterMemberId: '456',
+      completedAt: new Date().toISOString(),
+      initialScore: 92,
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      const approvalPhase = buildApprovalPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildChallenge(approvalPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-approval',
+        phaseId: approvalPhase.id,
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 0,
+        status: 'COMPLETED',
+      });
+    });
+
+    it('closes the approval phase without creating a follow-up when the score meets the minimum', async () => {
+      reviewService.getReviewById.mockResolvedValueOnce({
+        id: 'review-approval',
+        phaseId: 'phase-approval',
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 95,
+        status: 'COMPLETED',
+      });
+      reviewService.getScorecardPassingScore.mockResolvedValueOnce(75);
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-approval',
+          phaseId: 'phase-approval',
+          state: 'END',
+        }),
+      );
+      expect(challengeApiService.createApprovalPhase).not.toHaveBeenCalled();
+      expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
+    });
+
+    it('creates a follow-up approval phase when the score is below the minimum', async () => {
+      reviewService.getScorecardPassingScore.mockResolvedValueOnce(90);
+      reviewService.getReviewById.mockResolvedValueOnce({
+        id: 'review-approval',
+        phaseId: 'phase-approval',
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 72,
+        status: 'COMPLETED',
+      });
+
+      const followUpPhase: IPhase = {
+        ...buildApprovalPhase(),
+        id: 'phase-approval-next',
+        isOpen: true,
+      };
+      challengeApiService.createApprovalPhase.mockResolvedValueOnce(
+        followUpPhase,
+      );
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-approval',
+          phaseId: 'phase-approval',
+          state: 'END',
+        }),
+      );
+      expect(challengeApiService.createApprovalPhase).toHaveBeenCalledWith(
+        'challenge-approval',
+        'phase-approval',
+        'template-approval',
+        'Approval',
+        'Approval Phase',
+        expect.any(Number),
+      );
+      expect(phaseReviewService.handlePhaseOpened).toHaveBeenCalledWith(
+        'challenge-approval',
+        'phase-approval-next',
       );
     });
   });
