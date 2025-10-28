@@ -63,7 +63,7 @@ export const validationSchema = Joi.object({
     .integer()
     .positive()
     .default(5 * 60 * 1000),
-  REVIEW_SUMMATION_API_URL: Joi.string().uri().optional(),
+  REVIEW_SUMMATION_API_URL: Joi.string(),
   REVIEW_SUMMATION_API_TIMEOUT_MS: Joi.number()
     .integer()
     .positive()
