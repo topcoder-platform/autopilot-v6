@@ -18,7 +18,10 @@ import {
   TopgearSubmissionPayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
-import { IPhase } from '../../challenge/interfaces/challenge.interface';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 import {
   DEFAULT_APPEALS_PHASE_NAMES,
@@ -28,12 +31,15 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  PHASE_ROLE_MAP,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
+import { ResourcesService } from '../../resources/resources.service';
 import {
   getNormalizedStringArray,
   isActiveStatus,
 } from '../utils/config.utils';
+import { selectScorecardId } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 
 @Injectable()
@@ -50,6 +56,7 @@ export class AutopilotService {
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
+    private readonly resourcesService: ResourcesService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly configService: ConfigService,
   ) {
@@ -350,6 +357,13 @@ export class AutopilotService {
             Math.max(phase.duration || 0, 1),
           );
 
+          await this.createFollowUpApprovalReviews(
+            challenge,
+            nextApproval,
+            review,
+            payload,
+          );
+
           await this.phaseReviewService.handlePhaseOpened(
             challenge.id,
             nextApproval.id,
@@ -400,6 +414,118 @@ export class AutopilotService {
       this.logger.error(
         `Failed to handle review completion for challenge ${challengeId}: ${err.message}`,
         err.stack,
+      );
+    }
+  }
+
+  private async createFollowUpApprovalReviews(
+    challenge: IChallenge,
+    nextPhase: IPhase,
+    review: {
+      submissionId: string | null;
+      scorecardId: string | null;
+      resourceId: string;
+    },
+    payload: ReviewCompletedPayload,
+  ): Promise<void> {
+    const submissionId = review.submissionId ?? payload.submissionId ?? null;
+
+    if (!submissionId) {
+      this.logger.warn(
+        `Unable to assign follow-up approval review for challenge ${challenge.id}; submissionId missing.`,
+      );
+      return;
+    }
+
+    let scorecardId =
+      review.scorecardId ??
+      payload.scorecardId ??
+      selectScorecardId(
+        challenge.reviewers ?? [],
+        () =>
+          this.logger.warn(
+            `Missing scorecard configuration for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}.`,
+          ),
+        (choices) =>
+          this.logger.warn(
+            `Multiple scorecards ${choices.join(', ')} detected for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}; defaulting to ${choices[0]}.`,
+          ),
+        nextPhase.phaseId ?? undefined,
+      );
+
+    if (!scorecardId) {
+      return;
+    }
+
+    let approverResources: Array<{ id: string }> = [];
+    const roleNames = PHASE_ROLE_MAP[nextPhase.name] ?? ['Approver'];
+
+    try {
+      approverResources = await this.resourcesService.getReviewerResources(
+        challenge.id,
+        roleNames,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to load approver resources for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return;
+    }
+
+    const resourceMap = new Map<string, { id: string }>();
+    for (const resource of approverResources) {
+      if (resource?.id) {
+        resourceMap.set(resource.id, { id: resource.id });
+      }
+    }
+
+    if (review?.resourceId) {
+      resourceMap.set(review.resourceId, { id: review.resourceId });
+    }
+    if (payload.reviewerResourceId) {
+      resourceMap.set(payload.reviewerResourceId, {
+        id: payload.reviewerResourceId,
+      });
+    }
+
+    if (!resourceMap.size) {
+      this.logger.warn(
+        `Unable to assign follow-up approval review for challenge ${challenge.id}; no approver resources found.`,
+      );
+      return;
+    }
+
+    let createdCount = 0;
+    for (const resource of resourceMap.values()) {
+      try {
+        const created = await this.reviewService.createPendingReview(
+          submissionId,
+          resource.id,
+          nextPhase.id,
+          scorecardId,
+          challenge.id,
+        );
+        if (created) {
+          createdCount += 1;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to create follow-up approval review for challenge ${challenge.id}, phase ${nextPhase.id}, resource ${resource.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    if (createdCount > 0) {
+      this.logger.log(
+        `Created ${createdCount} follow-up approval review(s) for challenge ${challenge.id}, phase ${nextPhase.id}, submission ${submissionId}.`,
+      );
+    } else {
+      this.logger.warn(
+        `No follow-up approval reviews created for challenge ${challenge.id}, phase ${nextPhase.id}; a pending review may already exist.`,
       );
     }
   }

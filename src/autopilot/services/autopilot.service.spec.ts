@@ -23,6 +23,7 @@ import type {
   IChallenge,
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
+import type { ResourcesService } from '../../resources/resources.service';
 
 const createMockMethod = <T extends (...args: any[]) => any>() =>
   jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
@@ -55,6 +56,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
+  let resourcesService: jest.Mocked<ResourcesService>;
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let configService: jest.Mocked<ConfigService>;
   let autopilotService: AutopilotService;
@@ -116,7 +118,16 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getCompletedReviewCountForPhase: jest.fn(),
       getScorecardPassingScore: jest.fn(),
       getPendingReviewCount: jest.fn(),
+      createPendingReview: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
+
+    reviewService.createPendingReview.mockResolvedValue(false);
+
+    resourcesService = {
+      getReviewerResources: jest.fn(),
+    } as unknown as jest.Mocked<ResourcesService>;
+
+    resourcesService.getReviewerResources.mockResolvedValue([]);
 
     phaseReviewService = {
       handlePhaseOpened: jest.fn(),
@@ -133,6 +144,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       schedulerService,
       challengeApiService,
       reviewService,
+      resourcesService,
       phaseReviewService,
       configService,
     );
@@ -536,6 +548,15 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         score: 72,
         status: 'COMPLETED',
       });
+      resourcesService.getReviewerResources.mockResolvedValueOnce([
+        {
+          id: 'resource-approval',
+          memberId: '123',
+          memberHandle: 'approver1',
+          roleName: 'Approver',
+        },
+      ]);
+      reviewService.createPendingReview.mockResolvedValueOnce(true);
 
       const followUpPhase: IPhase = {
         ...buildApprovalPhase(),
@@ -566,6 +587,17 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       expect(phaseReviewService.handlePhaseOpened).toHaveBeenCalledWith(
         'challenge-approval',
         'phase-approval-next',
+      );
+      expect(resourcesService.getReviewerResources).toHaveBeenCalledWith(
+        'challenge-approval',
+        ['Approver'],
+      );
+      expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+        'submission-approval',
+        'resource-approval',
+        'phase-approval-next',
+        'scorecard-approval',
+        'challenge-approval',
       );
     });
   });
