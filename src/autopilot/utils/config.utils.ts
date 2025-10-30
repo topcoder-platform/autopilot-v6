@@ -32,6 +32,16 @@ export function isActiveStatus(status?: string): boolean {
   return (status ?? '').toUpperCase() === 'ACTIVE';
 }
 
+export function hasTransitionedToActive(
+  previousStatus?: string | null,
+  currentStatus?: string | null,
+): boolean {
+  const wasActive = isActiveStatus(previousStatus ?? undefined);
+  const isActive = isActiveStatus(currentStatus ?? undefined);
+
+  return !wasActive && isActive;
+}
+
 export function parseOperator(operator?: AutopilotOperator | string): string {
   return typeof operator === 'string'
     ? operator
