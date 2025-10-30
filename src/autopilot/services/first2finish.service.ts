@@ -364,6 +364,20 @@ export class First2FinishService {
     );
 
     if (!assigned) {
+      const submissionSnapshot =
+        await this.reviewService.getAllSubmissionIdsOrdered(challenge.id);
+
+      if (!submissionSnapshot.length) {
+        this.logger.debug(
+          `No submissions available yet for iterative review on challenge ${challenge.id}; keeping phase ${activePhase.id} open.`,
+          {
+            submissionId: submissionId ?? null,
+            phaseId: activePhase.id,
+          },
+        );
+        return;
+      }
+
       this.logger.debug(
         `No additional submissions available for iterative review on challenge ${challenge.id}; closing phase ${activePhase.id}.`,
       );
