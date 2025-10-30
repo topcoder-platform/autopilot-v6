@@ -319,6 +319,8 @@ export class AutopilotService {
           return Number.isFinite(fallback) ? fallback : 0;
         })();
 
+        const reviewPassed = normalizedScore >= passingScore;
+
         await this.schedulerService.advancePhase({
           projectId: challenge.projectId,
           challengeId: challenge.id,
@@ -327,9 +329,10 @@ export class AutopilotService {
           state: 'END',
           operator: AutopilotOperator.SYSTEM,
           projectStatus: challenge.status,
+          preventFinalization: !reviewPassed,
         });
 
-        if (normalizedScore >= passingScore) {
+        if (reviewPassed) {
           this.logger.log(
             `Approval review passed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}).`,
           );

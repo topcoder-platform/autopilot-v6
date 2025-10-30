@@ -1003,12 +1003,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
             if (
               !skipFinalization &&
+              !data.preventFinalization &&
               !hasOpenPhases &&
               !hasNextPhases &&
               !hasIncompletePhases
             ) {
               await this.attemptChallengeFinalization(data.challengeId);
             } else {
+              if (!skipFinalization && data.preventFinalization) {
+                this.logger.debug?.(
+                  `Challenge ${data.challengeId} finalization deferred after closing phase ${data.phaseId}; preventFinalization flag set.`,
+                );
+              }
               const pendingCount = phases?.reduce((pending, phase) => {
                 return pending + (phase.isOpen || !phase.actualEndDate ? 1 : 0);
               }, 0);
