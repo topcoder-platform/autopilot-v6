@@ -70,7 +70,7 @@ export class AutopilotDbLoggerService {
             "details",
             "createdAt"
           ) VALUES (
-            ${randomUUID()},
+            ${randomUUID()}::uuid,
             ${challengeId},
             ${action},
             ${status},
