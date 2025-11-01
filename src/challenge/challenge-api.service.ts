@@ -13,6 +13,8 @@ import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  POST_MORTEM_PHASE_NAMES,
+  isPostMortemPhaseName,
 } from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
@@ -859,8 +861,8 @@ export class ChallengeApiService {
           const submissionPhase = challenge.phases[submissionPhaseIndex];
 
           const futurePhases = challenge.phases.slice(submissionPhaseIndex + 1);
-          const postMortemPhases = futurePhases.filter(
-            (phase) => phase.name === 'Post-Mortem',
+          const postMortemPhases = futurePhases.filter((phase) =>
+            isPostMortemPhaseName(phase.name),
           );
           const existingPostMortem = postMortemPhases[0] ?? null;
 
@@ -871,7 +873,7 @@ export class ChallengeApiService {
           }
 
           const phasesToDelete = futurePhases
-            .filter((phase) => phase.name !== 'Post-Mortem')
+            .filter((phase) => !isPostMortemPhaseName(phase.name))
             .map((phase) => phase.id);
 
           if (phasesToDelete.length) {
@@ -906,8 +908,8 @@ export class ChallengeApiService {
             return { postMortemPhaseId: existingPostMortem.id };
           }
 
-          const postMortemPhaseType = await tx.phase.findUnique({
-            where: { name: 'Post-Mortem' },
+          const postMortemPhaseType = await tx.phase.findFirst({
+            where: { name: { in: Array.from(POST_MORTEM_PHASE_NAMES) } },
           });
 
           if (!postMortemPhaseType) {
@@ -1063,15 +1065,15 @@ export class ChallengeApiService {
         }
 
         // If a Post-Mortem already exists, return it idempotently.
-        const existing = challenge.phases.find(
-          (phase) => phase.name === 'Post-Mortem',
+        const existing = challenge.phases.find((phase) =>
+          isPostMortemPhaseName(phase.name),
         );
         if (existing) {
           return { createdPhaseId: existing.id };
         }
 
-        const postMortemPhaseType = await tx.phase.findUnique({
-          where: { name: 'Post-Mortem' },
+        const postMortemPhaseType = await tx.phase.findFirst({
+          where: { name: { in: Array.from(POST_MORTEM_PHASE_NAMES) } },
         });
 
         if (!postMortemPhaseType) {
@@ -1159,7 +1161,8 @@ export class ChallengeApiService {
     }
   }
 
-  async createIterativeReviewPhase(
+  private async createContinuationPhase(
+    logAction: string,
     challengeId: string,
     predecessorPhaseId: string,
     phaseTypeId: string,
@@ -1179,7 +1182,7 @@ export class ChallengeApiService {
 
         if (!challenge) {
           throw new NotFoundException(
-            `Challenge with ID ${challengeId} not found when creating iterative review phase.`,
+            `Challenge with ID ${challengeId} not found when creating follow-up phase ${phaseName}.`,
           );
         }
 
@@ -1189,7 +1192,7 @@ export class ChallengeApiService {
 
         if (!predecessorPhase) {
           throw new NotFoundException(
-            `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId}.`,
+            `Predecessor phase ${predecessorPhaseId} not found for challenge ${challengeId} when creating follow-up phase ${phaseName}.`,
           );
         }
 
@@ -1235,13 +1238,13 @@ export class ChallengeApiService {
 
       if (!phaseRecord) {
         throw new Error(
-          `Created iterative review phase ${newPhaseId} not found after insertion for challenge ${challengeId}.`,
+          `Created follow-up phase ${newPhaseId} not found after insertion for challenge ${challengeId}.`,
         );
       }
 
       const mapped = this.mapPhase(phaseRecord);
 
-      void this.dbLogger.logAction('challenge.createIterativeReviewPhase', {
+      void this.dbLogger.logAction(logAction, {
         challengeId,
         status: 'SUCCESS',
         source: ChallengeApiService.name,
@@ -1256,7 +1259,7 @@ export class ChallengeApiService {
       return mapped;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('challenge.createIterativeReviewPhase', {
+      void this.dbLogger.logAction(logAction, {
         challengeId,
         status: 'ERROR',
         source: ChallengeApiService.name,
@@ -1266,8 +1269,46 @@ export class ChallengeApiService {
           error: err.message,
         },
       });
-      throw error;
+      throw err;
     }
+  }
+
+  async createIterativeReviewPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    phaseTypeId: string,
+    phaseName: string,
+    phaseDescription: string | null,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    return this.createContinuationPhase(
+      'challenge.createIterativeReviewPhase',
+      challengeId,
+      predecessorPhaseId,
+      phaseTypeId,
+      phaseName,
+      phaseDescription,
+      durationSeconds,
+    );
+  }
+
+  async createApprovalPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    phaseTypeId: string,
+    phaseName: string,
+    phaseDescription: string | null,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    return this.createContinuationPhase(
+      'challenge.createApprovalPhase',
+      challengeId,
+      predecessorPhaseId,
+      phaseTypeId,
+      phaseName,
+      phaseDescription,
+      durationSeconds,
+    );
   }
 
   async completeChallenge(

@@ -3,14 +3,26 @@ import { ReviewService } from './review.service';
 describe('ReviewService', () => {
   const challengeId = 'challenge-1';
 
-  let prismaMock: { $queryRaw: jest.Mock; $executeRaw: jest.Mock };
+  let prismaMock: {
+    $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
+    $transaction: jest.Mock;
+  };
   let dbLoggerMock: { logAction: jest.Mock };
   let service: ReviewService;
 
   beforeEach(() => {
+    const executeRawMock = jest.fn().mockResolvedValue(undefined);
     prismaMock = {
       $queryRaw: jest.fn(),
-      $executeRaw: jest.fn(),
+      $executeRaw: executeRawMock,
+      $transaction: jest
+        .fn()
+        .mockImplementation(
+          async (callback: (tx: { $executeRaw: typeof executeRawMock }) => Promise<void>) => {
+            await callback({ $executeRaw: executeRawMock });
+          },
+        ),
     };
     dbLoggerMock = {
       logAction: jest.fn(),
@@ -346,6 +358,69 @@ describe('ReviewService', () => {
             phaseId,
             resourceId,
             error: 'update failed',
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('generateReviewSummaries', () => {
+    const buildReviewSummationRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
+      submissionId: 'submission-1',
+      legacySubmissionId: 'legacy-1',
+      memberId: '123456',
+      submittedDate: '2024-10-21T10:00:00.000Z',
+      aggregateScore: '70',
+      scorecardId: 'scorecard-1',
+      scorecardLegacyId: 'legacy-scorecard',
+      isPassing: false,
+      minimumPassingScore: '80',
+      ...overrides,
+    });
+
+    const buildAggregationRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
+      submissionId: 'submission-1',
+      legacySubmissionId: 'legacy-1',
+      memberId: '123456',
+      submittedDate: '2024-10-21T10:00:00.000Z',
+      aggregateScore: '95',
+      scorecardId: 'scorecard-1',
+      scorecardLegacyId: 'legacy-scorecard',
+      minimumPassingScore: '80',
+      ...overrides,
+    });
+
+    it('rebuilds summaries when stored summations have no passing submissions but recomputed data does', async () => {
+      prismaMock.$queryRaw
+        .mockResolvedValueOnce([buildReviewSummationRow()])
+        .mockResolvedValueOnce([buildAggregationRow()]);
+
+      const summaries = await service.generateReviewSummaries(challengeId);
+
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(2);
+
+      expect(summaries).toEqual([
+        {
+          submissionId: 'submission-1',
+          legacySubmissionId: 'legacy-1',
+          memberId: '123456',
+          submittedDate: new Date('2024-10-21T10:00:00.000Z'),
+          aggregateScore: 95,
+          scorecardId: 'scorecard-1',
+          scorecardLegacyId: 'legacy-scorecard',
+          passingScore: 80,
+          isPassing: true,
+        },
+      ]);
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.generateReviewSummaries',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            submissionCount: 1,
+            passingCount: 1,
+            rebuiltFromReviews: true,
           }),
         }),
       );

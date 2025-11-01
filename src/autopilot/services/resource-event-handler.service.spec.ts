@@ -59,6 +59,7 @@ describe('ResourceEventHandler', () => {
     resourcesService = {
       getResourceById: jest.fn(),
       getRoleNameById: jest.fn(),
+      getReviewerResources: jest.fn(),
     } as unknown as jest.Mocked<ResourcesService>;
 
     configService = {
@@ -138,6 +139,118 @@ describe('ResourceEventHandler', () => {
         challengeId,
       );
       expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
+    });
+
+    it('opens checkpoint screening when a screener is assigned after the phase was deferred', async () => {
+      const payload: ResourceEventPayload = {
+        id: resourceId,
+        challengeId,
+        memberId: '333',
+        memberHandle: 'screener',
+        roleId: 'role-screener',
+        created: new Date().toISOString(),
+        createdBy: 'system',
+      };
+
+      resourcesService.getResourceById.mockResolvedValue({
+        id: resourceId,
+        roleName: 'Checkpoint Screener',
+        memberId: 'user-2',
+        memberHandle: 'screener',
+        challengeId,
+        roleId: 'role-screener',
+      } as unknown as any);
+
+      challengeApiService.getChallengeById.mockResolvedValue({
+        id: challengeId,
+        projectId: 321,
+        status: 'Active',
+        type: 'Design',
+        phases: [
+          {
+            id: 'phase-screening',
+            phaseId: 'phase-template-screening',
+            name: 'Checkpoint Screening',
+            isOpen: false,
+            scheduledStartDate: new Date(Date.now() - 10_000).toISOString(),
+          },
+        ],
+        reviewers: [
+          {
+            phaseId: 'phase-template-screening',
+            isMemberReview: false,
+            memberReviewerCount: 1,
+          },
+        ],
+      } as unknown as any);
+
+      resourcesService.getReviewerResources.mockResolvedValue([
+        { id: resourceId },
+      ] as unknown as any);
+
+      await handler.handleResourceCreated(payload);
+
+      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith({
+        projectId: 321,
+        challengeId,
+        phaseId: 'phase-screening',
+        phaseTypeName: 'Checkpoint Screening',
+        state: 'START',
+        operator: 'system',
+        projectStatus: 'Active',
+      });
+    });
+
+    it('defers opening checkpoint screening when no screener is assigned', async () => {
+      const payload: ResourceEventPayload = {
+        id: resourceId,
+        challengeId,
+        memberId: '333',
+        memberHandle: 'screener',
+        roleId: 'role-screener',
+        created: new Date().toISOString(),
+        createdBy: 'system',
+      };
+
+      resourcesService.getResourceById.mockResolvedValue({
+        id: resourceId,
+        roleName: 'Checkpoint Screener',
+        memberId: 'user-2',
+        memberHandle: 'screener',
+        challengeId,
+        roleId: 'role-screener',
+      } as unknown as any);
+
+      challengeApiService.getChallengeById.mockResolvedValue({
+        id: challengeId,
+        projectId: 321,
+        status: 'Active',
+        type: 'Design',
+        phases: [
+          {
+            id: 'phase-screening',
+            phaseId: 'phase-template-screening',
+            name: 'Checkpoint Screening',
+            isOpen: false,
+            scheduledStartDate: new Date(Date.now() - 10_000).toISOString(),
+          },
+        ],
+        reviewers: [
+          {
+            phaseId: 'phase-template-screening',
+            isMemberReview: false,
+            memberReviewerCount: 1,
+          },
+        ],
+      } as unknown as any);
+
+      resourcesService.getReviewerResources.mockResolvedValue([]);
+
+      await handler.handleResourceCreated(payload);
+
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
     });
   });
 });

@@ -30,6 +30,7 @@ export interface PhaseTransitionPayload {
   projectStatus: string;
   date?: string;
   challengeId: string; // Changed to string to support UUIDs
+  preventFinalization?: boolean;
 }
 
 export interface ChallengeUpdatePayload {

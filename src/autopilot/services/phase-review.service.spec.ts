@@ -15,6 +15,7 @@ import {
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
+import { ReviewSummationApiService } from './review-summation-api.service';
 
 const basePhase = {
   id: 'phase-1',
@@ -99,6 +100,7 @@ describe('PhaseReviewService', () => {
   let resourcesService: jest.Mocked<ResourcesService>;
   let configService: jest.Mocked<ConfigService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
+  let reviewSummationApiService: jest.Mocked<ReviewSummationApiService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
 
   beforeAll(() => {
@@ -143,6 +145,9 @@ describe('PhaseReviewService', () => {
     challengeCompletionService = {
       finalizeChallenge: jest.fn(),
     } as unknown as jest.Mocked<ChallengeCompletionService>;
+    reviewSummationApiService = {
+      finalizeSummations: jest.fn().mockResolvedValue(true),
+    } as unknown as jest.Mocked<ReviewSummationApiService>;
     dbLogger = {
       logAction: jest.fn(),
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
@@ -178,6 +183,7 @@ describe('PhaseReviewService', () => {
       resourcesService,
       configService,
       challengeCompletionService,
+      reviewSummationApiService,
       dbLogger,
     );
   });
@@ -507,6 +513,12 @@ describe('PhaseReviewService', () => {
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(reviewService.generateReviewSummaries).toHaveBeenCalledWith(
       challenge.id,
     );
@@ -544,6 +556,12 @@ describe('PhaseReviewService', () => {
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeCompletionService.finalizeChallenge).toHaveBeenCalledWith(
       challenge.id,
     );

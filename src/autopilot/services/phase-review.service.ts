@@ -13,7 +13,7 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
-  POST_MORTEM_PHASE_NAME,
+  isPostMortemPhaseName,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
@@ -25,6 +25,7 @@ import {
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
+import { ReviewSummationApiService } from './review-summation-api.service';
 
 @Injectable()
 export class PhaseReviewService {
@@ -36,6 +37,7 @@ export class PhaseReviewService {
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
     private readonly challengeCompletionService: ChallengeCompletionService,
+    private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
 
@@ -87,7 +89,7 @@ export class PhaseReviewService {
     }
 
     // Special handling for Post-Mortem: create challenge-level pending reviews (no submissions)
-    if (phase.name === POST_MORTEM_PHASE_NAME) {
+    if (isPostMortemPhaseName(phase.name)) {
       // Determine scorecard
       let scorecardId: string | null = null;
       if (isTopgearTaskChallenge(challenge.type)) {
@@ -303,6 +305,7 @@ export class PhaseReviewService {
     let submissionIds: string[] = [];
     if (isApprovalPhase) {
       try {
+        await this.reviewSummationApiService.finalizeSummations(challengeId);
         const summaries =
           await this.reviewService.generateReviewSummaries(challengeId);
         const passingSummaries = summaries.filter(

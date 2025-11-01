@@ -613,4 +613,103 @@ describe('SchedulerService (review phase deferral)', () => {
     coverageSpy.mockRestore();
     scheduleSpy.mockRestore();
   });
+
+  describe('handleSubmissionPhaseClosed', () => {
+    it('cancels challenge as zero submissions while keeping post-mortem open', async () => {
+      const payload = createPayload({
+        phaseId: 'submission-phase',
+        phaseTypeName: 'Submission',
+      });
+
+      const postMortemPhase = createPhase({
+        id: 'post-mortem-phase',
+        name: 'Post-Mortem',
+      });
+
+      challengeApiService.createPostMortemPhase.mockResolvedValue(
+        postMortemPhase,
+      );
+
+      const pendingReviewSpy = jest
+        .spyOn(scheduler as any, 'createPostMortemPendingReviews')
+        .mockResolvedValue(undefined);
+      const scheduleSpy = jest
+        .spyOn(scheduler, 'schedulePhaseTransition')
+        .mockResolvedValue('scheduled-job');
+
+      const result = await (scheduler as any).handleSubmissionPhaseClosed(
+        payload,
+      );
+
+      expect(result).toBe(true);
+      expect(resourcesService.hasSubmitterResource).toHaveBeenCalledWith(
+        payload.challengeId,
+        expect.any(Array),
+      );
+      expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+        payload.challengeId,
+        ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+      );
+      expect(scheduleSpy).toHaveBeenCalled();
+
+      pendingReviewSpy.mockRestore();
+      scheduleSpy.mockRestore();
+    });
+
+    it('cancels challenge as zero registrations when no submitters exist', async () => {
+      resourcesService.hasSubmitterResource.mockResolvedValue(false);
+
+      const payload = createPayload({
+        phaseId: 'submission-phase',
+        phaseTypeName: 'Submission',
+      });
+
+      const postMortemPhase = createPhase({
+        id: 'post-mortem-phase',
+        name: 'Post-Mortem',
+      });
+
+      challengeApiService.createPostMortemPhase.mockResolvedValue(
+        postMortemPhase,
+      );
+
+      const pendingReviewSpy = jest
+        .spyOn(scheduler as any, 'createPostMortemPendingReviews')
+        .mockResolvedValue(undefined);
+      const scheduleSpy = jest
+        .spyOn(scheduler, 'schedulePhaseTransition')
+        .mockResolvedValue('scheduled-job');
+
+      await (scheduler as any).handleSubmissionPhaseClosed(payload);
+
+      expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+        payload.challengeId,
+        ChallengeStatusEnum.CANCELLED_ZERO_REGISTRATIONS,
+      );
+
+      pendingReviewSpy.mockRestore();
+      scheduleSpy.mockRestore();
+    });
+  });
+
+  describe('handlePostMortemPhaseClosed', () => {
+    it('skips cancelling when already marked with the target status', async () => {
+      const payload = createPayload({
+        phaseId: 'post-mortem-phase',
+        phaseTypeName: 'Post-Mortem',
+      });
+
+      challengeApiService.getChallengeById.mockResolvedValueOnce({
+        id: payload.challengeId,
+        phases: [],
+        reviewers: [],
+        legacy: {},
+        status: ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+      } as unknown as IChallenge);
+
+      await (scheduler as any).handlePostMortemPhaseClosed(payload);
+
+      expect(challengeApiService.cancelChallenge).not.toHaveBeenCalled();
+    });
+  });
 });

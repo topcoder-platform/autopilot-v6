@@ -19,7 +19,11 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
 } from '../constants/review.constants';
-import { getNormalizedStringArray, isActiveStatus } from '../utils/config.utils';
+import {
+  getNormalizedStringArray,
+  hasTransitionedToActive,
+  isActiveStatus,
+} from '../utils/config.utils';
 import { ConfigService } from '@nestjs/config';
 import {
   getMemberReviewerConfigs,
@@ -31,6 +35,7 @@ import {
 export class PhaseScheduleManager {
   private readonly logger = new Logger(PhaseScheduleManager.name);
   private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly challengeStatusCache: Map<string, string>;
   private static readonly OVERDUE_PHASE_GRACE_PERIOD_MS = 60_000;
 
   constructor(
@@ -63,6 +68,8 @@ export class PhaseScheduleManager {
         Array.from(DEFAULT_APPEALS_RESPONSE_PHASE_NAMES),
       ),
     );
+
+    this.challengeStatusCache = new Map<string, string>();
   }
 
   async schedulePhaseTransition(
@@ -211,6 +218,17 @@ export class PhaseScheduleManager {
       const challengeDetails = await this.challengeApiService.getChallengeById(
         challenge.id,
       );
+      const hasTransitioned = hasTransitionedToActive(
+        null,
+        challengeDetails.status,
+      );
+
+      if (hasTransitioned) {
+        this.logger.log(
+          `[REVIEW OPPORTUNITIES] Detected transition to ACTIVE for new challenge ${challenge.id}; review opportunity creation pending.`,
+        );
+        // TODO: createReviewOpportunitiesForChallenge(challengeDetails);
+      }
 
       if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
@@ -246,6 +264,8 @@ export class PhaseScheduleManager {
             `Next phase ${phase.id} for new challenge ${challenge.id} has no scheduled ${stateLabel} date. Skipping.`,
           ),
       });
+
+      this.updateCachedStatus(challenge.id, challengeDetails.status);
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -257,11 +277,23 @@ export class PhaseScheduleManager {
 
   async handleChallengeUpdate(message: ChallengeUpdatePayload): Promise<void> {
     this.logger.log(`Handling challenge update: ${JSON.stringify(message)}`);
+    const previousStatus = this.getCachedStatus(message.id);
 
     try {
       let challengeDetails = await this.challengeApiService.getChallengeById(
         message.id,
       );
+      const hasTransitioned = hasTransitionedToActive(
+        previousStatus,
+        challengeDetails.status,
+      );
+
+      if (hasTransitioned) {
+        this.logger.log(
+          `[REVIEW OPPORTUNITIES] Detected transition to ACTIVE for updated challenge ${message.id}; review opportunity creation pending.`,
+        );
+        // TODO: createReviewOpportunitiesForChallenge(challengeDetails);
+      }
 
       if (!isActiveStatus(challengeDetails.status)) {
         this.logger.log(
@@ -281,6 +313,9 @@ export class PhaseScheduleManager {
         challengeDetails = await this.challengeApiService.getChallengeById(
           message.id,
         );
+        if (challengeDetails.status !== previousStatus) {
+          this.updateCachedStatus(message.id, challengeDetails.status);
+        }
 
         if (!isActiveStatus(challengeDetails.status)) {
           this.logger.log(
@@ -394,6 +429,8 @@ export class PhaseScheduleManager {
           err.stack,
         );
       }
+
+      this.updateCachedStatus(message.id, challengeDetails.status);
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -524,6 +561,14 @@ export class PhaseScheduleManager {
         await this.cancelPhaseTransition(challengeId, phaseId);
       }
     }
+  }
+
+  private getCachedStatus(challengeId: string): string | null {
+    return this.challengeStatusCache.get(challengeId) ?? null;
+  }
+
+  private updateCachedStatus(challengeId: string, status: string): void {
+    this.challengeStatusCache.set(challengeId, status);
   }
 
   private async processPastDueOpenPhases(

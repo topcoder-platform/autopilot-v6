@@ -7,7 +7,10 @@ import type {
   ReviewCompletedPayload,
   SubmissionAggregatePayload,
 } from '../interfaces/autopilot.interface';
-import { POST_MORTEM_PHASE_NAME } from '../constants/review.constants';
+import {
+  POST_MORTEM_PHASE_NAME,
+  POST_MORTEM_PHASE_ALTERNATE_NAME,
+} from '../constants/review.constants';
 import type { PhaseScheduleManager } from './phase-schedule-manager.service';
 import type { ResourceEventHandler } from './resource-event-handler.service';
 import type { First2FinishService } from './first2finish.service';
@@ -20,6 +23,7 @@ import type {
   IChallenge,
   IPhase,
 } from '../../challenge/interfaces/challenge.interface';
+import type { ResourcesService } from '../../resources/resources.service';
 
 const createMockMethod = <T extends (...args: any[]) => any>() =>
   jest.fn<ReturnType<T>, Parameters<OmitThisParameter<T>>>();
@@ -52,6 +56,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
   let schedulerService: jest.Mocked<SchedulerService>;
   let challengeApiService: jest.Mocked<ChallengeApiService>;
   let reviewService: jest.Mocked<ReviewService>;
+  let resourcesService: jest.Mocked<ResourcesService>;
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
   let configService: jest.Mocked<ConfigService>;
   let autopilotService: AutopilotService;
@@ -103,6 +108,8 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getChallengeById: jest.fn(),
       advancePhase: jest.fn(),
       getPhaseTypeName: jest.fn(),
+      createIterativeReviewPhase: jest.fn(),
+      createApprovalPhase: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
     reviewService = {
@@ -111,7 +118,16 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getCompletedReviewCountForPhase: jest.fn(),
       getScorecardPassingScore: jest.fn(),
       getPendingReviewCount: jest.fn(),
+      createPendingReview: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
+
+    reviewService.createPendingReview.mockResolvedValue(false);
+
+    resourcesService = {
+      getReviewerResources: jest.fn(),
+    } as unknown as jest.Mocked<ResourcesService>;
+
+    resourcesService.getReviewerResources.mockResolvedValue([]);
 
     phaseReviewService = {
       handlePhaseOpened: jest.fn(),
@@ -128,6 +144,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       schedulerService,
       challengeApiService,
       reviewService,
+      resourcesService,
       phaseReviewService,
       configService,
     );
@@ -232,6 +249,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           baseCoefficient: null,
           incrementalCoefficient: null,
           type: null,
+          shouldOpenOpportunity: false,
           aiWorkflowId: null,
         },
       ],
@@ -399,11 +417,196 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     });
   });
 
+  describe('handleReviewCompleted (approval phase)', () => {
+    const buildApprovalPhase = (): IPhase => ({
+      id: 'phase-approval',
+      phaseId: 'template-approval',
+      name: 'Approval',
+      description: 'Approval Phase',
+      isOpen: true,
+      duration: 7200,
+      scheduledStartDate: new Date().toISOString(),
+      scheduledEndDate: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+      actualStartDate: new Date().toISOString(),
+      actualEndDate: null,
+      predecessor: null,
+      constraints: [],
+    });
+
+    const buildChallenge = (phase: IPhase): IChallenge => ({
+      id: 'challenge-approval',
+      name: 'Approval Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 999,
+      typeId: 'type-approval',
+      trackId: 'track-approval',
+      timelineTemplateId: 'timeline-approval',
+      currentPhaseNames: [phase.name],
+      tags: [],
+      groups: [],
+      submissionStartDate: new Date().toISOString(),
+      submissionEndDate: new Date().toISOString(),
+      registrationStartDate: new Date().toISOString(),
+      registrationEndDate: new Date().toISOString(),
+      startDate: new Date().toISOString(),
+      endDate: null,
+      legacyId: null,
+      status: 'ACTIVE',
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: {},
+      phases: [phase],
+      reviewers: [],
+      winners: [],
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: 'DEVELOP',
+      type: 'Standard',
+      legacy: {},
+      task: {},
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      overview: {},
+      numOfSubmissions: 1,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+    });
+
+    const buildPayload = (
+      overrides: Partial<ReviewCompletedPayload> = {},
+    ): ReviewCompletedPayload => ({
+      challengeId: 'challenge-approval',
+      reviewId: 'review-approval',
+      submissionId: 'submission-approval',
+      phaseId: 'phase-approval',
+      scorecardId: 'scorecard-approval',
+      reviewerResourceId: 'resource-approval',
+      reviewerHandle: 'approver',
+      reviewerMemberId: '123',
+      submitterHandle: 'submitter',
+      submitterMemberId: '456',
+      completedAt: new Date().toISOString(),
+      initialScore: 92,
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      const approvalPhase = buildApprovalPhase();
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildChallenge(approvalPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-approval',
+        phaseId: approvalPhase.id,
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 0,
+        status: 'COMPLETED',
+      });
+    });
+
+    it('closes the approval phase without creating a follow-up when the score meets the minimum', async () => {
+      reviewService.getReviewById.mockResolvedValueOnce({
+        id: 'review-approval',
+        phaseId: 'phase-approval',
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 95,
+        status: 'COMPLETED',
+      });
+      reviewService.getScorecardPassingScore.mockResolvedValueOnce(75);
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-approval',
+          phaseId: 'phase-approval',
+          state: 'END',
+        }),
+      );
+      expect(challengeApiService.createApprovalPhase).not.toHaveBeenCalled();
+      expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
+    });
+
+    it('creates a follow-up approval phase when the score is below the minimum', async () => {
+      reviewService.getScorecardPassingScore.mockResolvedValueOnce(90);
+      reviewService.getReviewById.mockResolvedValueOnce({
+        id: 'review-approval',
+        phaseId: 'phase-approval',
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 72,
+        status: 'COMPLETED',
+      });
+      resourcesService.getReviewerResources.mockResolvedValueOnce([
+        {
+          id: 'resource-approval',
+          memberId: '123',
+          memberHandle: 'approver1',
+          roleName: 'Approver',
+        },
+      ]);
+      reviewService.createPendingReview.mockResolvedValueOnce(true);
+
+      const followUpPhase: IPhase = {
+        ...buildApprovalPhase(),
+        id: 'phase-approval-next',
+        isOpen: true,
+      };
+      challengeApiService.createApprovalPhase.mockResolvedValueOnce(
+        followUpPhase,
+      );
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-approval',
+          phaseId: 'phase-approval',
+          state: 'END',
+        }),
+      );
+      expect(challengeApiService.createApprovalPhase).toHaveBeenCalledWith(
+        'challenge-approval',
+        'phase-approval',
+        'template-approval',
+        'Approval',
+        'Approval Phase',
+        expect.any(Number),
+      );
+      expect(phaseReviewService.handlePhaseOpened).toHaveBeenCalledWith(
+        'challenge-approval',
+        'phase-approval-next',
+      );
+      expect(resourcesService.getReviewerResources).toHaveBeenCalledWith(
+        'challenge-approval',
+        ['Approver'],
+      );
+      expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+        'submission-approval',
+        'resource-approval',
+        'phase-approval-next',
+        'scorecard-approval',
+        'challenge-approval',
+      );
+    });
+  });
+
   describe('handleReviewCompleted (post-mortem)', () => {
-    const buildPhase = (): IPhase => ({
+    const buildPhase = (name = POST_MORTEM_PHASE_NAME): IPhase => ({
       id: 'phase-1',
       phaseId: 'template-1',
-      name: POST_MORTEM_PHASE_NAME,
+      name,
       description: null,
       isOpen: true,
       duration: 0,
@@ -515,6 +718,29 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           challengeId: 'challenge-1',
           phaseId: 'phase-1',
           phaseTypeName: POST_MORTEM_PHASE_NAME,
+          state: 'END',
+        }),
+      );
+    });
+
+    it('closes the phase when the Post-mortem alias is used', async () => {
+      const postMortemAliasPhase = buildPhase(
+        POST_MORTEM_PHASE_ALTERNATE_NAME,
+      );
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildChallenge(postMortemAliasPhase),
+      );
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const advancePhaseMock = schedulerService.advancePhase as jest.Mock;
+
+      expect(advancePhaseMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: 'phase-1',
+          phaseTypeName: POST_MORTEM_PHASE_ALTERNATE_NAME,
           state: 'END',
         }),
       );

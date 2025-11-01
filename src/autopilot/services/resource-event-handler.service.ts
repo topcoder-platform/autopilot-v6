@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
 import { ReviewService } from '../../review/review.service';
@@ -16,6 +17,7 @@ import {
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  getRoleNamesForPhase,
 } from '../constants/review.constants';
 import { First2FinishService } from './first2finish.service';
 import { SchedulerService } from './scheduler.service';
@@ -23,6 +25,7 @@ import {
   getNormalizedStringArray,
   isActiveStatus,
 } from '../utils/config.utils';
+import { getReviewerConfigsForPhase } from '../utils/reviewer.utils';
 
 @Injectable()
 export class ResourceEventHandler {
@@ -256,19 +259,22 @@ export class ResourceEventHandler {
   private async maybeOpenDeferredReviewPhases(
     challenge: Awaited<ReturnType<ChallengeApiService['getChallengeById']>>,
   ): Promise<void> {
-    const reviewPhases = challenge.phases ?? [];
-    if (!reviewPhases.length) {
+    const phases = challenge.phases ?? [];
+    if (!phases.length) {
       return;
     }
 
     const now = Date.now();
 
-    for (const phase of reviewPhases) {
+    for (const phase of phases) {
+      const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
+      const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
+
       if (
         phase.isOpen ||
         !!phase.actualEndDate ||
-        phase.name === ITERATIVE_REVIEW_PHASE_NAME ||
-        !REVIEW_PHASE_NAMES.has(phase.name)
+        (isReviewPhase && phase.name === ITERATIVE_REVIEW_PHASE_NAME) ||
+        (!isReviewPhase && !isScreeningPhase)
       ) {
         continue;
       }
@@ -281,7 +287,7 @@ export class ResourceEventHandler {
       }
 
       if (phase.predecessor) {
-        const predecessor = reviewPhases.find(
+        const predecessor = phases.find(
           (candidate) =>
             candidate.phaseId === phase.predecessor ||
             candidate.id === phase.predecessor,
@@ -306,19 +312,40 @@ export class ResourceEventHandler {
       };
 
       let ready = false;
-      try {
-        ready = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
-          challenge.id,
-          phase,
-          openPhaseCallback,
-        );
-      } catch (error) {
-        const err = error as Error;
-        this.logger.error(
-          `Failed to verify reviewer assignments for phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
-          err.stack,
-        );
-        continue;
+
+      if (isReviewPhase) {
+        try {
+          ready = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+            challenge.id,
+            phase,
+            openPhaseCallback,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to verify reviewer assignments for phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+          continue;
+        }
+      } else {
+        try {
+          ready = await this.isScreeningPhaseReady(challenge, phase);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to verify screening assignments for phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+          continue;
+        }
+
+        if (!ready) {
+          this.logger.warn(
+            `Deferring opening of screening phase ${phase.id} for challenge ${challenge.id} until required screeners are assigned.`,
+          );
+          continue;
+        }
       }
 
       if (!phase.isOpen && ready) {
@@ -333,6 +360,41 @@ export class ResourceEventHandler {
         }
       }
     }
+  }
+
+  private async isScreeningPhaseReady(
+    challenge: Awaited<ReturnType<ChallengeApiService['getChallengeById']>>,
+    phase: IPhase,
+  ): Promise<boolean> {
+    if (!phase.phaseId) {
+      this.logger.warn(
+        `Screening phase ${phase.id} on challenge ${challenge.id} is missing a phase template ID; opening without reviewer validation.`,
+      );
+      return true;
+    }
+
+    const reviewerConfigs = getReviewerConfigsForPhase(
+      challenge.reviewers,
+      phase.phaseId,
+    );
+
+    const required = reviewerConfigs.reduce((total, config) => {
+      const normalized = Number(config.memberReviewerCount ?? 1);
+      const increment = Number.isFinite(normalized) ? Math.max(normalized, 0) : 0;
+      return total + increment;
+    }, 0);
+
+    if (required <= 0) {
+      return true;
+    }
+
+    const roleNames = getRoleNamesForPhase(phase.name);
+    const assignedReviewers = await this.resourcesService.getReviewerResources(
+      challenge.id,
+      roleNames,
+    );
+
+    return assignedReviewers.length >= required;
   }
 
   private computeReviewRoleNames(postMortemRoles: string[]): Set<string> {

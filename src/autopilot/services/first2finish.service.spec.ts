@@ -188,6 +188,38 @@ describe('First2FinishService', () => {
     expect(schedulerService.advancePhase).not.toHaveBeenCalled();
   });
 
+  it('keeps the active iterative review phase open when no submissions are available', async () => {
+    const activePhase = buildIterativePhase({
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [activePhase],
+      reviewers: [buildReviewer()],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([]);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+
+    await service.handleSubmissionByChallengeId(challenge.id);
+
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    expect(schedulerService.schedulePhaseTransition).not.toHaveBeenCalled();
+  });
+
   it('reopens the seeded iterative review phase when the first submission arrives', async () => {
     const seedPhase = buildIterativePhase({
       isOpen: false,

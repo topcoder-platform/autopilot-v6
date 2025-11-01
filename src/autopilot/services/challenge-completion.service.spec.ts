@@ -12,6 +12,7 @@ import type {
   IChallengePrizeSet,
 } from '../../challenge/interfaces/challenge.interface';
 import type { ConfigService } from '@nestjs/config';
+import type { ReviewSummationApiService } from './review-summation-api.service';
 
 describe('ChallengeCompletionService', () => {
   let challengeApiService: {
@@ -38,6 +39,7 @@ describe('ChallengeCompletionService', () => {
   let configService: {
     get: jest.MockedFunction<ConfigService['get']>;
   };
+  let reviewSummationApiService: jest.Mocked<ReviewSummationApiService>;
   let service: ChallengeCompletionService;
 
   const baseTimestamp = '2024-01-01T00:00:00.000Z';
@@ -296,11 +298,16 @@ describe('ChallengeCompletionService', () => {
       get: jest.fn().mockReturnValue(null),
     };
 
+    reviewSummationApiService = {
+      finalizeSummations: jest.fn().mockResolvedValue(true),
+    } as unknown as jest.Mocked<ReviewSummationApiService>;
+
     service = new ChallengeCompletionService(
       challengeApiService as unknown as ChallengeApiService,
       reviewService as unknown as ReviewService,
       resourcesService as unknown as ResourcesService,
       financeApiService as unknown as FinanceApiService,
+      reviewSummationApiService as unknown as ReviewSummationApiService,
       configService as unknown as ConfigService,
     );
   });
@@ -323,6 +330,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
@@ -390,6 +403,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
 
@@ -412,6 +431,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
@@ -522,6 +547,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
       challenge.id,
       ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
@@ -612,6 +643,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
+      challenge.id,
+    );
     expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
       challenge.id,
       ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,

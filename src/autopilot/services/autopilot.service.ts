@@ -18,22 +18,28 @@ import {
   TopgearSubmissionPayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
-import { IPhase } from '../../challenge/interfaces/challenge.interface';
+import {
+  IChallenge,
+  IPhase,
+} from '../../challenge/interfaces/challenge.interface';
 import { AUTOPILOT_COMMANDS } from '../../common/constants/commands.constants';
 import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
-  POST_MORTEM_PHASE_NAME,
+  isPostMortemPhaseName,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  PHASE_ROLE_MAP,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
+import { ResourcesService } from '../../resources/resources.service';
 import {
   getNormalizedStringArray,
   isActiveStatus,
 } from '../utils/config.utils';
+import { selectScorecardId } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 
 @Injectable()
@@ -50,6 +56,7 @@ export class AutopilotService {
     private readonly schedulerService: SchedulerService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
+    private readonly resourcesService: ResourcesService,
     private readonly phaseReviewService: PhaseReviewService,
     private readonly configService: ConfigService,
   ) {
@@ -257,7 +264,7 @@ export class AutopilotService {
         return;
       }
 
-      if (phase.name === POST_MORTEM_PHASE_NAME) {
+      if (isPostMortemPhaseName(phase.name)) {
         const pendingPostMortemReviews =
           await this.reviewService.getPendingReviewCount(phase.id, challengeId);
 
@@ -294,20 +301,26 @@ export class AutopilotService {
         return;
       }
 
-      // Special handling: Approval phase pass/fail adds additional Approval if failed
+      // Approval: compare against minimum passing score and create a follow-up Approval phase if it fails
       if (APPROVAL_PHASE_NAMES.has(phase.name)) {
-        const passingScore = await this.reviewService.getScorecardPassingScore(
-          review.scorecardId,
-        );
-        const rawScore =
-          typeof review.score === 'number'
-            ? review.score
-            : Number(review.score ?? payload.initialScore ?? 0);
-        const finalScore = Number.isFinite(rawScore)
-          ? Number(rawScore)
-          : Number(payload.initialScore ?? 0);
+        const scorecardId = review.scorecardId ?? payload.scorecardId ?? null;
+        const passingScore =
+          await this.reviewService.getScorecardPassingScore(scorecardId);
 
-        // Close current approval phase
+        const normalizedScore = (() => {
+          if (typeof review.score === 'number') {
+            return review.score;
+          }
+          const numeric = Number(review.score ?? payload.initialScore ?? 0);
+          if (Number.isFinite(numeric)) {
+            return numeric;
+          }
+          const fallback = Number(payload.initialScore ?? 0);
+          return Number.isFinite(fallback) ? fallback : 0;
+        })();
+
+        const reviewPassed = normalizedScore >= passingScore;
+
         await this.schedulerService.advancePhase({
           projectId: challenge.projectId,
           challengeId: challenge.id,
@@ -316,39 +329,54 @@ export class AutopilotService {
           state: 'END',
           operator: AutopilotOperator.SYSTEM,
           projectStatus: challenge.status,
+          preventFinalization: !reviewPassed,
         });
 
-        if (finalScore >= passingScore) {
+        if (reviewPassed) {
           this.logger.log(
-            `Approval review passed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
+            `Approval review passed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}).`,
           );
-        } else {
-          this.logger.log(
-            `Approval review failed for challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}). Creating another Approval phase.`,
-          );
-          try {
-            const nextApproval =
-              await this.challengeApiService.createIterativeReviewPhase(
-                challenge.id,
-                phase.id,
-                phase.phaseId!,
-                phase.name,
-                phase.description ?? null,
-                Math.max(phase.duration || 0, 1),
-              );
+          return;
+        }
 
-            // Create pending reviews for the newly opened Approval
-            await this.phaseReviewService.handlePhaseOpened(
-              challenge.id,
-              nextApproval.id,
-            );
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to create next Approval phase for challenge ${challenge.id}: ${err.message}`,
-              err.stack,
-            );
-          }
+        this.logger.log(
+          `Approval review failed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}). Creating another Approval phase.`,
+        );
+
+        if (!phase.phaseId) {
+          this.logger.error(
+            `Cannot create follow-up Approval phase for challenge ${challenge.id}; missing phase template ID on phase ${phase.id}.`,
+          );
+          return;
+        }
+
+        try {
+          const nextApproval = await this.challengeApiService.createApprovalPhase(
+            challenge.id,
+            phase.id,
+            phase.phaseId,
+            phase.name,
+            phase.description ?? null,
+            Math.max(phase.duration || 0, 1),
+          );
+
+          await this.createFollowUpApprovalReviews(
+            challenge,
+            nextApproval,
+            review,
+            payload,
+          );
+
+          await this.phaseReviewService.handlePhaseOpened(
+            challenge.id,
+            nextApproval.id,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to create follow-up Approval phase for challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
         }
         return;
       }
@@ -389,6 +417,118 @@ export class AutopilotService {
       this.logger.error(
         `Failed to handle review completion for challenge ${challengeId}: ${err.message}`,
         err.stack,
+      );
+    }
+  }
+
+  private async createFollowUpApprovalReviews(
+    challenge: IChallenge,
+    nextPhase: IPhase,
+    review: {
+      submissionId: string | null;
+      scorecardId: string | null;
+      resourceId: string;
+    },
+    payload: ReviewCompletedPayload,
+  ): Promise<void> {
+    const submissionId = review.submissionId ?? payload.submissionId ?? null;
+
+    if (!submissionId) {
+      this.logger.warn(
+        `Unable to assign follow-up approval review for challenge ${challenge.id}; submissionId missing.`,
+      );
+      return;
+    }
+
+    let scorecardId =
+      review.scorecardId ??
+      payload.scorecardId ??
+      selectScorecardId(
+        challenge.reviewers ?? [],
+        () =>
+          this.logger.warn(
+            `Missing scorecard configuration for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}.`,
+          ),
+        (choices) =>
+          this.logger.warn(
+            `Multiple scorecards ${choices.join(', ')} detected for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}; defaulting to ${choices[0]}.`,
+          ),
+        nextPhase.phaseId ?? undefined,
+      );
+
+    if (!scorecardId) {
+      return;
+    }
+
+    let approverResources: Array<{ id: string }> = [];
+    const roleNames = PHASE_ROLE_MAP[nextPhase.name] ?? ['Approver'];
+
+    try {
+      approverResources = await this.resourcesService.getReviewerResources(
+        challenge.id,
+        roleNames,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to load approver resources for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return;
+    }
+
+    const resourceMap = new Map<string, { id: string }>();
+    for (const resource of approverResources) {
+      if (resource?.id) {
+        resourceMap.set(resource.id, { id: resource.id });
+      }
+    }
+
+    if (review?.resourceId) {
+      resourceMap.set(review.resourceId, { id: review.resourceId });
+    }
+    if (payload.reviewerResourceId) {
+      resourceMap.set(payload.reviewerResourceId, {
+        id: payload.reviewerResourceId,
+      });
+    }
+
+    if (!resourceMap.size) {
+      this.logger.warn(
+        `Unable to assign follow-up approval review for challenge ${challenge.id}; no approver resources found.`,
+      );
+      return;
+    }
+
+    let createdCount = 0;
+    for (const resource of resourceMap.values()) {
+      try {
+        const created = await this.reviewService.createPendingReview(
+          submissionId,
+          resource.id,
+          nextPhase.id,
+          scorecardId,
+          challenge.id,
+        );
+        if (created) {
+          createdCount += 1;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to create follow-up approval review for challenge ${challenge.id}, phase ${nextPhase.id}, resource ${resource.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    if (createdCount > 0) {
+      this.logger.log(
+        `Created ${createdCount} follow-up approval review(s) for challenge ${challenge.id}, phase ${nextPhase.id}, submission ${submissionId}.`,
+      );
+    } else {
+      this.logger.warn(
+        `No follow-up approval reviews created for challenge ${challenge.id}, phase ${nextPhase.id}; a pending review may already exist.`,
       );
     }
   }

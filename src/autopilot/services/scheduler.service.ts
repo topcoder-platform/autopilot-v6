@@ -20,7 +20,6 @@ import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
-  POST_MORTEM_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
@@ -29,6 +28,7 @@ import {
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
   getRoleNamesForPhase,
+  isPostMortemPhaseName,
 } from '../constants/review.constants';
 import { ResourcesService } from '../../resources/resources.service';
 import { isTopgearTaskChallenge } from '../constants/challenge.constants';
@@ -961,7 +961,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 err.stack,
               );
             }
-          } else if (phaseName === POST_MORTEM_PHASE_NAME) {
+          } else if (isPostMortemPhaseName(phaseName)) {
             try {
               await this.handlePostMortemPhaseClosed(data);
               skipFinalization = true;
@@ -1003,12 +1003,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
             if (
               !skipFinalization &&
+              !data.preventFinalization &&
               !hasOpenPhases &&
               !hasNextPhases &&
               !hasIncompletePhases
             ) {
               await this.attemptChallengeFinalization(data.challengeId);
             } else {
+              if (!skipFinalization && data.preventFinalization) {
+                this.logger.debug?.(
+                  `Challenge ${data.challengeId} finalization deferred after closing phase ${data.phaseId}; preventFinalization flag set.`,
+                );
+              }
               const pendingCount = phases?.reduce((pending, phase) => {
                 return pending + (phase.isOpen || !phase.actualEndDate ? 1 : 0);
               }, 0);
@@ -1357,7 +1363,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     let postMortemPhase =
-      challenge.phases?.find((p) => p.name === POST_MORTEM_PHASE_NAME) ?? null;
+      challenge.phases?.find((p) => isPostMortemPhaseName(p.name)) ?? null;
 
     if (!postMortemPhase) {
       try {
@@ -1410,6 +1416,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         `[ZERO SUBMISSIONS] No active submissions found for challenge ${data.challengeId}; transitioning to Post-Mortem phase.`,
       );
 
+      const hasSubmitter = await this.resourcesService.hasSubmitterResource(
+        data.challengeId,
+        this.submitterRoles,
+      );
+
       const postMortemPhase =
         await this.challengeApiService.createPostMortemPhase(
           data.challengeId,
@@ -1420,6 +1431,19 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       await this.createPostMortemPendingReviews(
         data.challengeId,
         postMortemPhase.id,
+      );
+
+      const cancelStatus = hasSubmitter
+        ? ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS
+        : ChallengeStatusEnum.CANCELLED_ZERO_REGISTRATIONS;
+
+      await this.challengeApiService.cancelChallenge(
+        data.challengeId,
+        cancelStatus,
+      );
+
+      this.logger.log(
+        `${hasSubmitter ? '[ZERO SUBMISSIONS]' : '[ZERO REGISTRATIONS]'} Marked challenge ${data.challengeId} as ${cancelStatus} while keeping Post-Mortem phase ${postMortemPhase.id} open.`,
       );
 
       if (!postMortemPhase.scheduledEndDate) {
@@ -1782,15 +1806,39 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         data.challengeId,
         this.submitterRoles,
       );
+      const statusTag = hasSubmitter
+        ? '[ZERO SUBMISSIONS]'
+        : '[ZERO REGISTRATIONS]';
 
       const status = hasSubmitter
         ? ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS
         : ChallengeStatusEnum.CANCELLED_ZERO_REGISTRATIONS;
 
+      const challenge =
+        await this.challengeApiService.getChallengeById(data.challengeId);
+      const currentStatus = (challenge.status ?? '').toUpperCase();
+
+      if (currentStatus === status) {
+        this.logger.log(
+          `${statusTag} Challenge ${data.challengeId} already ${status}; no additional cancellation required after Post-Mortem completion.`,
+        );
+        return;
+      }
+
+      if (
+        currentStatus.startsWith('CANCELLED') &&
+        currentStatus !== status
+      ) {
+        this.logger.warn(
+          `${statusTag} Challenge ${data.challengeId} already cancelled as ${currentStatus}; skipping status override to ${status} after Post-Mortem completion.`,
+        );
+        return;
+      }
+
       await this.challengeApiService.cancelChallenge(data.challengeId, status);
 
       this.logger.log(
-        `${hasSubmitter ? '[ZERO SUBMISSIONS]' : '[ZERO REGISTRATIONS]'} Marked challenge ${data.challengeId} as ${status} after Post-Mortem completion.`,
+        `${statusTag} Marked challenge ${data.challengeId} as ${status} after Post-Mortem completion.`,
       );
     } catch (error) {
       const err = error as Error;
@@ -1883,7 +1931,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       const roleNames =
-        phaseName === POST_MORTEM_PHASE_NAME && this.postMortemRoles.length
+        isPostMortemPhaseName(phaseName) && this.postMortemRoles.length
           ? this.postMortemRoles
           : getRoleNamesForPhase(phaseName);
 
