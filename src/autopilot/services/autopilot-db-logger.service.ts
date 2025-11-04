@@ -53,6 +53,10 @@ export class AutopilotDbLoggerService {
     }
 
     const { challengeId = null, source, status = 'SUCCESS', details } = payload;
+    const logId = randomUUID();
+
+    // Explicitly cast generated UUID so Postgres columns typed as uuid accept the value.
+    const idFragment = Prisma.sql`CAST(${logId} AS uuid)`;
     const detailsFragment =
       details === undefined || details === null
         ? Prisma.sql`NULL`
@@ -70,7 +74,7 @@ export class AutopilotDbLoggerService {
             "details",
             "createdAt"
           ) VALUES (
-            ${randomUUID()},
+            ${idFragment},
             ${challengeId},
             ${action},
             ${status},
