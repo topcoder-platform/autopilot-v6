@@ -30,6 +30,25 @@ type KafkaProducer = Producer<string, unknown, string, string>;
 type KafkaConsumer = Consumer<string, unknown, string, string>;
 type KafkaStream = MessagesStream<string, unknown, string, string>;
 
+export enum KafkaConnectionState {
+  initializing = 'initializing',
+  ready = 'ready',
+  reconnecting = 'reconnecting',
+  failed = 'failed',
+  disabled = 'disabled',
+}
+
+export interface KafkaHealthStatus {
+  state: KafkaConnectionState;
+  reconnectAttempts: number;
+  reason?: string;
+}
+
+interface ConsumerConfig {
+  topics: string[];
+  onMessage: (message: unknown) => Promise<void>;
+}
+
 @Injectable()
 export class KafkaService implements OnApplicationShutdown, OnModuleInit {
   private readonly logger = new LoggerService(KafkaService.name);
@@ -38,10 +57,15 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     resetTimeout: CONFIG.CIRCUIT_BREAKER.DEFAULT_RESET_TIMEOUT,
   });
   private readonly kafkaConfig: IKafkaConfig;
-  private readonly producer: KafkaProducer;
+  private producer: KafkaProducer;
   private readonly consumers = new Map<string, KafkaConsumer>();
   private readonly consumerStreams = new Map<string, KafkaStream>();
   private readonly consumerLoops = new Map<string, Promise<void>>();
+  private readonly consumerConfigs = new Map<string, ConsumerConfig>();
+  private kafkaState: KafkaConnectionState = KafkaConnectionState.initializing;
+  private kafkaFailureReason?: string;
+  private reconnectAttempts = 0;
+  private reconnectionTask?: Promise<void>;
   private shuttingDown = false;
 
   constructor(private readonly configService: ConfigService) {
@@ -78,6 +102,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         'Failed to initialize Kafka service',
       );
       this.logger.error(err.message, { error: err.stack || err.message });
+      this.kafkaState = KafkaConnectionState.failed;
       throw new KafkaConnectionException({
         error: err.stack || err.message,
       });
@@ -88,12 +113,15 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     try {
       await this.producer.metadata({ topics: [] });
       this.logger.info('Kafka service initialized successfully');
+      this.kafkaState = KafkaConnectionState.ready;
+      this.kafkaFailureReason = undefined;
     } catch (error) {
       const err = this.normalizeError(
         error,
         'Failed to initialize Kafka producer metadata request',
       );
       this.logger.error(err.message, { error: err.stack || err.message });
+      this.kafkaState = KafkaConnectionState.failed;
       throw new KafkaConnectionException({
         error: err.stack || err.message,
       });
@@ -188,23 +216,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     topics: string[],
     onMessage: (message: unknown) => Promise<void>,
   ): Promise<void> {
+    this.consumerConfigs.set(groupId, { topics, onMessage });
+
     try {
-      await this.circuitBreaker.execute(async () => {
-        const consumer = this.getOrCreateConsumer(groupId);
-
-        if (this.consumerStreams.has(groupId)) {
-          await this.closeStream(groupId);
-        }
-
-        const stream = await consumer.consume({
-          topics,
-          autocommit: true,
-        });
-
-        this.consumerStreams.set(groupId, stream);
-        const loop = this.startConsumerLoop(groupId, topics, stream, onMessage);
-        this.consumerLoops.set(groupId, loop);
-      });
+      await this.startConsumerSession(groupId);
     } catch (error) {
       const err = this.normalizeError(
         error,
@@ -215,6 +230,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         topics,
         error: err.stack || err.message,
       });
+      this.handleKafkaFailure(err.message, err);
       throw new KafkaConsumerException(
         `Failed to start consumer for group ${groupId}`,
         { error: err.stack || err.message },
@@ -222,11 +238,66 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 
+  private async startConsumerSession(groupId: string): Promise<void> {
+    const config = this.consumerConfigs.get(groupId);
+
+    if (!config) {
+      this.logger.warn(`No consumer configuration found for group ${groupId}`);
+      return;
+    }
+
+    await this.circuitBreaker.execute(async () => {
+      const consumer = this.getOrCreateConsumer(groupId);
+
+      if (this.consumerStreams.has(groupId)) {
+        await this.closeStream(groupId);
+      }
+
+      const stream = await consumer.consume({
+        topics: config.topics,
+        autocommit: true,
+      });
+
+      stream.on('error', (error) => {
+        this.handleKafkaFailure(
+          `Kafka stream error for group ${groupId}`,
+          error,
+        );
+      });
+
+      this.consumerStreams.set(groupId, stream);
+      const loop = this.startConsumerLoop(
+        groupId,
+        config.topics,
+        stream,
+        config.onMessage,
+      );
+      this.consumerLoops.set(groupId, loop);
+
+      this.kafkaState = KafkaConnectionState.ready;
+      this.kafkaFailureReason = undefined;
+      this.reconnectAttempts = 0;
+    });
+  }
+
   async onApplicationShutdown(signal?: string): Promise<void> {
     this.logger.info('Starting Kafka graceful shutdown', { signal });
     this.shuttingDown = true;
 
     try {
+      if (this.reconnectionTask) {
+        this.logger.info('Waiting for Kafka reconnection task to finish...');
+        try {
+          await this.reconnectionTask;
+        } catch (error) {
+          const err = this.normalizeError(
+            error,
+            'Kafka reconnection task failed during shutdown',
+          );
+          this.logger.warn(err.message, { error: err.stack || err.message });
+        }
+      }
+
       this.logger.info('Closing consumer streams...');
       await Promise.all(
         Array.from(this.consumerStreams.keys()).map((groupId) =>
@@ -281,17 +352,38 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       this.consumerLoops.clear();
       this.consumerStreams.clear();
       this.consumers.clear();
+      this.consumerConfigs.clear();
+      this.kafkaState = KafkaConnectionState.disabled;
+      this.kafkaFailureReason = undefined;
     }
   }
 
-  isConnected(): Promise<boolean> {
+  async isConnected(): Promise<boolean> {
+    if (
+      this.kafkaState === KafkaConnectionState.failed ||
+      this.kafkaState === KafkaConnectionState.reconnecting ||
+      this.kafkaState === KafkaConnectionState.initializing ||
+      this.kafkaState === KafkaConnectionState.disabled
+    ) {
+      return false;
+    }
+
     try {
-      const producerConnected = this.producer.isConnected();
+      const producerConnected = this.producer?.isConnected?.() ?? false;
       const consumersConnected = Array.from(this.consumers.values()).every(
         (consumer) => consumer.isConnected(),
       );
 
-      return Promise.resolve(producerConnected && consumersConnected);
+      const connected = producerConnected && consumersConnected;
+
+      if (!connected && !this.shuttingDown) {
+        this.handleKafkaFailure(
+          'Kafka connection verification failed',
+          new Error('Kafka producer or consumers are disconnected'),
+        );
+      }
+
+      return connected;
     } catch (error) {
       const err = this.normalizeError(
         error,
@@ -301,8 +393,17 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
         error: err.stack || err.message,
         timestamp: new Date().toISOString(),
       });
-      return Promise.resolve(false);
+      this.handleKafkaFailure('Kafka connection status error', err);
+      return false;
     }
+  }
+
+  getKafkaStatus(): KafkaHealthStatus {
+    return {
+      state: this.kafkaState,
+      reconnectAttempts: this.reconnectAttempts,
+      reason: this.kafkaFailureReason,
+    };
   }
 
   private createProducer(): KafkaProducer {
@@ -362,6 +463,14 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       this.logger.error(`Kafka consumer ${groupId} broker failure`, {
         details,
       });
+      const normalized = this.normalizeError(
+        details,
+        `Kafka consumer ${groupId} broker failure`,
+      );
+      this.handleKafkaFailure(
+        `Kafka consumer ${groupId} broker failure`,
+        normalized,
+      );
     });
 
     this.consumers.set(groupId, consumer);
@@ -442,6 +551,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
           topics,
           error: err.stack || err.message,
         });
+        this.handleKafkaFailure('Kafka consumer loop error', err);
       }
     } finally {
       this.consumerStreams.delete(groupId);
@@ -544,6 +654,166 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       });
       return Buffer.from(String(message), 'utf8').toString('base64');
     }
+  }
+
+  private handleKafkaFailure(context: string, error: unknown): void {
+    if (this.shuttingDown) {
+      return;
+    }
+
+    const err =
+      error instanceof Error
+        ? error
+        : this.normalizeError(error, context || 'Kafka failure');
+    const trace = err.stack || err.message;
+
+    this.logger.error(context, {
+      error: trace,
+      timestamp: new Date().toISOString(),
+    });
+
+    this.kafkaFailureReason = trace;
+
+    if (this.kafkaState !== KafkaConnectionState.reconnecting) {
+      this.kafkaState = KafkaConnectionState.reconnecting;
+    }
+
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectionTask || this.shuttingDown) {
+      return;
+    }
+
+    this.reconnectionTask = this.performReconnect().finally(() => {
+      this.reconnectionTask = undefined;
+    });
+  }
+
+  private async performReconnect(): Promise<void> {
+    if (this.shuttingDown) {
+      return;
+    }
+
+    const maxAttempts = Math.max(this.kafkaConfig.retry.retries, 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (this.shuttingDown) {
+        return;
+      }
+
+      this.reconnectAttempts = attempt;
+
+      try {
+        await this.restartConsumers();
+
+        this.kafkaState = KafkaConnectionState.ready;
+        this.kafkaFailureReason = undefined;
+        this.reconnectAttempts = 0;
+
+        this.logger.info('Kafka consumers reconnected successfully', {
+          attempt,
+          timestamp: new Date().toISOString(),
+        });
+
+        return;
+      } catch (error) {
+        const err = this.normalizeError(
+          error,
+          'Kafka reconnection attempt failed',
+        );
+        this.kafkaFailureReason = err.stack || err.message;
+        this.logger.error(err.message, {
+          attempt,
+          maxAttempts,
+          error: err.stack || err.message,
+        });
+
+        if (attempt < maxAttempts && !this.shuttingDown) {
+          await this.wait(this.getRetryDelay(attempt));
+        }
+      }
+    }
+
+    if (!this.shuttingDown) {
+      this.kafkaState = KafkaConnectionState.failed;
+      this.logger.error('Kafka reconnection attempts exhausted', {
+        reason: this.kafkaFailureReason,
+        attempts: this.reconnectAttempts,
+      });
+    }
+  }
+
+  private async restartConsumers(): Promise<void> {
+    const groupIds = Array.from(this.consumerConfigs.keys());
+
+    if (groupIds.length === 0) {
+      return;
+    }
+
+    await Promise.all(groupIds.map((groupId) => this.closeConsumer(groupId)));
+
+    for (const groupId of groupIds) {
+      await this.startConsumerSession(groupId);
+    }
+  }
+
+  private async closeConsumer(groupId: string): Promise<void> {
+    await this.closeStream(groupId).catch((error) => {
+      const err = this.normalizeError(
+        error,
+        `Failed to close Kafka stream for group ${groupId}`,
+      );
+      this.logger.warn(err.message, { error: err.stack || err.message });
+    });
+
+    const loop = this.consumerLoops.get(groupId);
+    if (loop) {
+      try {
+        await loop;
+      } catch (error) {
+        const err = this.normalizeError(
+          error,
+          `Kafka consumer loop rejected for group ${groupId}`,
+        );
+        this.logger.warn(err.message, { error: err.stack || err.message });
+      } finally {
+        this.consumerLoops.delete(groupId);
+      }
+    }
+
+    const consumer = this.consumers.get(groupId);
+    if (consumer) {
+      try {
+        await consumer.close();
+      } catch (error) {
+        const err = this.normalizeError(
+          error,
+          `Failed to close Kafka consumer ${groupId}`,
+        );
+        this.logger.warn(err.message, { error: err.stack || err.message });
+      } finally {
+        this.consumers.delete(groupId);
+      }
+    }
+  }
+
+  private async wait(delayMs: number): Promise<void> {
+    if (delayMs <= 0) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private getRetryDelay(attempt: number): number {
+    const baseDelay = this.kafkaConfig.retry.initialRetryTime;
+    const maxDelay = this.kafkaConfig.retry.maxRetryTime;
+    const exponent = Math.max(attempt - 1, 0);
+    const calculatedDelay = baseDelay * Math.pow(2, exponent);
+
+    return Math.min(calculatedDelay, maxDelay);
   }
 
   private normalizeError(error: unknown, fallbackMessage: string): Error {
