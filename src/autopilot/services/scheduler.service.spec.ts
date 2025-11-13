@@ -23,6 +23,8 @@ import {
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
 import { FinanceApiService } from '../../finance/finance-api.service';
+import { First2FinishService } from './first2finish.service';
+import { ITERATIVE_REVIEW_PHASE_NAME } from '../constants/review.constants';
 
 type MockedMethod<T extends (...args: any[]) => any> = jest.Mock<
   ReturnType<T>,
@@ -99,6 +101,7 @@ describe('SchedulerService (review phase deferral)', () => {
   let resourcesService: jest.Mocked<ResourcesService>;
   let phaseChangeNotificationService: jest.Mocked<PhaseChangeNotificationService>;
   let configService: jest.Mocked<ConfigService>;
+  let first2FinishService: jest.Mocked<First2FinishService>;
 
   beforeEach(() => {
     kafkaService = {
@@ -182,6 +185,10 @@ describe('SchedulerService (review phase deferral)', () => {
       get: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ConfigService>;
 
+    first2FinishService = {
+      handleIterativePhaseClosed: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<First2FinishService>;
+
     scheduler = new SchedulerService(
       kafkaService as unknown as KafkaService,
       challengeApiService as unknown as ChallengeApiService,
@@ -192,6 +199,7 @@ describe('SchedulerService (review phase deferral)', () => {
       resourcesService,
       phaseChangeNotificationService,
       configService,
+      first2FinishService,
     );
   });
 
@@ -272,6 +280,32 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.phaseId,
       'close',
     );
+  });
+
+  it('refreshes submissions when iterative review closes', async () => {
+    const payload = createPayload({
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'closed iterative review',
+      updatedPhases: [],
+    });
+
+    await scheduler.advancePhase(payload);
+
+    expect(
+      first2FinishService.handleIterativePhaseClosed,
+    ).toHaveBeenCalledWith(payload.challengeId);
   });
 
   it('assigns checkpoint winners after closing checkpoint review', async () => {

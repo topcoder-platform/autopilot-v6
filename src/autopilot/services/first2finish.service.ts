@@ -198,6 +198,18 @@ export class First2FinishService {
     }
   }
 
+  async handleIterativePhaseClosed(challengeId: string): Promise<void> {
+    try {
+      await this.prepareNextIterativeReview(challengeId);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to refresh iterative review submissions for challenge ${challengeId} after phase closure: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
   private async processFirst2FinishSubmission(
     challenge: IChallenge,
     submissionId?: string,

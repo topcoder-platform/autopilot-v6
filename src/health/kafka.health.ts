@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicator, HealthCheckError } from '@nestjs/terminus';
-import { KafkaService } from '../kafka/kafka.service';
+import {
+  KafkaConnectionState,
+  KafkaService,
+} from '../kafka/kafka.service';
 import { LoggerService } from '../common/services/logger.service';
 
 @Injectable()
@@ -13,22 +16,40 @@ export class KafkaHealthIndicator extends HealthIndicator {
 
   async isHealthy(key: string) {
     try {
+      const status = this.kafkaService.getKafkaStatus();
+      const timestamp = new Date().toISOString();
+
+      if (status.state === KafkaConnectionState.failed) {
+        throw new HealthCheckError(
+          'KafkaHealthCheck failed',
+          this.getStatus(key, false, {
+            state: status.state,
+            reconnectAttempts: status.reconnectAttempts,
+            reason:
+              status.reason || 'Kafka reconnection attempts exhausted',
+            timestamp,
+          }),
+        );
+      }
+
       const isConnected = await this.kafkaService.isConnected();
 
       if (!isConnected) {
         throw new HealthCheckError(
           'KafkaHealthCheck failed',
-          this.getStatus(key, false, { error: 'Kafka is not connected' }),
+          this.getStatus(key, false, {
+            state: status.state,
+            reconnectAttempts: status.reconnectAttempts,
+            reason: status.reason || 'Kafka is not connected',
+            timestamp,
+          }),
         );
       }
 
       return this.getStatus(key, true, {
-        status: 'up',
-        timestamp: new Date().toISOString(),
-        details: {
-          producer: 'connected',
-          consumers: 'active',
-        },
+        state: status.state,
+        reconnectAttempts: status.reconnectAttempts,
+        timestamp,
       });
     } catch (error: unknown) {
       const err = error as Error;
@@ -41,7 +62,7 @@ export class KafkaHealthIndicator extends HealthIndicator {
       throw new HealthCheckError(
         'KafkaHealthCheck failed',
         this.getStatus(key, false, {
-          error: err.message,
+          reason: err.message,
           timestamp: new Date().toISOString(),
         }),
       );
