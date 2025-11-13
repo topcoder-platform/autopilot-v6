@@ -27,6 +27,7 @@ import {
   APPROVAL_PHASE_NAMES,
   SUBMISSION_PHASE_NAME,
   TOPGEAR_SUBMISSION_PHASE_NAME,
+  ITERATIVE_REVIEW_PHASE_NAME,
   getRoleNamesForPhase,
   isPostMortemPhaseName,
 } from '../constants/review.constants';
@@ -45,6 +46,7 @@ import {
   getMemberReviewerConfigs,
   getReviewerConfigsForPhase,
 } from '../utils/reviewer.utils';
+import { First2FinishService } from './first2finish.service';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -108,6 +110,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly resourcesService: ResourcesService,
     private readonly phaseChangeNotificationService: PhaseChangeNotificationService,
     private readonly configService: ConfigService,
+    private readonly first2FinishService: First2FinishService,
   ) {
     this.submitterRoles = getNormalizedStringArray(
       this.configService.get('autopilot.submitterRoles'),
@@ -859,6 +862,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           this.registrationCloseRetryAttempts.delete(
             this.buildRegistrationPhaseKey(data.challengeId, data.phaseId),
           );
+        }
+
+        if (operation === 'close' && phaseName === ITERATIVE_REVIEW_PHASE_NAME) {
+          try {
+            await this.first2FinishService.handleIterativePhaseClosed(
+              data.challengeId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to refresh iterative submissions for challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
+              err.stack,
+            );
+          }
         }
 
         if (operation === 'open') {
