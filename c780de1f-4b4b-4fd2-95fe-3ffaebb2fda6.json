@@ -1,0 +1,5 @@
+
+> autopilot-service@0.0.1 pull:logs /home/jmgasper/Documents/Git/v6/autopilot-v6
+> ts-node scripts/fetch-autopilot-actions.ts c780de1f-4b4b-4fd2-95fe-3ffaebb2fda6
+
+[]
