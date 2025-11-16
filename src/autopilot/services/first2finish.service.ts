@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
@@ -41,6 +41,7 @@ export class First2FinishService {
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
+    @Inject(forwardRef(() => SchedulerService))
     private readonly schedulerService: SchedulerService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,

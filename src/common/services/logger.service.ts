@@ -16,6 +16,10 @@ export class LoggerService implements NestLoggerService {
     this.logger = this.createWinstonLogger();
   }
 
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
   private createWinstonLogger(): Logger {
     const baseTransports: any[] = [
       new transports.Console({
@@ -98,6 +102,9 @@ export class LoggerService implements NestLoggerService {
   }
 
   private formatMessage(message: unknown): string {
+    if (message instanceof Error) {
+      return message.stack || message.message || message.name;
+    }
     if (typeof message === 'string') {
       return message;
     }
@@ -107,27 +114,102 @@ export class LoggerService implements NestLoggerService {
     return String(message);
   }
 
-  error(message: unknown, meta?: Record<string, unknown>): void {
-    this.logger.error(this.formatMessage(message), meta);
+  error(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('error', message, optionalParams, true);
   }
 
-  warn(message: unknown, meta?: Record<string, unknown>): void {
-    this.logger.warn(this.formatMessage(message), meta);
+  warn(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('warn', message, optionalParams);
   }
 
-  info(message: unknown, meta?: Record<string, unknown>): void {
-    this.logger.info(this.formatMessage(message), meta);
+  info(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('info', message, optionalParams);
   }
 
-  debug(message: unknown, meta?: Record<string, unknown>): void {
-    this.logger.debug(this.formatMessage(message), meta);
+  debug(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('debug', message, optionalParams);
   }
 
-  verbose(message: unknown, meta?: Record<string, unknown>): void {
-    this.logger.verbose(this.formatMessage(message), meta);
+  verbose(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('verbose', message, optionalParams);
   }
 
-  log(message: unknown, meta?: Record<string, unknown>): void {
-    this.info(message, meta);
+  log(message: unknown, ...optionalParams: unknown[]): void {
+    this.logMessage('info', message, optionalParams);
+  }
+
+  private logMessage(
+    level: 'error' | 'warn' | 'info' | 'debug' | 'verbose',
+    message: unknown,
+    optionalParams: unknown[],
+    allowTrace = false,
+  ): void {
+    const { contextOverride, meta, trace } = this.extractLogOptions(
+      optionalParams,
+      allowTrace,
+    );
+    const context = contextOverride ?? this.context ?? 'App';
+    const payload: Record<string, unknown> = {
+      ...(meta ?? {}),
+      context,
+    };
+
+    if (trace) {
+      payload.trace = trace;
+    }
+
+    this.logger.log({
+      level,
+      message: this.formatMessage(message),
+      ...payload,
+    });
+  }
+
+  private extractLogOptions(
+    optionalParams: unknown[],
+    allowTrace: boolean,
+  ): {
+    contextOverride?: string;
+    meta?: Record<string, unknown>;
+    trace?: string;
+  } {
+    let trace: string | undefined;
+    const remainingParams: unknown[] = [];
+
+    optionalParams.forEach((param, index) => {
+      if (
+        allowTrace &&
+        trace === undefined &&
+        typeof param === 'string' &&
+        (param.includes('\n') ||
+          (index < optionalParams.length - 1 &&
+            typeof optionalParams[index + 1] === 'string'))
+      ) {
+        trace = param;
+      } else {
+        remainingParams.push(param);
+      }
+    });
+
+    let contextOverride: string | undefined;
+    let meta: Record<string, unknown> | undefined;
+
+    for (const param of remainingParams) {
+      if (typeof param === 'string' && contextOverride === undefined) {
+        contextOverride = param;
+        continue;
+      }
+
+      if (this.isRecord(param) && meta === undefined) {
+        meta = param;
+        continue;
+      }
+
+      if (param instanceof Error && meta === undefined) {
+        meta = { error: param.stack ?? param.message };
+      }
+    }
+
+    return { contextOverride, meta, trace };
   }
 }

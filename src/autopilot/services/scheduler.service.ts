@@ -1,8 +1,10 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { KafkaService } from '../../kafka/kafka.service';
@@ -110,6 +112,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly resourcesService: ResourcesService,
     private readonly phaseChangeNotificationService: PhaseChangeNotificationService,
     private readonly configService: ConfigService,
+    @Inject(forwardRef(() => First2FinishService))
     private readonly first2FinishService: First2FinishService,
   ) {
     this.submitterRoles = getNormalizedStringArray(

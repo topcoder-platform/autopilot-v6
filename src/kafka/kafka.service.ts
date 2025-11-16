@@ -4,15 +4,11 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
+import type {
   Consumer,
   MessagesStream,
   ProduceAcks,
   Producer,
-  jsonDeserializer,
-  jsonSerializer,
-  stringDeserializer,
-  stringSerializer,
 } from '@platformatic/kafka';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -29,6 +25,29 @@ import { IKafkaConfig } from '../common/types/kafka.types';
 type KafkaProducer = Producer<string, unknown, string, string>;
 type KafkaConsumer = Consumer<string, unknown, string, string>;
 type KafkaStream = MessagesStream<string, unknown, string, string>;
+
+type KafkaModule = typeof import('@platformatic/kafka');
+
+// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+const dynamicImport = new Function(
+  'specifier',
+  'return import(specifier);',
+) as (specifier: string) => Promise<KafkaModule>;
+
+let kafkaModulePromise: Promise<KafkaModule> | null = null;
+
+const loadKafkaModule = (): Promise<KafkaModule> => {
+  if (!kafkaModulePromise) {
+    kafkaModulePromise = dynamicImport('@platformatic/kafka').catch(
+      (error) => {
+        kafkaModulePromise = null;
+        throw error;
+      },
+    );
+  }
+
+  return kafkaModulePromise;
+};
 
 export enum KafkaConnectionState {
   initializing = 'initializing',
@@ -57,7 +76,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     resetTimeout: CONFIG.CIRCUIT_BREAKER.DEFAULT_RESET_TIMEOUT,
   });
   private readonly kafkaConfig: IKafkaConfig;
-  private producer: KafkaProducer;
+  private producer?: KafkaProducer;
+  private producerPromise?: Promise<KafkaProducer>;
   private readonly consumers = new Map<string, KafkaConsumer>();
   private readonly consumerStreams = new Map<string, KafkaStream>();
   private readonly consumerLoops = new Map<string, Promise<void>>();
@@ -90,12 +110,10 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
             this.configService.get('kafka.retry.retries') ||
             CONFIG.KAFKA.DEFAULT_RETRIES,
           maxRetryTime:
-            this.configService.get('kafka.retry.maxRetryTime') ||
-            CONFIG.KAFKA.DEFAULT_MAX_RETRY_TIME,
+          this.configService.get('kafka.retry.maxRetryTime') ||
+          CONFIG.KAFKA.DEFAULT_MAX_RETRY_TIME,
         },
       };
-
-      this.producer = this.createProducer();
     } catch (error) {
       const err = this.normalizeError(
         error,
@@ -111,7 +129,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
-      await this.producer.metadata({ topics: [] });
+      const producer = await this.ensureProducer();
+      await producer.metadata({ topics: [] });
       this.logger.info('Kafka service initialized successfully');
       this.kafkaState = KafkaConnectionState.ready;
       this.kafkaFailureReason = undefined;
@@ -247,7 +266,7 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
 
     await this.circuitBreaker.execute(async () => {
-      const consumer = this.getOrCreateConsumer(groupId);
+      const consumer = await this.getOrCreateConsumer(groupId);
 
       if (this.consumerStreams.has(groupId)) {
         await this.closeStream(groupId);
@@ -339,8 +358,13 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       );
 
       this.logger.info('Closing Kafka producer...');
-      await this.producer.close();
-      this.logger.info('Kafka connections closed successfully');
+      const producer = await this.getInitializedProducer();
+      if (producer) {
+        await producer.close();
+        this.logger.info('Kafka connections closed successfully');
+      } else {
+        this.logger.info('Kafka producer was not initialized; skipping close');
+      }
     } catch (error) {
       const err = this.normalizeError(error, 'Error during Kafka shutdown');
       this.logger.error(err.message, {
@@ -406,7 +430,54 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     };
   }
 
-  private createProducer(): KafkaProducer {
+  private async ensureProducer(): Promise<KafkaProducer> {
+    if (this.producer) {
+      return this.producer;
+    }
+
+    if (!this.producerPromise) {
+      this.producerPromise = this.createProducer();
+    }
+
+    try {
+      this.producer = await this.producerPromise;
+      return this.producer;
+    } catch (error) {
+      this.producerPromise = undefined;
+      throw error;
+    }
+  }
+
+  private async getInitializedProducer(): Promise<KafkaProducer | undefined> {
+    if (this.producer) {
+      return this.producer;
+    }
+
+    if (!this.producerPromise) {
+      return undefined;
+    }
+
+    try {
+      this.producer = await this.producerPromise;
+      return this.producer;
+    } catch (error) {
+      const err = this.normalizeError(
+        error,
+        'Kafka producer failed to initialize',
+      );
+      this.logger.warn(err.message, { error: err.stack || err.message });
+      return undefined;
+    }
+  }
+
+  private async createProducer(): Promise<KafkaProducer> {
+    const {
+      Producer,
+      ProduceAcks,
+      jsonSerializer,
+      stringSerializer,
+    } = await loadKafkaModule();
+
     return new Producer({
       clientId: this.kafkaConfig.clientId,
       bootstrapBrokers: this.kafkaConfig.brokers,
@@ -425,11 +496,17 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     });
   }
 
-  private getOrCreateConsumer(groupId: string): KafkaConsumer {
+  private async getOrCreateConsumer(groupId: string): Promise<KafkaConsumer> {
     const existing = this.consumers.get(groupId);
     if (existing) {
       return existing;
     }
+
+    const {
+      Consumer,
+      jsonDeserializer,
+      stringDeserializer,
+    } = await loadKafkaModule();
 
     const consumer = new Consumer({
       clientId: `${this.kafkaConfig.clientId}-${groupId}`,
@@ -605,9 +682,11 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     correlationId: string,
     timestamp: number,
   ): Promise<void> {
+    const producer = await this.ensureProducer();
+    const { ProduceAcks } = await loadKafkaModule();
     const headers = this.buildHeaders(correlationId, timestamp);
 
-    await this.producer.send({
+    await producer.send({
       messages: values.map((value) => ({
         topic,
         value,
