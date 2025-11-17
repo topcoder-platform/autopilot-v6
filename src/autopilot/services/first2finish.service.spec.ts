@@ -13,6 +13,7 @@ import type {
   IPhase,
   IChallengeReviewer,
 } from '../../challenge/interfaces/challenge.interface';
+import type { ChallengeCompletionService } from './challenge-completion.service';
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
   REGISTRATION_PHASE_NAME,
@@ -105,6 +106,7 @@ describe('First2FinishService', () => {
   let reviewService: jest.Mocked<ReviewService>;
   let resourcesService: jest.Mocked<ResourcesService>;
   let configService: jest.Mocked<ConfigService>;
+  let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let service: First2FinishService;
 
   beforeEach(() => {
@@ -132,6 +134,7 @@ describe('First2FinishService', () => {
 
     resourcesService = {
       getReviewerResources: jest.fn(),
+      getMemberHandleMap: jest.fn(),
     } as unknown as jest.Mocked<ResourcesService>;
 
     configService = {
@@ -146,16 +149,22 @@ describe('First2FinishService', () => {
       }),
     } as unknown as jest.Mocked<ConfigService>;
 
+    challengeCompletionService = {
+      completeChallengeWithWinners: jest.fn(),
+    } as unknown as jest.Mocked<ChallengeCompletionService>;
+
     service = new First2FinishService(
       challengeApiService,
       schedulerService,
       reviewService,
       resourcesService,
       configService,
+      challengeCompletionService,
     );
 
     reviewService.getReviewerSubmissionPairs.mockResolvedValue(new Set());
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    resourcesService.getMemberHandleMap.mockResolvedValue(new Map());
   });
 
   afterEach(() => {
@@ -490,6 +499,74 @@ describe('First2FinishService', () => {
         phaseId: registrationPhase.id,
         state: 'END',
       }),
+    );
+
+    expect(challengeCompletionService.completeChallengeWithWinners).toHaveBeenCalledWith(
+      challenge.id,
+      [
+        {
+          handle: 'submitter',
+          placement: 1,
+          userId: 4001,
+        },
+      ],
+      { reason: 'iterative-review-pass' },
+    );
+  });
+
+  it('uses member handle map when completing after a passing iterative review', async () => {
+    const iterativePhase = buildIterativePhase({
+      id: 'iter-phase',
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [iterativePhase],
+      reviewers: [buildReviewer()],
+    });
+
+    resourcesService.getMemberHandleMap.mockResolvedValue(
+      new Map([['4001', 'resolvedHandle']]),
+    );
+    reviewService.getScorecardPassingScore.mockResolvedValue(80);
+
+    await service.handleIterativeReviewCompletion(
+      challenge,
+      iterativePhase,
+      {
+        score: 90,
+        scorecardId: 'iterative-scorecard',
+        resourceId: 'resource-1',
+        submissionId: 'submission-1',
+        phaseId: iterativePhase.id,
+      },
+      {
+        reviewId: 'review-1',
+        challengeId: challenge.id,
+        submissionId: 'submission-1',
+        phaseId: iterativePhase.id,
+        scorecardId: 'iterative-scorecard',
+        reviewerResourceId: 'resource-1',
+        reviewerHandle: 'iterativeReviewer',
+        reviewerMemberId: '2001',
+        submitterHandle: 'submitter',
+        submitterMemberId: '4001',
+        completedAt: iso(),
+        initialScore: 90,
+      },
+    );
+
+    expect(challengeCompletionService.completeChallengeWithWinners).toHaveBeenCalledWith(
+      challenge.id,
+      [
+        {
+          handle: 'resolvedHandle',
+          placement: 1,
+          userId: 4001,
+        },
+      ],
+      { reason: 'iterative-review-pass' },
     );
   });
 });

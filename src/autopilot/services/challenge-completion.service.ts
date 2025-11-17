@@ -411,4 +411,18 @@ export class ChallengeCompletionService {
     );
     return true;
   }
+
+  async completeChallengeWithWinners(
+    challengeId: string,
+    winners: IChallengeWinner[],
+    context?: { reason?: string },
+  ): Promise<void> {
+    await this.challengeApiService.completeChallenge(challengeId, winners);
+    // Trigger finance payments generation after marking the challenge as completed
+    void this.financeApiService.generateChallengePayments(challengeId);
+    const suffix = context?.reason ? ` (${context.reason})` : '';
+    this.logger.log(
+      `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s)${suffix}.`,
+    );
+  }
 }

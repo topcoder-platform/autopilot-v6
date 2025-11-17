@@ -27,6 +27,7 @@ import {
 } from '../constants/challenge.constants';
 import { isActiveStatus } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
+import { ChallengeCompletionService } from './challenge-completion.service';
 
 @Injectable()
 export class First2FinishService {
@@ -46,6 +47,7 @@ export class First2FinishService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
+    private readonly challengeCompletionService: ChallengeCompletionService,
   ) {
     this.iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
       'Iterative Reviewer',
@@ -189,6 +191,8 @@ export class First2FinishService {
           projectStatus: challenge.status,
         });
       }
+
+      await this.completeFirst2FinishChallenge(challenge, payload);
     } else {
       this.logger.log(
         `Iterative review failed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore}, passing ${passingScore}).`,
@@ -197,6 +201,57 @@ export class First2FinishService {
         payload.submissionId ?? review.submissionId ?? undefined;
       await this.prepareNextIterativeReview(challenge.id, lastSubmissionId);
     }
+  }
+
+  private async completeFirst2FinishChallenge(
+    challenge: IChallenge,
+    payload: ReviewCompletedPayload,
+  ): Promise<void> {
+    if (!isActiveStatus(challenge.status)) {
+      this.logger.debug(
+        `Skipping completion for challenge ${challenge.id}; status ${challenge.status ?? 'UNKNOWN'} is not ACTIVE.`,
+      );
+      return;
+    }
+
+    const memberIdRaw = payload.submitterMemberId ?? '';
+    const numericMemberId = Number(memberIdRaw);
+
+    if (!Number.isFinite(numericMemberId)) {
+      this.logger.warn(
+        `Unable to complete challenge ${challenge.id} after passing iterative review; submitterMemberId is invalid (${payload.submitterMemberId}).`,
+      );
+      return;
+    }
+
+    let handle = payload.submitterHandle?.trim();
+    try {
+      const handleMap = await this.resourcesService.getMemberHandleMap(
+        challenge.id,
+        [String(memberIdRaw)],
+      );
+      handle = handleMap.get(String(memberIdRaw)) ?? handle;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.warn(
+        `Failed to resolve handle for member ${memberIdRaw} on challenge ${challenge.id}; using provided payload handle.`,
+        err.stack,
+      );
+    }
+
+    await this.challengeCompletionService.completeChallengeWithWinners(
+      challenge.id,
+      [
+        {
+          userId: numericMemberId,
+          handle: handle && handle.length ? handle : String(memberIdRaw),
+          placement: 1,
+        },
+      ],
+      {
+        reason: 'iterative-review-pass',
+      },
+    );
   }
 
   async handleIterativePhaseClosed(challengeId: string): Promise<void> {
