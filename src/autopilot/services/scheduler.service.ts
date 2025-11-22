@@ -837,6 +837,48 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
         let skipPhaseChain = false;
         let skipFinalization = false;
+        let appealsOpenedImmediately = false;
+
+        if (operation === 'close' && isReviewPhase && result.next?.phases?.length) {
+          const appealsSuccessors = result.next.phases.filter(
+            (phase) =>
+              this.isAppealsPhaseName(phase.name) ||
+              this.isAppealsResponsePhaseName(phase.name),
+          );
+
+          if (appealsSuccessors.length > 0) {
+            try {
+              if (this.phaseChainCallback) {
+                this.logger.log(
+                  `[APPEALS FAST-TRACK] Closing Review for challenge ${data.challengeId}; opening ${appealsSuccessors.length} appeals-related phase(s) immediately.`,
+                );
+
+                const callbackResult = this.phaseChainCallback(
+                  data.challengeId,
+                  data.projectId,
+                  data.projectStatus ?? ChallengeStatusEnum.ACTIVE,
+                  appealsSuccessors,
+                );
+
+                if (callbackResult instanceof Promise) {
+                  await callbackResult;
+                }
+
+                appealsOpenedImmediately = true;
+              } else {
+                this.logger.warn(
+                  `[APPEALS FAST-TRACK] Phase chain callback not set; unable to auto-open appeals for challenge ${data.challengeId}.`,
+                );
+              }
+            } catch (error) {
+              const err = error as Error;
+              this.logger.error(
+                `[APPEALS FAST-TRACK] Failed to fast-open appeals for challenge ${data.challengeId}: ${err.message}`,
+                err.stack,
+              );
+            }
+          }
+        }
 
         if (operation === 'close' && isReviewPhase) {
           this.reviewCloseRetryAttempts.delete(
@@ -1058,16 +1100,31 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           result.next.phases &&
           result.next.phases.length > 0
         ) {
+          const phasesToOpen = appealsOpenedImmediately
+            ? result.next.phases.filter(
+                (phase) =>
+                  !this.isAppealsPhaseName(phase.name) &&
+                  !this.isAppealsResponsePhaseName(phase.name),
+              )
+            : result.next.phases;
+
+          if (!phasesToOpen.length) {
+            this.logger.log(
+              `[PHASE CHAIN] All successor appeals phases already opened for challenge ${data.challengeId}; skipping additional phase chaining.`,
+            );
+            return;
+          }
+
           try {
             if (this.phaseChainCallback) {
               this.logger.log(
-                `[PHASE CHAIN] Triggering phase chain callback for challenge ${data.challengeId} with ${result.next.phases.length} next phases`,
+                `[PHASE CHAIN] Triggering phase chain callback for challenge ${data.challengeId} with ${phasesToOpen.length} next phases`,
               );
               const callbackResult = this.phaseChainCallback(
                 data.challengeId,
                 data.projectId,
                 data.projectStatus,
-                result.next.phases,
+                phasesToOpen,
               );
 
               // Handle both sync and async callbacks
