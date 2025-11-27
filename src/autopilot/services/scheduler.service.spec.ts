@@ -308,6 +308,31 @@ describe('SchedulerService (review phase deferral)', () => {
     ).toHaveBeenCalledWith(payload.challengeId);
   });
 
+  it('skips iterative submission refresh when instructed', async () => {
+    const payload = createPayload({
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+      skipIterativePhaseRefresh: true,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'closed iterative review',
+      updatedPhases: [],
+    });
+
+    await scheduler.advancePhase(payload);
+
+    expect(first2FinishService.handleIterativePhaseClosed).not.toHaveBeenCalled();
+  });
+
   it('assigns checkpoint winners after closing checkpoint review', async () => {
     const payload = createPayload({
       phaseId: 'checkpoint-phase',

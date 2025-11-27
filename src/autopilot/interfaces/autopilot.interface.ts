@@ -31,6 +31,8 @@ export interface PhaseTransitionPayload {
   date?: string;
   challengeId: string; // Changed to string to support UUIDs
   preventFinalization?: boolean;
+  // When closing Iterative Review phases after a passing score, skip follow-up iterative processing
+  skipIterativePhaseRefresh?: boolean;
 }
 
 export interface ChallengeUpdatePayload {

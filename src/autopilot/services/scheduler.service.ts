@@ -909,7 +909,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
-        if (operation === 'close' && phaseName === ITERATIVE_REVIEW_PHASE_NAME) {
+        if (
+          operation === 'close' &&
+          phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
+          !data.skipIterativePhaseRefresh
+        ) {
           try {
             await this.first2FinishService.handleIterativePhaseClosed(
               data.challengeId,
