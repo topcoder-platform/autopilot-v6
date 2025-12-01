@@ -243,6 +243,46 @@ describe('SchedulerService (review phase deferral)', () => {
     ).toBeGreaterThan(Date.now());
   });
 
+  it('opens appeals immediately after closing review even when successors are not returned', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'template-review',
+      name: 'Review',
+      isOpen: true,
+    });
+
+    const appealsPhase = createPhase({
+      id: 'phase-appeals',
+      phaseId: 'template-appeals',
+      name: 'Appeals',
+      isOpen: false,
+      actualStartDate: null,
+      actualEndDate: null,
+      scheduledStartDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      scheduledEndDate: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'closed review',
+      updatedPhases: [phaseDetails, appealsPhase],
+    });
+
+    const callback = jest.fn();
+    scheduler.setPhaseChainCallback(callback);
+
+    await scheduler.advancePhase(payload);
+
+    expect(callback).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.projectId,
+      payload.projectStatus,
+      [expect.objectContaining({ id: appealsPhase.id })],
+    );
+  });
+
   it('closes review phases when no pending reviews remain', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({

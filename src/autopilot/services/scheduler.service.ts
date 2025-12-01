@@ -839,12 +839,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         let skipFinalization = false;
         let appealsOpenedImmediately = false;
 
-        if (operation === 'close' && isReviewPhase && result.next?.phases?.length) {
-          const appealsSuccessors = result.next.phases.filter(
-            (phase) =>
-              this.isAppealsPhaseName(phase.name) ||
-              this.isAppealsResponsePhaseName(phase.name),
-          );
+        if (operation === 'close' && isReviewPhase) {
+          let appealsSuccessors =
+            result.next?.phases?.filter(
+              (phase) =>
+                this.isAppealsPhaseName(phase.name) ||
+                this.isAppealsResponsePhaseName(phase.name),
+            ) ?? [];
+
+          if (
+            appealsSuccessors.length === 0 &&
+            result.updatedPhases &&
+            result.updatedPhases.length > 0
+          ) {
+            appealsSuccessors = result.updatedPhases.filter(
+              (phase) =>
+                this.isAppealsPhaseName(phase.name) &&
+                !phase.isOpen &&
+                !phase.actualStartDate &&
+                !phase.actualEndDate,
+            );
+          }
 
           if (appealsSuccessors.length > 0) {
             try {
