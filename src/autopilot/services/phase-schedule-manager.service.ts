@@ -3,11 +3,13 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
   IChallenge,
   IPhase,
+  IChallengeReviewer,
 } from '../../challenge/interfaces/challenge.interface';
 import { SchedulerService } from './scheduler.service';
 import { PhaseReviewService } from './phase-review.service';
 import { ReviewAssignmentService } from './review-assignment.service';
 import { ReviewService } from '../../review/review.service';
+import { ReviewApiService } from '../../review/review-api.service';
 import {
   AutopilotOperator,
   ChallengeUpdatePayload,
@@ -44,6 +46,7 @@ export class PhaseScheduleManager {
     private readonly phaseReviewService: PhaseReviewService,
     private readonly reviewAssignmentService: ReviewAssignmentService,
     private readonly reviewService: ReviewService,
+    private readonly reviewApiService: ReviewApiService,
     private readonly configService: ConfigService,
   ) {
     this.schedulerService.setPhaseChainCallback(
@@ -292,7 +295,7 @@ export class PhaseScheduleManager {
         this.logger.log(
           `[REVIEW OPPORTUNITIES] Detected transition to ACTIVE for updated challenge ${message.id}; review opportunity creation pending.`,
         );
-        // TODO: createReviewOpportunitiesForChallenge(challengeDetails);
+        await this.createReviewOpportunitiesForChallenge(challengeDetails);
       }
 
       if (!isActiveStatus(challengeDetails.status)) {
@@ -438,6 +441,201 @@ export class PhaseScheduleManager {
         err.stack,
       );
     }
+  }
+
+  private async createReviewOpportunitiesForChallenge(
+    challenge: IChallenge,
+  ): Promise<void> {
+    const reviewers = (challenge.reviewers ?? []).filter(
+      (reviewer) =>
+        reviewer.shouldOpenOpportunity !== false &&
+        reviewer.isMemberReview !== false,
+    );
+
+    if (!reviewers.length) {
+      this.logger.log(
+        `[REVIEW OPPORTUNITIES] No eligible reviewer configs for challenge ${challenge.id}; skipping opportunity creation.`,
+      );
+      return;
+    }
+
+    let existing: any[] = [];
+    try {
+      existing = await this.reviewApiService.getReviewOpportunitiesByChallengeId(
+        challenge.id,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[REVIEW OPPORTUNITIES] Failed to fetch existing opportunities for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      // Continue to attempt creation to avoid silently skipping
+    }
+
+    const existingTypes = new Set(
+      existing
+        .map((item) => (item?.type ?? '').toString().trim().toUpperCase())
+        .filter((type) => type.length > 0),
+    );
+
+    const firstPlacePrize = this.getFirstPlacePrize(challenge);
+    let createdCount = 0;
+
+    for (const reviewer of reviewers) {
+      const type =
+        reviewer.type?.toString().trim().toUpperCase() || 'REGULAR_REVIEW';
+
+      if (existingTypes.has(type)) {
+        this.logger.log(
+          `[REVIEW OPPORTUNITIES] Opportunity of type ${type} already exists for challenge ${challenge.id}; skipping duplicate creation.`,
+        );
+        continue;
+      }
+
+      const phase = this.findPhaseForReviewer(challenge, reviewer);
+      if (!phase) {
+        this.logger.warn(
+          `[REVIEW OPPORTUNITIES] Unable to locate phase for reviewer ${reviewer.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
+        );
+        continue;
+      }
+
+      const startDate =
+        phase.scheduledStartDate || phase.actualStartDate || null;
+      const duration = this.resolvePhaseDuration(phase);
+
+      if (!startDate || duration <= 0) {
+        this.logger.warn(
+          `[REVIEW OPPORTUNITIES] Missing start date or duration for phase ${phase.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
+        );
+        continue;
+      }
+
+      const payment = this.computeReviewPayment(
+        firstPlacePrize,
+        reviewer,
+        challenge.id,
+        type,
+      );
+
+      if (!payment) {
+        continue;
+      }
+
+      const openPositions = Math.max(reviewer.memberReviewerCount ?? 1, 1);
+
+      const payload = {
+        challengeId: challenge.id,
+        type,
+        openPositions,
+        startDate,
+        duration,
+        basePayment: payment.basePayment,
+        incrementalPayment: payment.incrementalPayment,
+      };
+
+      this.logger.log(
+        `[REVIEW OPPORTUNITIES] Creating opportunity for challenge ${challenge.id} (type ${type}, positions ${openPositions}, start ${startDate}, duration ${duration}, base ${payment.basePayment}, incremental ${payment.incrementalPayment}).`,
+      );
+
+      const result =
+        await this.reviewApiService.createReviewOpportunity(payload);
+      if (result) {
+        createdCount += 1;
+      } else {
+        this.logger.warn(
+          `[REVIEW OPPORTUNITIES] Review API did not confirm creation for challenge ${challenge.id} (type ${type}). Check logs for details.`,
+        );
+      }
+    }
+
+    if (createdCount > 0) {
+      this.logger.log(
+        `[REVIEW OPPORTUNITIES] Created ${createdCount} opportunity(ies) for challenge ${challenge.id}.`,
+      );
+    } else {
+      this.logger.log(
+        `[REVIEW OPPORTUNITIES] No review opportunities created for challenge ${challenge.id}.`,
+      );
+    }
+  }
+
+  private findPhaseForReviewer(
+    challenge: IChallenge,
+    reviewer: IChallengeReviewer,
+  ): IPhase | undefined {
+    if (!reviewer.phaseId) {
+      return undefined;
+    }
+
+    return (challenge.phases ?? []).find(
+      (phase) => phase.phaseId === reviewer.phaseId,
+    );
+  }
+
+  private resolvePhaseDuration(phase: IPhase): number {
+    if (Number.isFinite(phase.duration) && (phase.duration as number) > 0) {
+      return phase.duration as number;
+    }
+
+    const start = phase.scheduledStartDate || phase.actualStartDate;
+    const end = phase.scheduledEndDate || phase.actualEndDate;
+
+    if (!start || !end) {
+      return 0;
+    }
+
+    const startTime = new Date(start).getTime();
+    const endTime = new Date(end).getTime();
+
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      return 0;
+    }
+
+    const diffMs = endTime - startTime;
+    return diffMs > 0 ? Math.floor(diffMs / 1000) : 0;
+  }
+
+  private getFirstPlacePrize(challenge: IChallenge): number {
+    const placement = (challenge.prizeSets ?? []).find(
+      (set) => set.type === 'PLACEMENT',
+    );
+
+    const firstPrize = placement?.prizes?.[0]?.value;
+    const normalized = Number(firstPrize);
+
+    return Number.isFinite(normalized) && normalized > 0 ? normalized : 0;
+  }
+
+  private computeReviewPayment(
+    firstPlacePrize: number,
+    reviewer: IChallengeReviewer,
+    challengeId: string,
+    type: string,
+  ): { basePayment: number; incrementalPayment: number } | null {
+    const fixedAmount = Math.max(Number(reviewer.fixedAmount ?? 0), 0);
+    const baseCoefficient = Math.max(Number(reviewer.baseCoefficient ?? 0), 0);
+    const incrementalCoefficient = Math.max(
+      Number(reviewer.incrementalCoefficient ?? 0),
+      0,
+    );
+
+    const basePayment = fixedAmount + baseCoefficient * firstPlacePrize;
+    let incrementalPayment = incrementalCoefficient * firstPlacePrize;
+
+    if (incrementalPayment <= 0 && basePayment > 0) {
+      incrementalPayment = basePayment;
+    }
+
+    if (basePayment <= 0 || incrementalPayment <= 0) {
+      this.logger.warn(
+        `[REVIEW OPPORTUNITIES] Computed non-positive payment (base ${basePayment}, incremental ${incrementalPayment}) for reviewer ${reviewer.id} (type ${type}) on challenge ${challengeId}; skipping opportunity creation.`,
+      );
+      return null;
+    }
+
+    return { basePayment, incrementalPayment };
   }
 
   private resolveScorecardIdForOpenPhase(
