@@ -50,6 +50,7 @@ type ReviewServiceMock = {
   getActiveContestSubmissionIds: MockedMethod<ReviewService['getActiveContestSubmissionIds']>;
   getFailedScreeningSubmissionIds: MockedMethod<ReviewService['getFailedScreeningSubmissionIds']>;
   getPassedScreeningSubmissionIds: MockedMethod<ReviewService['getPassedScreeningSubmissionIds']>;
+  getCompletedReviewCountForPhase: MockedMethod<ReviewService['getCompletedReviewCountForPhase']>;
 };
 
 type KafkaServiceMock = {
@@ -124,8 +125,28 @@ describe('SchedulerService (review phase deferral)', () => {
     challengeApiService.cancelChallenge.mockResolvedValue(undefined);
     challengeApiService.getChallengeById.mockResolvedValue({
       id: 'challenge-1',
-      phases: [],
-      reviewers: [],
+      phases: [
+        createPhase({
+          id: 'phase-1',
+          phaseId: 'phase-1',
+          name: 'Review',
+        }),
+      ],
+      reviewers: [
+        {
+          id: 'reviewer-config-1',
+          scorecardId: 'scorecard-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: 'phase-1',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: null,
+          shouldOpenOpportunity: false,
+        },
+      ],
       legacy: {},
     } as unknown as IChallenge);
     challengeApiService.createPostMortemPhase.mockResolvedValue(
@@ -158,10 +179,13 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getFailedScreeningSubmissionIds']>(),
       getPassedScreeningSubmissionIds:
         createMockMethod<ReviewService['getPassedScreeningSubmissionIds']>(),
+      getCompletedReviewCountForPhase:
+        createMockMethod<ReviewService['getCompletedReviewCountForPhase']>(),
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
       new Set(),
@@ -173,7 +197,7 @@ describe('SchedulerService (review phase deferral)', () => {
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
-      getReviewerResources: jest.fn().mockResolvedValue([]),
+      getReviewerResources: jest.fn().mockResolvedValue([{} as any]),
       ensureResourcesForMembers: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<ResourcesService>;
 
@@ -241,6 +265,55 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(
       new Date(rescheduledPayload.date as string).getTime(),
     ).toBeGreaterThan(Date.now());
+  });
+
+  it('defers closing review phases when no reviewers are defined', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers closing review phases when no reviews are completed', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(0);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
   it('opens appeals immediately after closing review even when successors are not returned', async () => {

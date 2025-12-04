@@ -585,11 +585,34 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             true,
           );
 
+          if (coverage.expected <= 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              undefined,
+              'no reviewers are defined for this phase',
+            );
+            return;
+          }
+
           if (!coverage.satisfied) {
             await this.deferReviewPhaseClosure(
               data,
               undefined,
               `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
+            );
+            return;
+          }
+
+          const completedReviews =
+            await this.reviewService.getCompletedReviewCountForPhase(
+              data.phaseId,
+            );
+
+          if (completedReviews <= 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              completedReviews,
+              'no completed reviews found',
             );
             return;
           }
