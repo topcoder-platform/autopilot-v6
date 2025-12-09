@@ -32,6 +32,7 @@ import {
   getReviewerConfigsForPhase,
   selectScorecardId,
 } from '../utils/reviewer.utils';
+import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -48,6 +49,7 @@ export class PhaseScheduleManager {
     private readonly reviewService: ReviewService,
     private readonly reviewApiService: ReviewApiService,
     private readonly configService: ConfigService,
+    private readonly dbLogger: AutopilotDbLoggerService,
   ) {
     this.schedulerService.setPhaseChainCallback(
       (
@@ -451,6 +453,16 @@ export class PhaseScheduleManager {
   private async createReviewOpportunitiesForChallenge(
     challenge: IChallenge,
   ): Promise<void> {
+    await this.dbLogger.logAction('review.opportunities.evaluate', {
+      status: 'INFO',
+      source: PhaseScheduleManager.name,
+      challengeId: challenge.id,
+      details: {
+        reviewerCount: challenge.reviewers?.length ?? 0,
+        status: challenge.status,
+      },
+    });
+
     const reviewers = (challenge.reviewers ?? []).filter(
       (reviewer) =>
         reviewer.shouldOpenOpportunity !== false &&
@@ -461,6 +473,12 @@ export class PhaseScheduleManager {
       this.logger.log(
         `[REVIEW OPPORTUNITIES] No eligible reviewer configs for challenge ${challenge.id}; skipping opportunity creation.`,
       );
+      await this.dbLogger.logAction('review.opportunities.evaluate', {
+        status: 'INFO',
+        source: PhaseScheduleManager.name,
+        challengeId: challenge.id,
+        details: { note: 'No eligible reviewer configs' },
+      });
       return;
     }
 
@@ -543,6 +561,12 @@ export class PhaseScheduleManager {
       this.logger.log(
         `[REVIEW OPPORTUNITIES] Creating opportunity for challenge ${challenge.id} (type ${type}, positions ${openPositions}, start ${startDate}, duration ${duration}, base ${payment.basePayment}, incremental ${payment.incrementalPayment}).`,
       );
+      await this.dbLogger.logAction('review.opportunities.create', {
+        status: 'INFO',
+        source: PhaseScheduleManager.name,
+        challengeId: challenge.id,
+        details: payload,
+      });
 
       const result =
         await this.reviewApiService.createReviewOpportunity(payload);

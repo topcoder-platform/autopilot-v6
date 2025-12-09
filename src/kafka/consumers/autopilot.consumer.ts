@@ -98,6 +98,10 @@ export class AutopilotConsumer {
               );
               break;
             case KAFKA_TOPICS.CHALLENGE_CREATED:
+              await this.autopilotService.handleNewChallenge(
+                payload as ChallengeUpdatePayload,
+              );
+              break;
             case KAFKA_TOPICS.CHALLENGE_UPDATE:
             case KAFKA_TOPICS.CHALLENGE_UPDATED:
               await this.autopilotService.handleChallengeUpdate(
