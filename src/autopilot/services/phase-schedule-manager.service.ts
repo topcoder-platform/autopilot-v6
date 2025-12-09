@@ -230,7 +230,7 @@ export class PhaseScheduleManager {
         this.logger.log(
           `[REVIEW OPPORTUNITIES] Detected transition to ACTIVE for new challenge ${challenge.id}; review opportunity creation pending.`,
         );
-        // TODO: createReviewOpportunitiesForChallenge(challengeDetails);
+        await this.createReviewOpportunitiesForChallenge(challengeDetails);
       }
 
       if (!isActiveStatus(challengeDetails.status)) {
