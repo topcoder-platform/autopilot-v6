@@ -296,6 +296,11 @@ export class PhaseScheduleManager {
           `[REVIEW OPPORTUNITIES] Detected transition to ACTIVE for updated challenge ${message.id}; review opportunity creation pending.`,
         );
         await this.createReviewOpportunitiesForChallenge(challengeDetails);
+      } else if (isActiveStatus(challengeDetails.status)) {
+        this.logger.debug(
+          `[REVIEW OPPORTUNITIES] Challenge ${message.id} already ACTIVE; ensuring review opportunities exist.`,
+        );
+        await this.createReviewOpportunitiesForChallenge(challengeDetails);
       }
 
       if (!isActiveStatus(challengeDetails.status)) {
