@@ -484,6 +484,7 @@ describe('First2FinishService', () => {
       expect.objectContaining({
         phaseId: iterativePhase.id,
         state: 'END',
+        skipIterativePhaseRefresh: true,
       }),
     );
     expect(schedulerService.advancePhase).toHaveBeenNthCalledWith(

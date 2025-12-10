@@ -585,11 +585,34 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             true,
           );
 
+          if (coverage.expected <= 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              undefined,
+              'no reviewers are defined for this phase',
+            );
+            return;
+          }
+
           if (!coverage.satisfied) {
             await this.deferReviewPhaseClosure(
               data,
               undefined,
               `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
+            );
+            return;
+          }
+
+          const completedReviews =
+            await this.reviewService.getCompletedReviewCountForPhase(
+              data.phaseId,
+            );
+
+          if (completedReviews <= 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              completedReviews,
+              'no completed reviews found',
             );
             return;
           }
@@ -839,12 +862,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         let skipFinalization = false;
         let appealsOpenedImmediately = false;
 
-        if (operation === 'close' && isReviewPhase && result.next?.phases?.length) {
-          const appealsSuccessors = result.next.phases.filter(
-            (phase) =>
-              this.isAppealsPhaseName(phase.name) ||
-              this.isAppealsResponsePhaseName(phase.name),
-          );
+        if (operation === 'close' && isReviewPhase) {
+          let appealsSuccessors =
+            result.next?.phases?.filter(
+              (phase) =>
+                this.isAppealsPhaseName(phase.name) ||
+                this.isAppealsResponsePhaseName(phase.name),
+            ) ?? [];
+
+          if (
+            appealsSuccessors.length === 0 &&
+            result.updatedPhases &&
+            result.updatedPhases.length > 0
+          ) {
+            appealsSuccessors = result.updatedPhases.filter(
+              (phase) =>
+                this.isAppealsPhaseName(phase.name) &&
+                !phase.isOpen &&
+                !phase.actualStartDate &&
+                !phase.actualEndDate,
+            );
+          }
 
           if (appealsSuccessors.length > 0) {
             try {
@@ -909,7 +947,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
-        if (operation === 'close' && phaseName === ITERATIVE_REVIEW_PHASE_NAME) {
+        if (
+          operation === 'close' &&
+          phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
+          !data.skipIterativePhaseRefresh
+        ) {
           try {
             await this.first2FinishService.handleIterativePhaseClosed(
               data.challengeId,

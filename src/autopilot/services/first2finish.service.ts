@@ -151,6 +151,7 @@ export class First2FinishService {
       state: 'END',
       operator: AutopilotOperator.SYSTEM,
       projectStatus: challenge.status,
+      skipIterativePhaseRefresh: finalScore >= passingScore,
     });
 
     if (finalScore >= passingScore) {
