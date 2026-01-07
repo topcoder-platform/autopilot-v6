@@ -46,6 +46,7 @@ const challengeWithRelationsArgs =
       },
       metadata: true,
       winners: true,
+      skills: true,
       prizeSets: {
         include: { prizes: true },
       },
@@ -708,7 +709,8 @@ export class ChallengeApiService {
       prizeSets:
         challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
       terms: [],
-      skills: [],
+      skills:
+        challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
       attachments: [],
       track: challenge.track?.name ?? '',
       type: challenge.type?.name ?? '',
