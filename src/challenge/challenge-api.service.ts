@@ -443,12 +443,15 @@ export class ChallengeApiService {
         );
       }
 
+      let phaseUpdated = false;
       try {
         await this.prisma.$transaction(async (tx) => {
           if (operation === 'open') {
-            currentPhaseNames.add(targetPhase.name);
-            await tx.challengePhase.update({
-              where: { id: targetPhase.id },
+            const updateResult = await tx.challengePhase.updateMany({
+              where: {
+                id: targetPhase.id,
+                isOpen: false,
+              },
               data: {
                 isOpen: true,
                 actualStartDate: targetPhase.actualStartDate ?? now,
@@ -462,15 +465,31 @@ export class ChallengeApiService {
                   : {}),
               },
             });
+
+            if (updateResult.count === 0) {
+              return;
+            }
+
+            phaseUpdated = true;
+            currentPhaseNames.add(targetPhase.name);
           } else {
-            currentPhaseNames.delete(targetPhase.name);
-            await tx.challengePhase.update({
-              where: { id: targetPhase.id },
+            const updateResult = await tx.challengePhase.updateMany({
+              where: {
+                id: targetPhase.id,
+                isOpen: true,
+              },
               data: {
                 isOpen: false,
                 actualEndDate: targetPhase.actualEndDate ?? now,
               },
             });
+
+            if (updateResult.count === 0) {
+              return;
+            }
+
+            phaseUpdated = true;
+            currentPhaseNames.delete(targetPhase.name);
           }
 
           await tx.challenge.update({
@@ -495,6 +514,27 @@ export class ChallengeApiService {
           status: 'ERROR',
           source: ChallengeApiService.name,
           details: { phaseId, operation, error: err.message },
+        });
+        return result;
+      }
+
+      if (!phaseUpdated) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${targetPhase.name} is already ${
+            operation === 'open' ? 'open' : 'closed'
+          }`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: {
+            phaseId,
+            operation,
+            result,
+            note: 'Skipped update because phase state changed during transaction.',
+          },
         });
         return result;
       }
