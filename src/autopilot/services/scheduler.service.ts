@@ -257,6 +257,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     ) => Promise<void> | void,
   ): void {
     this.phaseChainCallback = callback;
+    this.logger.log(
+      `[PHASE CHAIN] Phase chain callback registered (pid ${process.pid}).`,
+    );
   }
 
   async schedulePhaseTransition(

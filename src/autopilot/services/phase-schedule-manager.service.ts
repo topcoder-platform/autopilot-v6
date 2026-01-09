@@ -68,6 +68,9 @@ export class PhaseScheduleManager {
         );
       },
     );
+    this.logger.log(
+      `[PHASE CHAIN] Registered phase chain callback with SchedulerService (pid ${process.pid}).`,
+    );
 
     this.appealsPhaseNames = new Set(
       getNormalizedStringArray(
