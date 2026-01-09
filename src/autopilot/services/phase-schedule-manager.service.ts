@@ -17,6 +17,7 @@ import {
 } from '../interfaces/autopilot.interface';
 import {
   APPROVAL_PHASE_NAMES,
+  DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
@@ -37,6 +38,7 @@ import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 @Injectable()
 export class PhaseScheduleManager {
   private readonly logger = new Logger(PhaseScheduleManager.name);
+  private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
   private readonly challengeStatusCache: Map<string, string>;
   private static readonly OVERDUE_PHASE_GRACE_PERIOD_MS = 60_000;
@@ -65,6 +67,13 @@ export class PhaseScheduleManager {
           nextPhases,
         );
       },
+    );
+
+    this.appealsPhaseNames = new Set(
+      getNormalizedStringArray(
+        this.configService.get('autopilot.appealsPhaseNames'),
+        Array.from(DEFAULT_APPEALS_PHASE_NAMES),
+      ),
     );
 
     this.appealsResponsePhaseNames = new Set(
@@ -1170,6 +1179,10 @@ export class PhaseScheduleManager {
       return false;
     }
 
+    const previousScheduledStart = phase.scheduledStartDate
+      ? new Date(phase.scheduledStartDate).getTime()
+      : null;
+
     this.logger.log(
       `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
@@ -1207,6 +1220,28 @@ export class PhaseScheduleManager {
 
     const updatedPhase =
       openResult.updatedPhases?.find((p) => p.id === phase.id) || phase;
+
+    const updatedScheduledStart = updatedPhase.scheduledStartDate
+      ? new Date(updatedPhase.scheduledStartDate).getTime()
+      : null;
+
+    if (
+      this.isAppealsPhaseName(updatedPhase.name) &&
+      previousScheduledStart !== updatedScheduledStart
+    ) {
+      try {
+        await this.challengeApiService.rescheduleSuccessorPhases(
+          challengeId,
+          updatedPhase.id,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to reschedule successor phases after opening appeals ${updatedPhase.id} on challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
 
     if (!updatedPhase.scheduledEndDate) {
       this.logger.warn(
@@ -1248,17 +1283,6 @@ export class PhaseScheduleManager {
       }
     }
 
-    const existingJobId = this.schedulerService.buildJobId(
-      challengeId,
-      phase.id,
-    );
-    if (this.schedulerService.getScheduledTransition(existingJobId)) {
-      this.logger.log(
-        `[PHASE CHAIN] Phase ${phase.name} (${phase.id}) is already scheduled, skipping`,
-      );
-      return false;
-    }
-
     const nextPhaseData: PhaseTransitionPayload = {
       projectId,
       challengeId,
@@ -1270,7 +1294,10 @@ export class PhaseScheduleManager {
       date: updatedPhase.scheduledEndDate,
     };
 
-    const scheduledJobId = await this.schedulePhaseTransition(nextPhaseData);
+    const scheduledJobId = await this.reschedulePhaseTransition(
+      challengeId,
+      nextPhaseData,
+    );
     this.logger.log(
       `[PHASE CHAIN] Scheduled opened phase ${updatedPhase.name} (${updatedPhase.id}) for closure at ${updatedPhase.scheduledEndDate} with job ID: ${scheduledJobId}`,
     );
@@ -1288,5 +1315,14 @@ export class PhaseScheduleManager {
     }
 
     return this.appealsResponsePhaseNames.has(normalized);
+  }
+
+  private isAppealsPhaseName(phaseName?: string | null): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return this.appealsPhaseNames.has(normalized);
   }
 }

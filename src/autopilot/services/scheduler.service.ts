@@ -603,18 +603,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             return;
           }
 
-          const completedReviews =
-            await this.reviewService.getCompletedReviewCountForPhase(
-              data.phaseId,
-            );
+          if (!data.skipReviewCompletionCheck) {
+            const completedReviews =
+              await this.reviewService.getCompletedReviewCountForPhase(
+                data.phaseId,
+              );
 
-          if (completedReviews <= 0) {
-            await this.deferReviewPhaseClosure(
-              data,
-              completedReviews,
-              'no completed reviews found',
-            );
-            return;
+            if (completedReviews <= 0) {
+              await this.deferReviewPhaseClosure(
+                data,
+                completedReviews,
+                'no completed reviews found',
+              );
+              return;
+            }
           }
 
           const pendingReviews = await this.reviewService.getPendingReviewCount(
@@ -879,7 +881,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               (phase) =>
                 this.isAppealsPhaseName(phase.name) &&
                 !phase.isOpen &&
-                !phase.actualStartDate &&
                 !phase.actualEndDate,
             );
           }
