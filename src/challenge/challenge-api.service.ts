@@ -64,6 +64,9 @@ type ChallengeWithRelations = Prisma.ChallengeGetPayload<
 
 type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
 type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
+type PrismaQueryLogger = {
+  $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
+};
 
 @Injectable()
 export class ChallengeApiService {
@@ -1636,13 +1639,16 @@ export class ChallengeApiService {
       return;
     }
 
-    if (typeof this.prisma.$on !== 'function') {
+    const dbDebugEnabled =
+      this.configService.get<boolean>('autopilot.dbDebug') ?? false;
+    if (!dbDebugEnabled) {
       return;
     }
 
     this.checkpointWinnerQueryLoggerAttached = true;
 
-    this.prisma.$on('query', (event) => {
+    const prismaWithLogger = this.prisma as unknown as PrismaQueryLogger;
+    prismaWithLogger.$on('query', (event) => {
       if (this.checkpointWinnerQueryLogIds.size === 0) {
         return;
       }

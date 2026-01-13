@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 @Injectable()
 export class ChallengePrismaService
@@ -11,7 +11,11 @@ export class ChallengePrismaService
 
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>('challenge.dbUrl');
-    const logConfig = [{ emit: 'event', level: 'query' }] as const;
+    const dbDebugEnabled =
+      configService.get<boolean>('autopilot.dbDebug') ?? false;
+    const logConfig: Prisma.LogDefinition[] = [
+      { emit: 'event', level: 'query' },
+    ];
 
     super(
       databaseUrl
@@ -21,9 +25,11 @@ export class ChallengePrismaService
                 url: databaseUrl,
               },
             },
-            log: logConfig,
+            ...(dbDebugEnabled ? { log: logConfig } : {}),
           }
-        : { log: logConfig },
+        : dbDebugEnabled
+          ? { log: logConfig }
+          : undefined,
     );
 
     if (!databaseUrl) {
