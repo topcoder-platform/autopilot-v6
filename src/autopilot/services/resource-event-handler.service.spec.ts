@@ -115,7 +115,7 @@ describe('ResourceEventHandler', () => {
 
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
-        status: 'Active',
+        status: 'ACTIVE',
         type: 'Design',
         projectId: 'project-1',
         phases: [
@@ -164,7 +164,7 @@ describe('ResourceEventHandler', () => {
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
         projectId: 321,
-        status: 'Active',
+        status: 'ACTIVE',
         type: 'Design',
         phases: [
           {
@@ -198,7 +198,7 @@ describe('ResourceEventHandler', () => {
         phaseTypeName: 'Checkpoint Screening',
         state: 'START',
         operator: 'system',
-        projectStatus: 'Active',
+        projectStatus: 'ACTIVE',
       });
     });
 
@@ -225,7 +225,7 @@ describe('ResourceEventHandler', () => {
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
         projectId: 321,
-        status: 'Active',
+        status: 'ACTIVE',
         type: 'Design',
         phases: [
           {

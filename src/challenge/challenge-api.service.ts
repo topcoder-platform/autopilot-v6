@@ -13,6 +13,7 @@ import {
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
+  ITERATIVE_REVIEW_PHASE_NAME,
   POST_MORTEM_PHASE_NAMES,
   isPostMortemPhaseName,
 } from '../autopilot/constants/review.constants';
@@ -46,6 +47,7 @@ const challengeWithRelationsArgs =
       },
       metadata: true,
       winners: true,
+      skills: true,
       prizeSets: {
         include: { prizes: true },
       },
@@ -442,12 +444,15 @@ export class ChallengeApiService {
         );
       }
 
+      let phaseUpdated = false;
       try {
         await this.prisma.$transaction(async (tx) => {
           if (operation === 'open') {
-            currentPhaseNames.add(targetPhase.name);
-            await tx.challengePhase.update({
-              where: { id: targetPhase.id },
+            const updateResult = await tx.challengePhase.updateMany({
+              where: {
+                id: targetPhase.id,
+                isOpen: false,
+              },
               data: {
                 isOpen: true,
                 actualStartDate: targetPhase.actualStartDate ?? now,
@@ -461,15 +466,31 @@ export class ChallengeApiService {
                   : {}),
               },
             });
+
+            if (updateResult.count === 0) {
+              return;
+            }
+
+            phaseUpdated = true;
+            currentPhaseNames.add(targetPhase.name);
           } else {
-            currentPhaseNames.delete(targetPhase.name);
-            await tx.challengePhase.update({
-              where: { id: targetPhase.id },
+            const updateResult = await tx.challengePhase.updateMany({
+              where: {
+                id: targetPhase.id,
+                isOpen: true,
+              },
               data: {
                 isOpen: false,
                 actualEndDate: targetPhase.actualEndDate ?? now,
               },
             });
+
+            if (updateResult.count === 0) {
+              return;
+            }
+
+            phaseUpdated = true;
+            currentPhaseNames.delete(targetPhase.name);
           }
 
           await tx.challenge.update({
@@ -494,6 +515,27 @@ export class ChallengeApiService {
           status: 'ERROR',
           source: ChallengeApiService.name,
           details: { phaseId, operation, error: err.message },
+        });
+        return result;
+      }
+
+      if (!phaseUpdated) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${targetPhase.name} is already ${
+            operation === 'open' ? 'open' : 'closed'
+          }`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: {
+            phaseId,
+            operation,
+            result,
+            note: 'Skipped update because phase state changed during transaction.',
+          },
         });
         return result;
       }
@@ -586,6 +628,137 @@ export class ChallengeApiService {
     }
   }
 
+  async rescheduleSuccessorPhases(
+    challengeId: string,
+    predecessorPhaseId: string,
+  ): Promise<void> {
+    if (!challengeId || !predecessorPhaseId) {
+      return;
+    }
+
+    let updatedCount = 0;
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const phases = await tx.challengePhase.findMany({
+          where: { challengeId },
+          include: { constraints: true },
+        });
+
+        const predecessorPhase = phases.find(
+          (phase) => phase.id === predecessorPhaseId,
+        );
+
+        if (!predecessorPhase || !predecessorPhase.scheduledEndDate) {
+          return;
+        }
+
+        const successorsByPredecessor = new Map<
+          string,
+          ChallengePhaseWithConstraints[]
+        >();
+        for (const phase of phases) {
+          if (!phase.predecessor) {
+            continue;
+          }
+          const key = String(phase.predecessor);
+          const list = successorsByPredecessor.get(key);
+          if (list) {
+            list.push(phase);
+          } else {
+            successorsByPredecessor.set(key, [phase]);
+          }
+        }
+
+        const queue: ChallengePhaseWithConstraints[] = [predecessorPhase];
+        const visited = new Set<string>();
+
+        while (queue.length > 0) {
+          const currentPhase = queue.shift();
+          if (!currentPhase?.scheduledEndDate) {
+            continue;
+          }
+
+          const predecessorKeys = this.buildPhaseIdentifiers(currentPhase);
+          for (const predecessorKey of predecessorKeys) {
+            const successors = successorsByPredecessor.get(predecessorKey) || [];
+            for (const successor of successors) {
+              if (visited.has(successor.id)) {
+                continue;
+              }
+
+              let successorForQueue = successor;
+              if (!successor.actualStartDate) {
+                const durationSeconds =
+                  this.computePhaseDurationSeconds(successor);
+                const alignToPredecessorStart =
+                  this.isIterativeReviewPhaseName(successor.name);
+                const desiredStartSource =
+                  alignToPredecessorStart && currentPhase.scheduledStartDate
+                    ? currentPhase.scheduledStartDate
+                    : currentPhase.scheduledEndDate;
+
+                if (
+                  typeof durationSeconds === 'number' &&
+                  durationSeconds > 0 &&
+                  desiredStartSource
+                ) {
+                  const desiredStartDate = new Date(desiredStartSource);
+                  const desiredEndDate = new Date(
+                    desiredStartDate.getTime() + durationSeconds * 1000,
+                  );
+
+                  const startChanged = !this.datesAreSame(
+                    successor.scheduledStartDate,
+                    desiredStartDate,
+                  );
+                  const endChanged = !this.datesAreSame(
+                    successor.scheduledEndDate,
+                    desiredEndDate,
+                  );
+
+                  if (startChanged || endChanged) {
+                    successorForQueue = await tx.challengePhase.update({
+                      where: { id: successor.id },
+                      data: {
+                        scheduledStartDate: desiredStartDate,
+                        scheduledEndDate: desiredEndDate,
+                      },
+                      include: { constraints: true },
+                    });
+                    updatedCount += 1;
+                  } else {
+                    successorForQueue = {
+                      ...successor,
+                      scheduledStartDate: successor.scheduledStartDate,
+                      scheduledEndDate: successor.scheduledEndDate,
+                    };
+                  }
+                }
+              }
+
+              visited.add(successor.id);
+              queue.push(successorForQueue);
+            }
+          }
+        }
+      });
+
+      if (updatedCount > 0) {
+        this.logger.log(
+          `Rescheduled ${updatedCount} successor phase(s) for challenge ${challengeId} after updating phase ${predecessorPhaseId}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to reschedule successor phases for challenge ${challengeId} after phase ${predecessorPhaseId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
+  }
+
   private computePhaseDurationSeconds(
     phase: ChallengePhaseWithConstraints,
   ): number | null {
@@ -604,6 +777,45 @@ export class ChallengeApiService {
     }
 
     return null;
+  }
+
+  private datesAreSame(
+    dateA?: string | Date | null,
+    dateB?: string | Date | null,
+  ): boolean {
+    if (!dateA && !dateB) {
+      return true;
+    }
+    if (!dateA || !dateB) {
+      return false;
+    }
+    return new Date(dateA).getTime() === new Date(dateB).getTime();
+  }
+
+  private buildPhaseIdentifiers(
+    phase: ChallengePhaseWithConstraints,
+  ): string[] {
+    const identifiers: string[] = [];
+    if (phase.id) {
+      identifiers.push(String(phase.id));
+    }
+    if (phase.phaseId) {
+      identifiers.push(String(phase.phaseId));
+    }
+    return identifiers;
+  }
+
+  private isIterativeReviewPhaseName(
+    phaseName?: string | null,
+  ): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+    return (
+      normalized.toLowerCase() ===
+      ITERATIVE_REVIEW_PHASE_NAME.toLowerCase()
+    );
   }
 
   private buildPhaseNameSet(
@@ -708,7 +920,8 @@ export class ChallengeApiService {
       prizeSets:
         challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
       terms: [],
-      skills: [],
+      skills:
+        challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
       attachments: [],
       track: challenge.track?.name ?? '',
       type: challenge.type?.name ?? '',

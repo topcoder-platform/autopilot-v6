@@ -356,6 +356,79 @@ describe('SchedulerService (review phase deferral)', () => {
     );
   });
 
+  it('opens appeals directly after closing review when phase chain callback is missing', async () => {
+    const payload = createPayload();
+    const reviewPhase = createPhase({
+      id: payload.phaseId,
+      phaseId: 'template-review',
+      name: 'Review',
+      isOpen: true,
+    });
+    const appealsPhase = createPhase({
+      id: 'phase-appeals',
+      phaseId: 'template-appeals',
+      name: 'Appeals',
+      isOpen: false,
+      actualStartDate: null,
+      actualEndDate: null,
+    });
+
+    challengeApiService.getPhaseDetails.mockImplementation(
+      async (_challengeId, phaseId) => {
+        if (phaseId === reviewPhase.id) {
+          return reviewPhase;
+        }
+        if (phaseId === appealsPhase.id) {
+          return appealsPhase;
+        }
+        return null;
+      },
+    );
+
+    challengeApiService.advancePhase.mockImplementation(
+      async (_challengeId, phaseId, operation) => {
+        if (phaseId === reviewPhase.id && operation === 'close') {
+          return {
+            success: true,
+            message: 'closed review',
+            updatedPhases: [reviewPhase, appealsPhase],
+            next: {
+              operation: 'open',
+              phases: [appealsPhase],
+            },
+          };
+        }
+
+        if (phaseId === appealsPhase.id && operation === 'open') {
+          return {
+            success: true,
+            message: 'opened appeals',
+            updatedPhases: [appealsPhase],
+          };
+        }
+
+        return {
+          success: true,
+          message: 'ok',
+          updatedPhases: [],
+        };
+      },
+    );
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      appealsPhase.id,
+      'open',
+    );
+  });
+
   it('closes review phases when no pending reviews remain', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({

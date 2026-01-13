@@ -4,6 +4,8 @@ import type { ChallengeApiService } from '../../challenge/challenge-api.service'
 import type { ReviewService, SubmissionSummary } from '../../review/review.service';
 import type { ResourcesService } from '../../resources/resources.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
+import type { KafkaService } from '../../kafka/kafka.service';
+import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import {
   POST_MORTEM_REVIEWER_ROLE_NAME,
 } from '../constants/review.constants';
@@ -35,6 +37,9 @@ describe('ChallengeCompletionService', () => {
   };
   let financeApiService: {
     generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
+  };
+  let kafkaService: {
+    produce: jest.MockedFunction<KafkaService['produce']>;
   };
   let configService: {
     get: jest.MockedFunction<ConfigService['get']>;
@@ -294,6 +299,10 @@ describe('ChallengeCompletionService', () => {
       generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
     };
 
+    kafkaService = {
+      produce: jest.fn().mockResolvedValue(undefined),
+    };
+
     configService = {
       get: jest.fn().mockReturnValue(null),
     };
@@ -309,6 +318,7 @@ describe('ChallengeCompletionService', () => {
       financeApiService as unknown as FinanceApiService,
       reviewSummationApiService as unknown as ReviewSummationApiService,
       configService as unknown as ConfigService,
+      kafkaService as unknown as KafkaService,
     );
   });
 
@@ -339,6 +349,20 @@ describe('ChallengeCompletionService', () => {
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
+    );
+    expect(kafkaService.produce).toHaveBeenCalledWith(
+      KAFKA_TOPICS.CHALLENGE_UPDATED,
+      expect.objectContaining({
+        topic: KAFKA_TOPICS.CHALLENGE_UPDATED,
+        payload: expect.objectContaining({
+          id: challenge.id,
+          status: ChallengeStatusEnum.COMPLETED,
+          winners: expect.arrayContaining([
+            expect.objectContaining({ userId: 101, placement: 1 }),
+            expect.objectContaining({ userId: 102, placement: 2 }),
+          ]),
+        }),
+      }),
     );
 
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];

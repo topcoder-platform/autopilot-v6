@@ -89,7 +89,7 @@ export interface IChallenge {
   events: any[];
   prizeSets: IChallengePrizeSet[];
   terms: any[];
-  skills: any[];
+  skills: { id: string }[];
   attachments: any[];
   track: string;
   type: string;

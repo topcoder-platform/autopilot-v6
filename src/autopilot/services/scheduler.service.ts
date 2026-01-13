@@ -257,6 +257,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     ) => Promise<void> | void,
   ): void {
     this.phaseChainCallback = callback;
+    Logger.log(
+      `[PHASE CHAIN] Phase chain callback registered (pid ${process.pid}).`,
+      SchedulerService.name,
+    );
   }
 
   async schedulePhaseTransition(
@@ -603,18 +607,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             return;
           }
 
-          const completedReviews =
-            await this.reviewService.getCompletedReviewCountForPhase(
-              data.phaseId,
-            );
+          if (!data.skipReviewCompletionCheck) {
+            const completedReviews =
+              await this.reviewService.getCompletedReviewCountForPhase(
+                data.phaseId,
+              );
 
-          if (completedReviews <= 0) {
-            await this.deferReviewPhaseClosure(
-              data,
-              completedReviews,
-              'no completed reviews found',
-            );
-            return;
+            if (completedReviews <= 0) {
+              await this.deferReviewPhaseClosure(
+                data,
+                completedReviews,
+                'no completed reviews found',
+              );
+              return;
+            }
           }
 
           const pendingReviews = await this.reviewService.getPendingReviewCount(
@@ -879,7 +885,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               (phase) =>
                 this.isAppealsPhaseName(phase.name) &&
                 !phase.isOpen &&
-                !phase.actualStartDate &&
                 !phase.actualEndDate,
             );
           }
@@ -901,13 +906,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 if (callbackResult instanceof Promise) {
                   await callbackResult;
                 }
-
-                appealsOpenedImmediately = true;
               } else {
                 this.logger.warn(
-                  `[APPEALS FAST-TRACK] Phase chain callback not set; unable to auto-open appeals for challenge ${data.challengeId}.`,
+                  `[APPEALS FAST-TRACK] Phase chain callback not set; opening ${appealsSuccessors.length} appeals-related phase(s) directly for challenge ${data.challengeId}.`,
                 );
               }
+
+              await this.openAppealsPhasesNow(data, appealsSuccessors);
+              appealsOpenedImmediately = true;
             } catch (error) {
               const err = error as Error;
               this.logger.error(
@@ -1165,7 +1171,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               const callbackResult = this.phaseChainCallback(
                 data.challengeId,
                 data.projectId,
-                data.projectStatus,
+                data.projectStatus ?? ChallengeStatusEnum.ACTIVE,
                 phasesToOpen,
               );
 
@@ -2311,6 +2317,87 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     return this.appealsResponsePhaseNames.has(normalized);
+  }
+
+  private async resolveProjectContext(
+    data: PhaseTransitionPayload,
+  ): Promise<{ projectId: number; projectStatus: string } | null> {
+    let projectId = data.projectId;
+    let projectStatus = data.projectStatus;
+
+    if (!Number.isFinite(projectId) || !projectStatus) {
+      try {
+        const challenge = await this.challengeApiService.getChallengeById(
+          data.challengeId,
+        );
+        if (!Number.isFinite(projectId)) {
+          projectId = challenge.projectId;
+        }
+        if (!projectStatus) {
+          projectStatus = challenge.status;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS FAST-TRACK] Failed to resolve project context for challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+        return null;
+      }
+    }
+
+    if (!Number.isFinite(projectId)) {
+      this.logger.warn(
+        `[APPEALS FAST-TRACK] Missing projectId for challenge ${data.challengeId}; skipping direct appeals open.`,
+      );
+      return null;
+    }
+
+    return {
+      projectId,
+      projectStatus: projectStatus ?? ChallengeStatusEnum.ACTIVE,
+    };
+  }
+
+  private async openAppealsPhasesNow(
+    data: PhaseTransitionPayload,
+    phases: IPhase[],
+  ): Promise<void> {
+    if (!phases.length) {
+      return;
+    }
+
+    const context = await this.resolveProjectContext(data);
+    if (!context) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    for (const phase of phases) {
+      if (!phase || phase.actualEndDate) {
+        continue;
+      }
+
+      try {
+        await this.advancePhase({
+          projectId: context.projectId,
+          challengeId: data.challengeId,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'START',
+          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+          projectStatus: context.projectStatus,
+          date: now,
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS FAST-TRACK] Failed to open appeals phase ${phase.id} for challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
   }
 
   private async deferAppealsPhaseOpen(

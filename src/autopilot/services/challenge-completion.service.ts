@@ -4,14 +4,18 @@ import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
 import {
-  IChallengeWinner,
+  type IChallenge,
+  type IChallengeWinner,
   type IChallengePrizeSet,
+  type IPhase,
 } from '../../challenge/interfaces/challenge.interface';
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
-import { IPhase } from '../../challenge/interfaces/challenge.interface';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
 import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
+import { KafkaService } from '../../kafka/kafka.service';
+import { KAFKA_TOPICS } from '../../kafka/constants/topics';
+import { AutopilotOperator } from '../interfaces/autopilot.interface';
 
 @Injectable()
 export class ChallengeCompletionService {
@@ -24,6 +28,7 @@ export class ChallengeCompletionService {
     private readonly financeApiService: FinanceApiService,
     private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly configService: ConfigService,
+    private readonly kafkaService: KafkaService,
   ) {}
 
   private async ensureCancelledPostMortem(
@@ -160,6 +165,54 @@ export class ChallengeCompletionService {
 
   private countCheckpointPrizes(prizeSets: IChallengePrizeSet[]): number {
     return this.countPrizesByType(prizeSets, PrizeSetTypeEnum.CHECKPOINT);
+  }
+
+  private async publishChallengeCompletionUpdate(
+    challengeId: string,
+    winners: IChallengeWinner[],
+    challengeSnapshot?: IChallenge,
+  ): Promise<void> {
+    try {
+      const challenge =
+        challengeSnapshot ??
+        (await this.challengeApiService.getChallengeById(challengeId));
+      const timestamp = new Date().toISOString();
+
+      const payload = {
+        id: challenge.id,
+        projectId: challenge.projectId,
+        status: ChallengeStatusEnum.COMPLETED,
+        description: challenge.description ?? '',
+        tags: challenge.tags ?? [],
+        skills: challenge.skills ?? [],
+        winners: winners.map((winner) => ({
+          userId: winner.userId,
+          placement: winner.placement,
+          handle: winner.handle,
+        })),
+        operator: AutopilotOperator.SYSTEM,
+        date: timestamp,
+      };
+
+      const message = {
+        topic: KAFKA_TOPICS.CHALLENGE_UPDATED,
+        originator: 'autopilot-service',
+        timestamp,
+        mimeType: 'application/json',
+        payload,
+      };
+
+      await this.kafkaService.produce(KAFKA_TOPICS.CHALLENGE_UPDATED, message);
+      this.logger.log(
+        `Published challenge update for completed challenge ${challengeId}.`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to publish challenge update for completed challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   async assignCheckpointWinners(
@@ -406,6 +459,7 @@ export class ChallengeCompletionService {
     await this.challengeApiService.completeChallenge(challengeId, winners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
+    await this.publishChallengeCompletionUpdate(challengeId, winners, challenge);
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s).`,
     );
@@ -420,6 +474,7 @@ export class ChallengeCompletionService {
     await this.challengeApiService.completeChallenge(challengeId, winners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
+    await this.publishChallengeCompletionUpdate(challengeId, winners);
     const suffix = context?.reason ? ` (${context.reason})` : '';
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s)${suffix}.`,
