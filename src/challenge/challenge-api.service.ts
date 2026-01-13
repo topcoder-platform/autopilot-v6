@@ -71,6 +71,8 @@ export class ChallengeApiService {
   private readonly defaultPageSize = 50;
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly checkpointWinnerQueryLogIds = new Set<string>();
+  private checkpointWinnerQueryLoggerAttached = false;
 
   constructor(
     private readonly prisma: ChallengePrismaService,
@@ -85,6 +87,7 @@ export class ChallengeApiService {
       this.configService.get('autopilot.appealsResponsePhaseNames'),
       DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
     );
+    this.attachCheckpointWinnerQueryLogger();
   }
 
   async getAllActiveChallenges(
@@ -1583,6 +1586,7 @@ export class ChallengeApiService {
     challengeId: string,
     winners: IChallengeWinner[],
   ): Promise<void> {
+    this.checkpointWinnerQueryLogIds.add(challengeId);
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.challengeWinner.deleteMany({
@@ -1622,7 +1626,68 @@ export class ChallengeApiService {
         },
       });
       throw err;
+    } finally {
+      this.checkpointWinnerQueryLogIds.delete(challengeId);
     }
+  }
+
+  private attachCheckpointWinnerQueryLogger(): void {
+    if (this.checkpointWinnerQueryLoggerAttached) {
+      return;
+    }
+
+    if (typeof this.prisma.$on !== 'function') {
+      return;
+    }
+
+    this.checkpointWinnerQueryLoggerAttached = true;
+
+    this.prisma.$on('query', (event) => {
+      if (this.checkpointWinnerQueryLogIds.size === 0) {
+        return;
+      }
+
+      const query = event.query ?? '';
+      const normalizedQuery = query.trimStart().toUpperCase();
+      if (!normalizedQuery.startsWith('INSERT')) {
+        return;
+      }
+
+      if (!query.includes('"ChallengeWinner"')) {
+        return;
+      }
+
+      const params = event.params ?? '';
+      if (!params.includes('CHECKPOINT')) {
+        return;
+      }
+
+      let matchedChallengeId: string | undefined;
+      for (const challengeId of this.checkpointWinnerQueryLogIds) {
+        if (params.includes(challengeId)) {
+          matchedChallengeId = challengeId;
+          break;
+        }
+      }
+
+      if (!matchedChallengeId) {
+        return;
+      }
+
+      void this.dbLogger.logAction(
+        'challenge.setCheckpointWinners.insertQuery',
+        {
+          challengeId: matchedChallengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: {
+            query,
+            params,
+            durationMs: event.duration,
+          },
+        },
+      );
+    });
   }
 
   async cancelChallenge(

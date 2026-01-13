@@ -309,6 +309,8 @@ export class ReviewService {
         FROM ${ReviewService.REVIEW_TABLE} r
         INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
           ON s."id" = r."submissionId"
+        INNER JOIN ${ReviewService.SCORECARD_TABLE} sc
+          ON sc."id" = r."scorecardId"
         WHERE s."challengeId" = ${challengeId}
           AND r."phaseId" = ${phaseId}
           AND s."memberId" IS NOT NULL
@@ -317,6 +319,10 @@ export class ReviewService {
           AND (UPPER((r."status")::text) = 'COMPLETED' OR r."status" IS NULL)
           AND r."committed" = true
           AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+          AND GREATEST(
+            COALESCE(r."finalScore", 0),
+            COALESCE(r."initialScore", 0)
+          ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
         ORDER BY COALESCE(r."finalScore", r."initialScore") DESC,
                  s."submittedDate" ASC NULLS LAST,
                  s."id" ASC

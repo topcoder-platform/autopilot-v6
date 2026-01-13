@@ -11,6 +11,7 @@ export class ChallengePrismaService
 
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>('challenge.dbUrl');
+    const logConfig = [{ emit: 'event', level: 'query' }] as const;
 
     super(
       databaseUrl
@@ -20,8 +21,9 @@ export class ChallengePrismaService
                 url: databaseUrl,
               },
             },
+            log: logConfig,
           }
-        : undefined,
+        : { log: logConfig },
     );
 
     if (!databaseUrl) {
