@@ -546,6 +546,18 @@ export class ChallengeApiService {
         return result;
       }
 
+      if (operation === 'open' && shouldAdjustSchedule) {
+        try {
+          await this.rescheduleSuccessorPhases(challengeId, targetPhase.id);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to reschedule successor phases for challenge ${challengeId} after opening phase ${targetPhase.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
       const updatedChallenge = await this.prisma.challenge.findUnique({
         ...challengeWithRelationsArgs,
         where: { id: challengeId },

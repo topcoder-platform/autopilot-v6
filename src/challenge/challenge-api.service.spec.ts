@@ -16,6 +16,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let challengePhaseCreate: jest.Mock;
   let challengePhaseDeleteMany: jest.Mock;
   let challengePhaseUpdateMany: jest.Mock;
+  let challengePhaseFindMany: jest.Mock;
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
   let txChallengeFindUnique: jest.Mock;
@@ -31,6 +32,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     challengePhaseCreate = jest.fn().mockResolvedValue({ id: 'new-phase' });
     challengePhaseDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
     challengePhaseUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+    challengePhaseFindMany = jest.fn().mockResolvedValue([]);
     challengeUpdate = jest.fn().mockResolvedValue(undefined);
 
     challengeFindUnique = jest.fn();
@@ -47,6 +49,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         updateMany: challengePhaseUpdateMany,
         create: challengePhaseCreate,
         deleteMany: challengePhaseDeleteMany,
+        findMany: challengePhaseFindMany,
       },
       $transaction: jest.fn(),
     } as unknown as jest.Mocked<ChallengePrismaService>;
@@ -66,6 +69,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
           updateMany: challengePhaseUpdateMany,
           create: challengePhaseCreate,
           deleteMany: challengePhaseDeleteMany,
+          findMany: challengePhaseFindMany,
         },
       } as unknown as ChallengePrismaService);
     });
@@ -170,9 +174,12 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       .mockResolvedValueOnce(challengeRecord as any)
       .mockResolvedValueOnce(challengeRecord as any);
 
+    const rescheduleSpy = jest.spyOn(service, 'rescheduleSuccessorPhases');
+
     await service.advancePhase('challenge-1', 'phase-1', 'open');
 
     expect(challengeFindUnique).toHaveBeenCalled();
+    expect(rescheduleSpy).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
     expect(challengePhaseUpdate).toHaveBeenCalledWith({
       where: { id: reviewPhase.id },
       data: expect.objectContaining({
