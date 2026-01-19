@@ -9,6 +9,7 @@ import { SchedulerService } from './scheduler.service';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
+import { ReviewAssignmentService } from './review-assignment.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
@@ -96,6 +97,7 @@ describe('SchedulerService (review phase deferral)', () => {
   let kafkaService: KafkaServiceMock;
   let challengeApiService: ChallengeApiServiceMock;
   let phaseReviewService: jest.Mocked<PhaseReviewService>;
+  let reviewAssignmentService: jest.Mocked<ReviewAssignmentService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let financeApiService: jest.Mocked<FinanceApiService>;
   let reviewService: ReviewServiceMock;
@@ -157,6 +159,10 @@ describe('SchedulerService (review phase deferral)', () => {
       handlePhaseOpened: jest.fn(),
     } as unknown as jest.Mocked<PhaseReviewService>;
 
+    reviewAssignmentService = {
+      ensureAssignmentsOrSchedule: jest.fn().mockResolvedValue(true),
+    } as unknown as jest.Mocked<ReviewAssignmentService>;
+
     challengeCompletionService = {
       finalizeChallenge: jest.fn().mockResolvedValue(true),
       assignCheckpointWinners: jest.fn().mockResolvedValue(undefined),
@@ -217,6 +223,7 @@ describe('SchedulerService (review phase deferral)', () => {
       kafkaService as unknown as KafkaService,
       challengeApiService as unknown as ChallengeApiService,
       phaseReviewService,
+      reviewAssignmentService,
       challengeCompletionService,
       financeApiService,
       reviewService as unknown as ReviewService,

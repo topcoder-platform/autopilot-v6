@@ -125,6 +125,38 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getTopCheckpointReviewScores', () => {
+    const phaseId = 'phase-checkpoint-review';
+
+    it('filters to checkpoint reviews that meet minimum passing score', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        { memberId: '123', submissionId: 'submission-1', score: 92 },
+      ]);
+
+      const winners = await service.getTopCheckpointReviewScores(
+        challengeId,
+        phaseId,
+        3,
+      );
+
+      expect(winners).toEqual([
+        { memberId: '123', submissionId: 'submission-1', score: 92 },
+      ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('GREATEST(');
+      expect(sqlText).toContain('minimumPassingScore');
+      expect(sqlText).toContain('minScore');
+      expect(sqlText).toContain('"scorecard"');
+    });
+  });
+
   describe('getCheckpointPassedSubmissionIds', () => {
     const screeningScorecardId = 'scorecard-1';
 

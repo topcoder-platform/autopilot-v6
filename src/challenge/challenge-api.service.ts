@@ -64,6 +64,9 @@ type ChallengeWithRelations = Prisma.ChallengeGetPayload<
 
 type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
 type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
+type PrismaQueryLogger = {
+  $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
+};
 
 @Injectable()
 export class ChallengeApiService {
@@ -71,6 +74,8 @@ export class ChallengeApiService {
   private readonly defaultPageSize = 50;
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly checkpointWinnerQueryLogIds = new Set<string>();
+  private checkpointWinnerQueryLoggerAttached = false;
 
   constructor(
     private readonly prisma: ChallengePrismaService,
@@ -85,6 +90,7 @@ export class ChallengeApiService {
       this.configService.get('autopilot.appealsResponsePhaseNames'),
       DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
     );
+    this.attachCheckpointWinnerQueryLogger();
   }
 
   async getAllActiveChallenges(
@@ -538,6 +544,18 @@ export class ChallengeApiService {
           },
         });
         return result;
+      }
+
+      if (operation === 'open' && shouldAdjustSchedule) {
+        try {
+          await this.rescheduleSuccessorPhases(challengeId, targetPhase.id);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to reschedule successor phases for challenge ${challengeId} after opening phase ${targetPhase.id}: ${err.message}`,
+            err.stack,
+          );
+        }
       }
 
       const updatedChallenge = await this.prisma.challenge.findUnique({
@@ -1583,6 +1601,7 @@ export class ChallengeApiService {
     challengeId: string,
     winners: IChallengeWinner[],
   ): Promise<void> {
+    this.checkpointWinnerQueryLogIds.add(challengeId);
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.challengeWinner.deleteMany({
@@ -1622,7 +1641,71 @@ export class ChallengeApiService {
         },
       });
       throw err;
+    } finally {
+      this.checkpointWinnerQueryLogIds.delete(challengeId);
     }
+  }
+
+  private attachCheckpointWinnerQueryLogger(): void {
+    if (this.checkpointWinnerQueryLoggerAttached) {
+      return;
+    }
+
+    const dbDebugEnabled =
+      this.configService.get<boolean>('autopilot.dbDebug') ?? false;
+    if (!dbDebugEnabled) {
+      return;
+    }
+
+    this.checkpointWinnerQueryLoggerAttached = true;
+
+    const prismaWithLogger = this.prisma as unknown as PrismaQueryLogger;
+    prismaWithLogger.$on('query', (event) => {
+      if (this.checkpointWinnerQueryLogIds.size === 0) {
+        return;
+      }
+
+      const query = event.query ?? '';
+      const normalizedQuery = query.trimStart().toUpperCase();
+      if (!normalizedQuery.startsWith('INSERT')) {
+        return;
+      }
+
+      if (!query.includes('"ChallengeWinner"')) {
+        return;
+      }
+
+      const params = event.params ?? '';
+      if (!params.includes('CHECKPOINT')) {
+        return;
+      }
+
+      let matchedChallengeId: string | undefined;
+      for (const challengeId of this.checkpointWinnerQueryLogIds) {
+        if (params.includes(challengeId)) {
+          matchedChallengeId = challengeId;
+          break;
+        }
+      }
+
+      if (!matchedChallengeId) {
+        return;
+      }
+
+      void this.dbLogger.logAction(
+        'challenge.setCheckpointWinners.insertQuery',
+        {
+          challengeId: matchedChallengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: {
+            query,
+            params,
+            durationMs: event.duration,
+          },
+        },
+      );
+    });
   }
 
   async cancelChallenge(
