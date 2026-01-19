@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
+import { ReviewAssignmentService } from './review-assignment.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import {
@@ -106,6 +107,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
+    private readonly reviewAssignmentService: ReviewAssignmentService,
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly financeApiService: FinanceApiService,
     private readonly reviewService: ReviewService,
@@ -1181,8 +1183,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               }
             } else {
               this.logger.warn(
-                `[PHASE CHAIN] Phase chain callback not set, cannot open and schedule next phases for challenge ${data.challengeId}`,
+                `[PHASE CHAIN] Phase chain callback not set, falling back to direct phase open for challenge ${data.challengeId}`,
               );
+              await this.openAndScheduleNextPhasesFallback(data, phasesToOpen);
             }
           } catch (error) {
             const err = error as Error;
@@ -2357,6 +2360,216 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       projectId,
       projectStatus: projectStatus ?? ChallengeStatusEnum.ACTIVE,
     };
+  }
+
+  private async openAndScheduleNextPhasesFallback(
+    data: PhaseTransitionPayload,
+    phases: IPhase[],
+  ): Promise<void> {
+    if (!phases.length) {
+      return;
+    }
+
+    const context = await this.resolveProjectContext(data);
+    if (!context) {
+      this.logger.warn(
+        `[PHASE CHAIN] Unable to resolve project context for challenge ${data.challengeId}; skipping fallback phase open.`,
+      );
+      return;
+    }
+
+    if (!isActiveStatus(context.projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${data.challengeId} is not ACTIVE (status: ${context.projectStatus}); skipping fallback phase open.`,
+      );
+      return;
+    }
+
+    let openedCount = 0;
+    let deferredCount = 0;
+
+    for (const phase of phases) {
+      if (!phase || phase.actualEndDate) {
+        continue;
+      }
+
+      const openPhaseCallback = async (): Promise<boolean> =>
+        await this.openPhaseAndScheduleFallback(data, phase, context);
+
+      let canOpen = true;
+      try {
+        canOpen = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+          data.challengeId,
+          phase,
+          openPhaseCallback,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to verify reviewer assignments for phase ${phase.id} on challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+        continue;
+      }
+
+      if (!canOpen) {
+        deferredCount += 1;
+        continue;
+      }
+
+      const opened = await openPhaseCallback();
+      if (opened) {
+        openedCount += 1;
+      }
+    }
+
+    const summaryParts = [
+      `opened and scheduled ${openedCount} out of ${phases.length}`,
+    ];
+    if (deferredCount > 0) {
+      summaryParts.push(
+        `deferred ${deferredCount} awaiting reviewer assignments`,
+      );
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Fallback ${summaryParts.join(', ')} for challenge ${data.challengeId}`,
+    );
+  }
+
+  private async openPhaseAndScheduleFallback(
+    data: PhaseTransitionPayload,
+    phase: IPhase,
+    context: { projectId: number; projectStatus: string },
+  ): Promise<boolean> {
+    const now = new Date().toISOString();
+    const openPayload: PhaseTransitionPayload = {
+      projectId: context.projectId,
+      challengeId: data.challengeId,
+      phaseId: phase.id,
+      phaseTypeName: phase.name,
+      state: 'START',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus: context.projectStatus,
+      date: now,
+    };
+
+    try {
+      await this.advancePhase(openPayload);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${data.challengeId} via fallback: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    let updatedPhase: IPhase | null = null;
+    try {
+      updatedPhase = await this.challengeApiService.getPhaseDetails(
+        data.challengeId,
+        phase.id,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to load phase ${phase.id} after fallback open for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    if (!updatedPhase) {
+      this.logger.warn(
+        `[PHASE CHAIN] Phase ${phase.id} not found after fallback open for challenge ${data.challengeId}; skipping scheduling.`,
+      );
+      return false;
+    }
+
+    if (updatedPhase.actualEndDate) {
+      return true;
+    }
+
+    if (!updatedPhase.scheduledEndDate) {
+      this.logger.warn(
+        `[PHASE CHAIN] Opened phase ${updatedPhase.name} (${updatedPhase.id}) has no scheduled end date; skipping scheduling.`,
+      );
+      return true;
+    }
+
+    if (this.isAppealsResponsePhaseName(updatedPhase.name)) {
+      try {
+        const totalAppeals =
+          await this.reviewService.getTotalAppealCount(data.challengeId);
+
+        if (totalAppeals === 0) {
+          this.logger.log(
+            `[APPEALS RESPONSE] No appeals detected for challenge ${data.challengeId}; closing phase ${updatedPhase.id} immediately after fallback open.`,
+          );
+
+          await this.advancePhase({
+            projectId: context.projectId,
+            challengeId: data.challengeId,
+            phaseId: updatedPhase.id,
+            phaseTypeName: updatedPhase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+            projectStatus: context.projectStatus,
+            date: new Date().toISOString(),
+          });
+          return true;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS RESPONSE] Unable to auto-close phase ${updatedPhase.id} for challenge ${data.challengeId} after fallback open: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    const closePayload: PhaseTransitionPayload = {
+      projectId: context.projectId,
+      challengeId: data.challengeId,
+      phaseId: updatedPhase.id,
+      phaseTypeName: updatedPhase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus: context.projectStatus,
+      date: updatedPhase.scheduledEndDate,
+    };
+
+    try {
+      await this.schedulePhaseTransitionWithCancellation(closePayload);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to schedule closure for phase ${updatedPhase.id} on challenge ${data.challengeId} after fallback open: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  private async schedulePhaseTransitionWithCancellation(
+    payload: PhaseTransitionPayload,
+  ): Promise<void> {
+    const jobId = this.buildJobId(payload.challengeId, payload.phaseId);
+    const existing = this.getScheduledTransition(jobId);
+
+    if (existing) {
+      const canceled = await this.cancelScheduledTransition(jobId);
+      if (!canceled) {
+        this.logger.warn(
+          `[PHASE CHAIN] Failed to cancel existing schedule ${jobId} before fallback scheduling.`,
+        );
+      }
+    }
+
+    await this.schedulePhaseTransition(payload);
   }
 
   private async openAppealsPhasesNow(
