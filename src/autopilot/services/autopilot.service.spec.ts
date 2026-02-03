@@ -734,9 +734,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
     });
 
     it('closes the phase when the Post-mortem alias is used', async () => {
-      const postMortemAliasPhase = buildPhase(
-        POST_MORTEM_PHASE_ALTERNATE_NAME,
-      );
+      const postMortemAliasPhase = buildPhase(POST_MORTEM_PHASE_ALTERNATE_NAME);
       challengeApiService.getChallengeById.mockResolvedValue(
         buildChallenge(postMortemAliasPhase),
       );

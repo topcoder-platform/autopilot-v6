@@ -699,7 +699,8 @@ export class ChallengeApiService {
 
           const predecessorKeys = this.buildPhaseIdentifiers(currentPhase);
           for (const predecessorKey of predecessorKeys) {
-            const successors = successorsByPredecessor.get(predecessorKey) || [];
+            const successors =
+              successorsByPredecessor.get(predecessorKey) || [];
             for (const successor of successors) {
               if (visited.has(successor.id)) {
                 continue;
@@ -709,8 +710,9 @@ export class ChallengeApiService {
               if (!successor.actualStartDate) {
                 const durationSeconds =
                   this.computePhaseDurationSeconds(successor);
-                const alignToPredecessorStart =
-                  this.isIterativeReviewPhaseName(successor.name);
+                const alignToPredecessorStart = this.isIterativeReviewPhaseName(
+                  successor.name,
+                );
                 const desiredStartSource =
                   alignToPredecessorStart && currentPhase.scheduledStartDate
                     ? currentPhase.scheduledStartDate
@@ -823,16 +825,13 @@ export class ChallengeApiService {
     return identifiers;
   }
 
-  private isIterativeReviewPhaseName(
-    phaseName?: string | null,
-  ): boolean {
+  private isIterativeReviewPhaseName(phaseName?: string | null): boolean {
     const normalized = phaseName?.trim();
     if (!normalized) {
       return false;
     }
     return (
-      normalized.toLowerCase() ===
-      ITERATIVE_REVIEW_PHASE_NAME.toLowerCase()
+      normalized.toLowerCase() === ITERATIVE_REVIEW_PHASE_NAME.toLowerCase()
     );
   }
 
@@ -842,16 +841,11 @@ export class ChallengeApiService {
   ): Set<string> {
     const resolved = this.normalizeStringArray(source, Array.from(fallback));
     return new Set(
-      resolved
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
+      resolved.map((value) => value.trim()).filter((value) => value.length > 0),
     );
   }
 
-  private normalizeStringArray(
-    source: unknown,
-    fallback: string[],
-  ): string[] {
+  private normalizeStringArray(source: unknown, fallback: string[]): string[] {
     if (Array.isArray(source)) {
       const normalized = source
         .map((item) =>
@@ -891,17 +885,18 @@ export class ChallengeApiService {
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
-    const metadata = (challenge.metadata ?? []).reduce<
-      Record<string, string>
-    >((acc, entry) => {
-      const key = entry?.name?.trim();
-      if (!key) {
-        return acc;
-      }
+    const metadata = (challenge.metadata ?? []).reduce<Record<string, string>>(
+      (acc, entry) => {
+        const key = entry?.name?.trim();
+        if (!key) {
+          return acc;
+        }
 
-      acc[key] = entry.value ?? '';
-      return acc;
-    }, {});
+        acc[key] = entry.value ?? '';
+        return acc;
+      },
+      {},
+    );
 
     return {
       id: challenge.id,
@@ -936,10 +931,10 @@ export class ChallengeApiService {
       discussions: [],
       events: [],
       prizeSets:
-        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
+        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) ||
+        [],
       terms: [],
-      skills:
-        challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
+      skills: challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
       attachments: [],
       track: challenge.track?.name ?? '',
       type: challenge.type?.name ?? '',
@@ -1238,7 +1233,9 @@ export class ChallengeApiService {
     openImmediately = false,
   ): Promise<IPhase> {
     const now = new Date();
-    const end = new Date(now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000);
+    const end = new Date(
+      now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000,
+    );
     let closedApprovalPhaseCount = 0;
 
     try {
@@ -1320,7 +1317,10 @@ export class ChallengeApiService {
             name: postMortemPhaseType.name,
             description: postMortemPhaseType.description,
             predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
-            duration: Math.max(Math.round((end.getTime() - now.getTime()) / 1000), 1),
+            duration: Math.max(
+              Math.round((end.getTime() - now.getTime()) / 1000),
+              1,
+            ),
             scheduledStartDate: now,
             scheduledEndDate: end,
             actualStartDate: openImmediately ? now : null,
@@ -1580,7 +1580,10 @@ export class ChallengeApiService {
         challengeId,
         status: 'SUCCESS',
         source: ChallengeApiService.name,
-        details: { winnersCount: winners.length, endDate: endDate.toISOString() },
+        details: {
+          winnersCount: winners.length,
+          endDate: endDate.toISOString(),
+        },
       });
     } catch (error) {
       const err = error as Error;

@@ -376,7 +376,9 @@ export class PhaseScheduleManager {
           ),
       });
 
-      const openPhasesRequiringScorecards = (challengeDetails.phases ?? []).filter(
+      const openPhasesRequiringScorecards = (
+        challengeDetails.phases ?? []
+      ).filter(
         (phase) =>
           phase.isOpen === true &&
           (SCREENING_PHASE_NAMES.has(phase.name) ||
@@ -399,8 +401,10 @@ export class PhaseScheduleManager {
               `[MANUAL PHASE DETECTION] Processing open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
             );
 
-            const targetScorecardId =
-              this.resolveScorecardIdForOpenPhase(challengeDetails, phase);
+            const targetScorecardId = this.resolveScorecardIdForOpenPhase(
+              challengeDetails,
+              phase,
+            );
 
             if (targetScorecardId) {
               await this.updatePendingReviewScorecards(
@@ -496,9 +500,10 @@ export class PhaseScheduleManager {
 
     let existing: any[] = [];
     try {
-      existing = await this.reviewApiService.getReviewOpportunitiesByChallengeId(
-        challenge.id,
-      );
+      existing =
+        await this.reviewApiService.getReviewOpportunitiesByChallengeId(
+          challenge.id,
+        );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -616,8 +621,8 @@ export class PhaseScheduleManager {
   }
 
   private resolvePhaseDuration(phase: IPhase): number {
-    if (Number.isFinite(phase.duration) && (phase.duration as number) > 0) {
-      return phase.duration as number;
+    if (Number.isFinite(phase.duration) && phase.duration > 0) {
+      return phase.duration;
     }
 
     const start = phase.scheduledStartDate || phase.actualStartDate;
@@ -859,10 +864,7 @@ export class PhaseScheduleManager {
 
     for (const phase of overduePhases) {
       try {
-        const jobId = this.schedulerService.buildJobId(
-          challenge.id,
-          phase.id,
-        );
+        const jobId = this.schedulerService.buildJobId(challenge.id, phase.id);
 
         if (this.schedulerService.getScheduledTransition(jobId)) {
           const canceled =
@@ -891,11 +893,10 @@ export class PhaseScheduleManager {
         );
 
         try {
-          const latestPhase =
-            await this.challengeApiService.getPhaseDetails(
-              challenge.id,
-              phase.id,
-            );
+          const latestPhase = await this.challengeApiService.getPhaseDetails(
+            challenge.id,
+            phase.id,
+          );
 
           if (!latestPhase) {
             this.logger.warn(
@@ -1309,9 +1310,7 @@ export class PhaseScheduleManager {
 
   // isActiveStatus utility now centralizes active-status checks
 
-  private isAppealsResponsePhaseName(
-    phaseName?: string | null,
-  ): boolean {
+  private isAppealsResponsePhaseName(phaseName?: string | null): boolean {
     const normalized = phaseName?.trim();
     if (!normalized) {
       return false;

@@ -9,4 +9,3 @@ export default registerAs('finance', () => ({
   baseUrl: process.env.FINANCE_API_URL || '',
   timeoutMs: parseNumber(process.env.FINANCE_API_TIMEOUT_MS, 15000),
 }));
-

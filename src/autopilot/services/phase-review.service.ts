@@ -137,10 +137,10 @@ export class PhaseReviewService {
       }
 
       const reviewerAndCopilotResources =
-        await this.resourcesService.getReviewerResources(
-          challengeId,
-          ['Reviewer', 'Copilot'],
-        );
+        await this.resourcesService.getReviewerResources(challengeId, [
+          'Reviewer',
+          'Copilot',
+        ]);
       const reviewerResources =
         await this.resourcesService.ensureResourcesForMembers(
           challengeId,
@@ -374,9 +374,8 @@ export class PhaseReviewService {
       }
     } else if (phase.name === 'Checkpoint Screening') {
       // For checkpoint screening, review all active checkpoint submissions
-      submissionIds = await this.reviewService.getActiveCheckpointSubmissionIds(
-        challengeId,
-      );
+      submissionIds =
+        await this.reviewService.getActiveCheckpointSubmissionIds(challengeId);
     } else if (phase.name === 'Checkpoint Review') {
       // For checkpoint review, only review submissions that PASSED checkpoint screening
       // Find the screening phase template and its configured scorecard
@@ -455,8 +454,7 @@ export class PhaseReviewService {
       }
 
       if (!allowUnlimitedSubmissions) {
-        const skipped =
-          activeSubmissions.length - filteredSubmissions.length;
+        const skipped = activeSubmissions.length - filteredSubmissions.length;
         if (skipped > 0 && filteredSubmissions.length > 0) {
           this.logger.log(
             `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} because only the latest submissions are reviewed when the submission limit is enforced.`,
@@ -470,8 +468,7 @@ export class PhaseReviewService {
     }
     if (
       submissionIds.length &&
-      (isApprovalPhase ||
-        (isReviewPhase && phase.name !== 'Checkpoint Review'))
+      (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
     ) {
       submissionIds = await this.excludeFailedScreeningSubmissions(
         challenge,
@@ -639,10 +636,7 @@ export class PhaseReviewService {
           ? (legacy as Record<string, unknown>).screeningScorecardId
           : undefined;
 
-      if (
-        typeof legacyScorecardId === 'string' &&
-        legacyScorecardId.trim()
-      ) {
+      if (typeof legacyScorecardId === 'string' && legacyScorecardId.trim()) {
         scorecardIds.add(legacyScorecardId.trim());
       }
     }
@@ -702,9 +696,7 @@ export class PhaseReviewService {
     return selected;
   }
 
-  private challengeAllowsUnlimitedSubmissions(
-    challenge: IChallenge,
-  ): boolean {
+  private challengeAllowsUnlimitedSubmissions(challenge: IChallenge): boolean {
     const metadata = challenge.metadata ?? {};
     const rawValue = metadata['submissionLimit'];
 

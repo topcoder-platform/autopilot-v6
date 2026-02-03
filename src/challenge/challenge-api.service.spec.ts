@@ -8,7 +8,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   const fixedNow = new Date('2025-09-27T06:00:00.000Z');
   const futureStart = new Date('2025-09-27T07:00:00.000Z');
   const phaseDurationSeconds = 7200;
-  const futureEnd = new Date(futureStart.getTime() + phaseDurationSeconds * 1000);
+  const futureEnd = new Date(
+    futureStart.getTime() + phaseDurationSeconds * 1000,
+  );
 
   let prisma: jest.Mocked<ChallengePrismaService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
@@ -184,7 +186,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       where: { id: reviewPhase.id },
       data: expect.objectContaining({
         scheduledStartDate: fixedNow,
-        scheduledEndDate: new Date(fixedNow.getTime() + phaseDurationSeconds * 1000),
+        scheduledEndDate: new Date(
+          fixedNow.getTime() + phaseDurationSeconds * 1000,
+        ),
         duration: phaseDurationSeconds,
       }),
     });
@@ -340,13 +344,19 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       .mockResolvedValueOnce(challengeRecord as any)
       .mockResolvedValueOnce(challengeRecord as any);
 
-    await service.advancePhase('challenge-late-phase', submissionPhase.id, 'open');
+    await service.advancePhase(
+      'challenge-late-phase',
+      submissionPhase.id,
+      'open',
+    );
 
     expect(challengePhaseUpdate).toHaveBeenCalledWith({
       where: { id: submissionPhase.id },
       data: expect.objectContaining({
         scheduledStartDate: lateNow,
-        scheduledEndDate: new Date(lateNow.getTime() + submissionPhase.duration * 1000),
+        scheduledEndDate: new Date(
+          lateNow.getTime() + submissionPhase.duration * 1000,
+        ),
         duration: submissionPhase.duration,
       }),
     });
@@ -420,7 +430,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
           {
             ...existingPostMortem,
             scheduledStartDate: fixedNow,
-            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            scheduledEndDate: new Date(
+              fixedNow.getTime() + 72 * 60 * 60 * 1000,
+            ),
             actualStartDate: fixedNow,
             actualEndDate: null,
             isOpen: true,
@@ -514,7 +526,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
             isOpen: true,
             duration: 72 * 60 * 60,
             scheduledStartDate: fixedNow,
-            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            scheduledEndDate: new Date(
+              fixedNow.getTime() + 72 * 60 * 60 * 1000,
+            ),
             actualStartDate: fixedNow,
             actualEndDate: null,
             predecessor: submissionPhase.phaseId,
