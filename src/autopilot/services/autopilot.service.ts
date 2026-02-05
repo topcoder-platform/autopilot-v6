@@ -152,15 +152,17 @@ export class AutopilotService {
 
     // Ensure screening/review records exist when a submission arrives during an open phase
     try {
-      const challenge = await this.challengeApiService.getChallengeById(
-        challengeId,
-      );
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
 
       if (!isActiveStatus(challenge.status)) {
         return;
       }
 
-      const submissionType = (payload.type || '').toString().trim().toUpperCase();
+      const submissionType = (payload.type || '')
+        .toString()
+        .trim()
+        .toUpperCase();
 
       // Map submission types to relevant open phases to sync
       const targetPhaseNames = new Set<string>();
@@ -176,12 +178,19 @@ export class AutopilotService {
       }
 
       const openTargets = (challenge.phases ?? []).filter(
-        (p) => p.isOpen && (SCREENING_PHASE_NAMES.has(p.name) || REVIEW_PHASE_NAMES.has(p.name)) && targetPhaseNames.has(p.name),
+        (p) =>
+          p.isOpen &&
+          (SCREENING_PHASE_NAMES.has(p.name) ||
+            REVIEW_PHASE_NAMES.has(p.name)) &&
+          targetPhaseNames.has(p.name),
       );
 
       for (const phase of openTargets) {
         try {
-          await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+          await this.phaseReviewService.handlePhaseOpened(
+            challengeId,
+            phase.id,
+          );
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -351,14 +360,15 @@ export class AutopilotService {
         }
 
         try {
-          const nextApproval = await this.challengeApiService.createApprovalPhase(
-            challenge.id,
-            phase.id,
-            phase.phaseId,
-            phase.name,
-            phase.description ?? null,
-            Math.max(phase.duration || 0, 1),
-          );
+          const nextApproval =
+            await this.challengeApiService.createApprovalPhase(
+              challenge.id,
+              phase.id,
+              phase.phaseId,
+              phase.name,
+              phase.description ?? null,
+              Math.max(phase.duration || 0, 1),
+            );
 
           await this.createFollowUpApprovalReviews(
             challenge,
@@ -381,7 +391,10 @@ export class AutopilotService {
         return;
       }
 
-      if (!REVIEW_PHASE_NAMES.has(phase.name) && !SCREENING_PHASE_NAMES.has(phase.name)) {
+      if (
+        !REVIEW_PHASE_NAMES.has(phase.name) &&
+        !SCREENING_PHASE_NAMES.has(phase.name)
+      ) {
         return;
       }
 
@@ -441,7 +454,7 @@ export class AutopilotService {
       return;
     }
 
-    let scorecardId =
+    const scorecardId =
       review.scorecardId ??
       payload.scorecardId ??
       selectScorecardId(
@@ -760,8 +773,6 @@ export class AutopilotService {
       throw err;
     }
   }
-
-  
 
   async openAndScheduleNextPhases(
     challengeId: string,

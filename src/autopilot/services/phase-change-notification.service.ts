@@ -62,7 +62,8 @@ export class PhaseChangeNotificationService {
     const templateId = this.configService
       .get<string>('autopilot.phaseNotificationSendgridTemplateId')
       ?.trim();
-    this.sendgridTemplateId = templateId && templateId.length > 0 ? templateId : null;
+    this.sendgridTemplateId =
+      templateId && templateId.length > 0 ? templateId : null;
 
     if (!this.busEventsUrl) {
       this.logger.warn(
@@ -103,9 +104,10 @@ export class PhaseChangeNotificationService {
 
     let resources;
     try {
-      resources = await this.resourcesService.getPhaseChangeNotificationResources(
-        challengeId,
-      );
+      resources =
+        await this.resourcesService.getPhaseChangeNotificationResources(
+          challengeId,
+        );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -145,10 +147,11 @@ export class PhaseChangeNotificationService {
 
     let recipientEmails: string[] = [];
     try {
-      const { idToEmail, handleToEmail } = await this.membersService.getMemberEmails({
-        memberIds,
-        handles,
-      });
+      const { idToEmail, handleToEmail } =
+        await this.membersService.getMemberEmails({
+          memberIds,
+          handles,
+        });
 
       const emailSet = new Set<string>();
       for (const resource of resources) {
@@ -237,8 +240,7 @@ export class PhaseChangeNotificationService {
     }
 
     const phase = challenge.phases.find(
-      (candidate) =>
-        candidate.id === phaseId || candidate.phaseId === phaseId,
+      (candidate) => candidate.id === phaseId || candidate.phaseId === phaseId,
     );
 
     if (!phase) {
@@ -257,11 +259,11 @@ export class PhaseChangeNotificationService {
 
     const phaseOpenDateRaw =
       operation === 'open'
-        ? phase.actualStartDate ?? new Date().toISOString()
+        ? (phase.actualStartDate ?? new Date().toISOString())
         : null;
     const phaseCloseDateRaw =
       operation === 'close'
-        ? phase.actualEndDate ?? new Date().toISOString()
+        ? (phase.actualEndDate ?? new Date().toISOString())
         : null;
 
     const payloadData: NotificationPayloadData = {
@@ -384,7 +386,9 @@ export class PhaseChangeNotificationService {
     return `${base}/active-challenges/${challengeId}/challenge-details`;
   }
 
-  private formatPhaseDate(value: string | Date | null | undefined): string | null {
+  private formatPhaseDate(
+    value: string | Date | null | undefined,
+  ): string | null {
     if (!value) {
       return null;
     }

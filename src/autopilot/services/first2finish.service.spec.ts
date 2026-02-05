@@ -322,9 +322,7 @@ describe('First2FinishService', () => {
 
     await service.handleSubmissionByChallengeId(challenge.id, 'sub-123');
 
-    expect(
-      challengeApiService.createIterativeReviewPhase,
-    ).toHaveBeenCalledWith(
+    expect(challengeApiService.createIterativeReviewPhase).toHaveBeenCalledWith(
       challenge.id,
       closedPhase.id,
       closedPhase.phaseId,
@@ -502,7 +500,9 @@ describe('First2FinishService', () => {
       }),
     );
 
-    expect(challengeCompletionService.completeChallengeWithWinners).toHaveBeenCalledWith(
+    expect(
+      challengeCompletionService.completeChallengeWithWinners,
+    ).toHaveBeenCalledWith(
       challenge.id,
       [
         {
@@ -558,7 +558,9 @@ describe('First2FinishService', () => {
       },
     );
 
-    expect(challengeCompletionService.completeChallengeWithWinners).toHaveBeenCalledWith(
+    expect(
+      challengeCompletionService.completeChallengeWithWinners,
+    ).toHaveBeenCalledWith(
       challenge.id,
       [
         {

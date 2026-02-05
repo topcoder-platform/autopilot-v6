@@ -15,7 +15,10 @@ export default registerAs('review', () => {
   const pollIntervalEnv = process.env.REVIEWER_POLL_INTERVAL_MS;
   const pollInterval = Number(pollIntervalEnv);
   const baseUrl = (process.env.REVIEW_API_URL || '').trim();
-  const timeoutMs = parseNumber(process.env.REVIEW_API_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+  const timeoutMs = parseNumber(
+    process.env.REVIEW_API_TIMEOUT_MS,
+    DEFAULT_TIMEOUT_MS,
+  );
 
   return {
     dbUrl: process.env.REVIEW_DB_URL,

@@ -120,8 +120,7 @@ export class ReviewService {
       return 50;
     }
 
-    const numericValue =
-      typeof value === 'number' ? value : Number(value);
+    const numericValue = typeof value === 'number' ? value : Number(value);
 
     return Number.isFinite(numericValue) ? numericValue : 50;
   }
@@ -238,8 +237,10 @@ export class ReviewService {
         ${limitClause}
       `);
 
-      const winnersFromSummations =
-        this.selectUniqueMemberScoresFromSummations(rows, limit);
+      const winnersFromSummations = this.selectUniqueMemberScoresFromSummations(
+        rows,
+        limit,
+      );
 
       let winners = winnersFromSummations;
       let dataSource: 'reviewSummation' | 'reviewSummaries' = 'reviewSummation';
@@ -615,9 +616,7 @@ export class ReviewService {
     }
   }
 
-  async getActiveContestSubmissionIds(
-    challengeId: string,
-  ): Promise<string[]> {
+  async getActiveContestSubmissionIds(challengeId: string): Promise<string[]> {
     try {
       const submissions = await this.getActiveContestSubmissions(challengeId);
       const submissionIds = submissions.map((record) => record.id);
@@ -660,28 +659,22 @@ export class ReviewService {
         .map((record) => record.id)
         .filter(Boolean);
 
-      void this.dbLogger.logAction(
-        'review.getActiveCheckpointSubmissionIds',
-        {
-          challengeId,
-          status: 'SUCCESS',
-          source: ReviewService.name,
-          details: { submissionCount: submissionIds.length },
-        },
-      );
+      void this.dbLogger.logAction('review.getActiveCheckpointSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: submissionIds.length },
+      });
 
       return submissionIds;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction(
-        'review.getActiveCheckpointSubmissionIds',
-        {
-          challengeId,
-          status: 'ERROR',
-          source: ReviewService.name,
-          details: { error: err.message },
-        },
-      );
+      void this.dbLogger.logAction('review.getActiveCheckpointSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
       throw err;
     }
   }
@@ -869,7 +862,9 @@ export class ReviewService {
 
     try {
       const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
-      const passedIds = new Set(rows.map((record) => record.id).filter(Boolean));
+      const passedIds = new Set(
+        rows.map((record) => record.id).filter(Boolean),
+      );
 
       void this.dbLogger.logAction('review.getPassedScreeningSubmissionIds', {
         challengeId,
@@ -948,9 +943,7 @@ export class ReviewService {
     }
   }
 
-  async getReviewerSubmissionPairs(
-    challengeId: string,
-  ): Promise<Set<string>> {
+  async getReviewerSubmissionPairs(challengeId: string): Promise<Set<string>> {
     if (!challengeId) {
       return new Set<string>();
     }
@@ -1098,9 +1091,8 @@ export class ReviewService {
             SELECT pg_advisory_xact_lock(${lockId})
           `);
 
-          const insertedReviews = await tx.$queryRaw<
-            Array<{ id: string }>
-          >(insert);
+          const insertedReviews =
+            await tx.$queryRaw<Array<{ id: string }>>(insert);
 
           if (insertedReviews.length > 0) {
             return {
@@ -1305,36 +1297,30 @@ export class ReviewService {
     try {
       const reassigned = await this.prisma.$executeRaw(query);
 
-      void this.dbLogger.logAction(
-        'review.reassignPendingReviewsToResource',
-        {
-          challengeId,
-          status: 'SUCCESS',
-          source: ReviewService.name,
-          details: {
-            phaseId: trimmedPhaseId,
-            resourceId: trimmedResourceId,
-            reassignedCount: reassigned,
-          },
+      void this.dbLogger.logAction('review.reassignPendingReviewsToResource', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          resourceId: trimmedResourceId,
+          reassignedCount: reassigned,
         },
-      );
+      });
 
       return reassigned;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction(
-        'review.reassignPendingReviewsToResource',
-        {
-          challengeId,
-          status: 'ERROR',
-          source: ReviewService.name,
-          details: {
-            phaseId: trimmedPhaseId,
-            resourceId: trimmedResourceId,
-            error: err.message,
-          },
+      void this.dbLogger.logAction('review.reassignPendingReviewsToResource', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          resourceId: trimmedResourceId,
+          error: err.message,
         },
-      );
+      });
       throw err;
     }
   }
@@ -1464,8 +1450,7 @@ export class ReviewService {
       return [];
     }
 
-    let summaries =
-      await this.getSummariesFromReviewSummations(challengeId);
+    let summaries = await this.getSummariesFromReviewSummations(challengeId);
     let usedRebuild = false;
 
     if (!summaries.length) {
@@ -1483,11 +1468,11 @@ export class ReviewService {
         hasRecalculatedSummaries &&
         !this.areSummariesEquivalent(summaries, recalculatedSummaries);
 
-      if (hasRecalculatedSummaries && (recalculatedHasPassing || summariesDiffer)) {
-        await this.replaceReviewSummations(
-          challengeId,
-          recalculatedSummaries,
-        );
+      if (
+        hasRecalculatedSummaries &&
+        (recalculatedHasPassing || summariesDiffer)
+      ) {
+        await this.replaceReviewSummations(challengeId, recalculatedSummaries);
         summaries = recalculatedSummaries;
         usedRebuild = true;
       }
@@ -1510,8 +1495,9 @@ export class ReviewService {
   private async getSummariesFromReviewSummations(
     challengeId: string,
   ): Promise<SubmissionSummary[]> {
-    const rows =
-      await this.prisma.$queryRaw<ReviewSummationSummaryRecord[]>(Prisma.sql`
+    const rows = await this.prisma.$queryRaw<
+      ReviewSummationSummaryRecord[]
+    >(Prisma.sql`
         SELECT
           s."id" AS "submissionId",
           s."legacySubmissionId" AS "legacySubmissionId",
@@ -1540,20 +1526,21 @@ export class ReviewService {
     }
 
     return rows.map((row) => {
-      const aggregateScore = Number(row.aggregateScore ?? 0);
+      const rawAggregateScore = Number(row.aggregateScore);
+      const hasAggregateScore = Number.isFinite(rawAggregateScore);
+      const aggregateScore = hasAggregateScore ? rawAggregateScore : 0;
       const passingScore = this.resolvePassingScore(row.minimumPassingScore);
-      const isPassing =
-        typeof row.isPassing === 'boolean'
+      const isPassing = hasAggregateScore
+        ? rawAggregateScore >= passingScore
+        : typeof row.isPassing === 'boolean'
           ? row.isPassing
-          : aggregateScore >= passingScore;
+          : false;
 
       return {
         submissionId: row.submissionId,
         legacySubmissionId: row.legacySubmissionId ?? null,
         memberId: row.memberId ?? null,
-        submittedDate: row.submittedDate
-          ? new Date(row.submittedDate)
-          : null,
+        submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
         aggregateScore,
         scorecardId: row.scorecardId ?? null,
         scorecardLegacyId: row.scorecardLegacyId ?? null,
@@ -1630,9 +1617,7 @@ export class ReviewService {
           submissionId,
           legacySubmissionId: row.legacySubmissionId ?? null,
           memberId: row.memberId ?? null,
-          submittedDate: row.submittedDate
-            ? new Date(row.submittedDate)
-            : null,
+          submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
           primarySum: 0,
           primaryCount: 0,
           primaryScorecardId: null,
@@ -1662,10 +1647,7 @@ export class ReviewService {
       const reviewTypeName = row.reviewTypeName ?? null;
       const scorecardType = row.scorecardType ?? null;
 
-      if (
-        hasScore &&
-        ReviewService.isFinalReviewType(reviewTypeName)
-      ) {
+      if (hasScore && ReviewService.isFinalReviewType(reviewTypeName)) {
         accumulator.primarySum += numericScore;
         accumulator.primaryCount += 1;
         if (!accumulator.primaryScorecardId && row.scorecardId) {
@@ -1689,10 +1671,7 @@ export class ReviewService {
         if (!accumulator.fallbackScorecardId && row.scorecardId) {
           accumulator.fallbackScorecardId = row.scorecardId;
         }
-        if (
-          !accumulator.fallbackScorecardLegacyId &&
-          row.scorecardLegacyId
-        ) {
+        if (!accumulator.fallbackScorecardLegacyId && row.scorecardLegacyId) {
           accumulator.fallbackScorecardLegacyId = row.scorecardLegacyId;
         }
         if (accumulator.fallbackPassingScore === null) {
@@ -1865,9 +1844,7 @@ export class ReviewService {
     }
   }
 
-  async getScorecardPassingScore(
-    scorecardId: string | null,
-  ): Promise<number> {
+  async getScorecardPassingScore(scorecardId: string | null): Promise<number> {
     if (!scorecardId) {
       return 50;
     }
@@ -1925,9 +1902,8 @@ export class ReviewService {
     `;
 
     try {
-      const [record] = await this.prisma.$queryRaw<{ id: string | null }[]>(
-        query,
-      );
+      const [record] =
+        await this.prisma.$queryRaw<{ id: string | null }[]>(query);
 
       const id = record?.id ?? null;
 

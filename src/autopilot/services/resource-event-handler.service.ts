@@ -208,7 +208,9 @@ export class ResourceEventHandler {
       }
 
       const reviewPhases = challenge.phases?.filter(
-        (phase) => REVIEW_PHASE_NAMES.has(phase.name) || SCREENING_PHASE_NAMES.has(phase.name),
+        (phase) =>
+          REVIEW_PHASE_NAMES.has(phase.name) ||
+          SCREENING_PHASE_NAMES.has(phase.name),
       );
 
       if (reviewPhases?.length) {
@@ -315,11 +317,12 @@ export class ResourceEventHandler {
 
       if (isReviewPhase) {
         try {
-          ready = await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
-            challenge.id,
-            phase,
-            openPhaseCallback,
-          );
+          ready =
+            await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+              challenge.id,
+              phase,
+              openPhaseCallback,
+            );
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -380,7 +383,9 @@ export class ResourceEventHandler {
 
     const required = reviewerConfigs.reduce((total, config) => {
       const normalized = Number(config.memberReviewerCount ?? 1);
-      const increment = Number.isFinite(normalized) ? Math.max(normalized, 0) : 0;
+      const increment = Number.isFinite(normalized)
+        ? Math.max(normalized, 0)
+        : 0;
       return total + increment;
     }, 0);
 

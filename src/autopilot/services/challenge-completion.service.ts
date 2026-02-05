@@ -31,9 +31,7 @@ export class ChallengeCompletionService {
     private readonly kafkaService: KafkaService,
   ) {}
 
-  private async ensureCancelledPostMortem(
-    challengeId: string,
-  ): Promise<void> {
+  private async ensureCancelledPostMortem(challengeId: string): Promise<void> {
     try {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
@@ -93,10 +91,10 @@ export class ChallengeCompletionService {
       // Assign to Post-Mortem resources if scorecard is available
       if (scorecardId) {
         const reviewerAndCopilotResources =
-          await this.resourcesService.getResourcesByRoleNames(
-            challengeId,
-            ['Reviewer', 'Copilot'],
-          );
+          await this.resourcesService.getResourcesByRoleNames(challengeId, [
+            'Reviewer',
+            'Copilot',
+          ]);
         const postMortemResources =
           await this.resourcesService.ensureResourcesForMembers(
             challengeId,
@@ -235,12 +233,11 @@ export class ChallengeCompletionService {
         return;
       }
 
-      const topScores =
-        await this.reviewService.getTopCheckpointReviewScores(
-          challengeId,
-          phaseId,
-          checkpointPrizeLimit,
-        );
+      const topScores = await this.reviewService.getTopCheckpointReviewScores(
+        challengeId,
+        phaseId,
+        checkpointPrizeLimit,
+      );
 
       if (!topScores.length) {
         this.logger.warn(
@@ -302,10 +299,7 @@ export class ChallengeCompletionService {
         }
       }
 
-      await this.challengeApiService.setCheckpointWinners(
-        challengeId,
-        winners,
-      );
+      await this.challengeApiService.setCheckpointWinners(challengeId, winners);
 
       this.logger.log(
         `Assigned ${winners.length} checkpoint winner(s) for challenge ${challengeId} after closing phase ${phaseId}.`,
@@ -459,7 +453,11 @@ export class ChallengeCompletionService {
     await this.challengeApiService.completeChallenge(challengeId, winners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    await this.publishChallengeCompletionUpdate(challengeId, winners, challenge);
+    await this.publishChallengeCompletionUpdate(
+      challengeId,
+      winners,
+      challenge,
+    );
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s).`,
     );

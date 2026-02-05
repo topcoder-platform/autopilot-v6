@@ -23,8 +23,7 @@ export default registerAs('autopilot', () => ({
   topgearPostMortemScorecardId:
     process.env.TOPGEAR_POST_MORTEM_SCORECARD_ID || null,
   // Optional default scorecard to use for First2Finish iterative reviews
-  iterativeReviewScorecardId:
-    process.env.ITERATIVE_REVIEW_SCORECARD_ID || null,
+  iterativeReviewScorecardId: process.env.ITERATIVE_REVIEW_SCORECARD_ID || null,
   postMortemDurationHours: parseNumber(
     process.env.POST_MORTEM_DURATION_HOURS,
     72,

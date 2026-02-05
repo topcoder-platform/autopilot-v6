@@ -41,17 +41,27 @@ type ChallengeApiServiceMock = {
   getChallengePhases: MockedMethod<ChallengeApiService['getChallengePhases']>;
   getChallengeById: MockedMethod<ChallengeApiService['getChallengeById']>;
   cancelChallenge: MockedMethod<ChallengeApiService['cancelChallenge']>;
-  createPostMortemPhase: MockedMethod<ChallengeApiService['createPostMortemPhase']>;
+  createPostMortemPhase: MockedMethod<
+    ChallengeApiService['createPostMortemPhase']
+  >;
 };
 
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
-  getActiveContestSubmissionIds: MockedMethod<ReviewService['getActiveContestSubmissionIds']>;
-  getFailedScreeningSubmissionIds: MockedMethod<ReviewService['getFailedScreeningSubmissionIds']>;
-  getPassedScreeningSubmissionIds: MockedMethod<ReviewService['getPassedScreeningSubmissionIds']>;
-  getCompletedReviewCountForPhase: MockedMethod<ReviewService['getCompletedReviewCountForPhase']>;
+  getActiveContestSubmissionIds: MockedMethod<
+    ReviewService['getActiveContestSubmissionIds']
+  >;
+  getFailedScreeningSubmissionIds: MockedMethod<
+    ReviewService['getFailedScreeningSubmissionIds']
+  >;
+  getPassedScreeningSubmissionIds: MockedMethod<
+    ReviewService['getPassedScreeningSubmissionIds']
+  >;
+  getCompletedReviewCountForPhase: MockedMethod<
+    ReviewService['getCompletedReviewCountForPhase']
+  >;
 };
 
 type KafkaServiceMock = {
@@ -193,12 +203,8 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService.getPendingReviewCount.mockResolvedValue(0);
     reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
-    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
-      new Set(),
-    );
-    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(
-      new Set(),
-    );
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
 
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
@@ -339,7 +345,9 @@ describe('SchedulerService (review phase deferral)', () => {
       isOpen: false,
       actualStartDate: null,
       actualEndDate: null,
-      scheduledStartDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      scheduledStartDate: new Date(
+        Date.now() + 2 * 60 * 60 * 1000,
+      ).toISOString(),
       scheduledEndDate: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
     });
 
@@ -496,9 +504,9 @@ describe('SchedulerService (review phase deferral)', () => {
 
     await scheduler.advancePhase(payload);
 
-    expect(
-      first2FinishService.handleIterativePhaseClosed,
-    ).toHaveBeenCalledWith(payload.challengeId);
+    expect(first2FinishService.handleIterativePhaseClosed).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
   });
 
   it('skips iterative submission refresh when instructed', async () => {
@@ -523,7 +531,9 @@ describe('SchedulerService (review phase deferral)', () => {
 
     await scheduler.advancePhase(payload);
 
-    expect(first2FinishService.handleIterativePhaseClosed).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleIterativePhaseClosed,
+    ).not.toHaveBeenCalled();
   });
 
   it('assigns checkpoint winners after closing checkpoint review', async () => {
@@ -796,9 +806,7 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
       new Set(['submission-1', 'submission-2']),
     );
-    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(
-      new Set(),
-    );
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
 
     const challenge = {
       id: payload.challengeId,
@@ -852,9 +860,9 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.challengeId,
       ['screening-scorecard'],
     );
-    expect(
-      financeApiService.generateChallengePayments,
-    ).toHaveBeenCalledWith(payload.challengeId);
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
     expect(challengeApiService.createPostMortemPhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,

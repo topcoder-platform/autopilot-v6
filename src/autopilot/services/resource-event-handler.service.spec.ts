@@ -133,11 +133,9 @@ describe('ResourceEventHandler', () => {
 
       await handler.handleResourceCreated(payload);
 
-      expect(reviewService.reassignPendingReviewsToResource).toHaveBeenCalledWith(
-        'phase-approval',
-        resourceId,
-        challengeId,
-      );
+      expect(
+        reviewService.reassignPendingReviewsToResource,
+      ).toHaveBeenCalledWith('phase-approval', resourceId, challengeId);
       expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
     });
 
@@ -190,7 +188,9 @@ describe('ResourceEventHandler', () => {
 
       await handler.handleResourceCreated(payload);
 
-      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
+      expect(
+        reviewAssignmentService.ensureAssignmentsOrSchedule,
+      ).not.toHaveBeenCalled();
       expect(schedulerService.advancePhase).toHaveBeenCalledWith({
         projectId: 321,
         challengeId,
@@ -250,7 +250,9 @@ describe('ResourceEventHandler', () => {
       await handler.handleResourceCreated(payload);
 
       expect(schedulerService.advancePhase).not.toHaveBeenCalled();
-      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
+      expect(
+        reviewAssignmentService.ensureAssignmentsOrSchedule,
+      ).not.toHaveBeenCalled();
     });
   });
 });

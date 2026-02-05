@@ -28,7 +28,7 @@ type KafkaStream = MessagesStream<string, unknown, string, string>;
 
 type KafkaModule = typeof import('@platformatic/kafka');
 
-// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
 const dynamicImport = new Function(
   'specifier',
   'return import(specifier);',
@@ -38,12 +38,10 @@ let kafkaModulePromise: Promise<KafkaModule> | null = null;
 
 const loadKafkaModule = (): Promise<KafkaModule> => {
   if (!kafkaModulePromise) {
-    kafkaModulePromise = dynamicImport('@platformatic/kafka').catch(
-      (error) => {
-        kafkaModulePromise = null;
-        throw error;
-      },
-    );
+    kafkaModulePromise = dynamicImport('@platformatic/kafka').catch((error) => {
+      kafkaModulePromise = null;
+      throw error;
+    });
   }
 
   return kafkaModulePromise;
@@ -110,8 +108,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
             this.configService.get('kafka.retry.retries') ||
             CONFIG.KAFKA.DEFAULT_RETRIES,
           maxRetryTime:
-          this.configService.get('kafka.retry.maxRetryTime') ||
-          CONFIG.KAFKA.DEFAULT_MAX_RETRY_TIME,
+            this.configService.get('kafka.retry.maxRetryTime') ||
+            CONFIG.KAFKA.DEFAULT_MAX_RETRY_TIME,
         },
       };
     } catch (error) {
@@ -471,12 +469,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
   }
 
   private async createProducer(): Promise<KafkaProducer> {
-    const {
-      Producer,
-      ProduceAcks,
-      jsonSerializer,
-      stringSerializer,
-    } = await loadKafkaModule();
+    const { Producer, ProduceAcks, jsonSerializer, stringSerializer } =
+      await loadKafkaModule();
 
     return new Producer({
       clientId: this.kafkaConfig.clientId,
@@ -502,11 +496,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       return existing;
     }
 
-    const {
-      Consumer,
-      jsonDeserializer,
-      stringDeserializer,
-    } = await loadKafkaModule();
+    const { Consumer, jsonDeserializer, stringDeserializer } =
+      await loadKafkaModule();
 
     const consumer = new Consumer({
       clientId: `${this.kafkaConfig.clientId}-${groupId}`,
