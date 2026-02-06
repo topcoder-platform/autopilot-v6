@@ -537,6 +537,30 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
 
+      if (operation === 'open' && isReviewPhase) {
+        const canOpenNow =
+          await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+            data.challengeId,
+            phaseDetails,
+            async (): Promise<boolean> => {
+              await this.advancePhase({
+                ...data,
+                state: 'START',
+                phaseTypeName: phaseName,
+                operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+                projectStatus: data.projectStatus ?? ChallengeStatusEnum.ACTIVE,
+                date: new Date().toISOString(),
+              });
+
+              return true;
+            },
+          );
+
+        if (!canOpenNow) {
+          return;
+        }
+      }
+
       // Registration close handling
       if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
         try {
