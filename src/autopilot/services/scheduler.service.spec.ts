@@ -329,6 +329,34 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('defers opening review phases when required reviewers are not assigned', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseTypeName: 'Review',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewAssignmentService.ensureAssignmentsOrSchedule.mockResolvedValue(
+      false,
+    );
+
+    await scheduler.advancePhase(payload);
+
+    const assignmentCalls =
+      reviewAssignmentService.ensureAssignmentsOrSchedule.mock.calls;
+    expect(assignmentCalls).toHaveLength(1);
+    expect(assignmentCalls[0][0]).toBe(payload.challengeId);
+    expect(assignmentCalls[0][1]).toEqual(phaseDetails);
+    expect(assignmentCalls[0][2]).toEqual(expect.any(Function));
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+  });
+
   it('opens appeals immediately after closing review even when successors are not returned', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({

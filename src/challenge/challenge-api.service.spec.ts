@@ -1,7 +1,7 @@
 import { ChallengeApiService } from './challenge-api.service';
 import type { ChallengePrismaService } from './challenge-prisma.service';
 import type { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
-import { ChallengeStatusEnum } from '@prisma/client';
+import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
 
 describe('ChallengeApiService - advancePhase scheduling', () => {
@@ -814,7 +814,12 @@ describe('ChallengeApiService - end date handling', () => {
   it('sets the endDate when completing a challenge', async () => {
     const winners = [
       { userId: 123, handle: 'winner', placement: 1 },
-      { userId: 456, handle: 'runner-up', placement: 2 },
+      {
+        userId: 456,
+        handle: 'runner-up',
+        placement: 1,
+        type: PrizeSetTypeEnum.PASSED_REVIEW,
+      },
     ];
 
     await service.completeChallenge('challenge-123', winners);
@@ -828,11 +833,18 @@ describe('ChallengeApiService - end date handling', () => {
       },
     });
     expect(challengeWinnerDeleteMany).toHaveBeenCalledWith({
-      where: { challengeId: 'challenge-123', type: 'PLACEMENT' },
+      where: {
+        challengeId: 'challenge-123',
+        type: { in: ['PLACEMENT', 'PASSED_REVIEW'] },
+      },
     });
     expect(challengeWinnerCreateMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({ challengeId: 'challenge-123' }),
+        expect.objectContaining({
+          challengeId: 'challenge-123',
+          type: PrizeSetTypeEnum.PASSED_REVIEW,
+        }),
       ]),
     });
     expect(dbLogger.logAction).toHaveBeenCalledWith(
