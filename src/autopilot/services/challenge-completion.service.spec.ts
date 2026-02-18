@@ -359,7 +359,7 @@ describe('ChallengeCompletionService', () => {
     );
   });
 
-  it('limits winners to the number of placement prizes', async () => {
+  it('stores remaining passing submissions as passed review winners', async () => {
     const challenge = buildChallenge({
       prizeSets: [
         buildPlacementPrizeSet(2),
@@ -403,20 +403,28 @@ describe('ChallengeCompletionService', () => {
     );
 
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
-    expect(winners).toHaveLength(2);
+    expect(winners).toHaveLength(3);
     expect(winners[0]).toMatchObject({
       userId: 101,
       placement: 1,
       handle: 'user101',
+      type: PrizeSetTypeEnum.PLACEMENT,
     });
     expect(winners[1]).toMatchObject({
       userId: 102,
       placement: 2,
       handle: 'user102',
+      type: PrizeSetTypeEnum.PLACEMENT,
+    });
+    expect(winners[2]).toMatchObject({
+      userId: 103,
+      placement: 1,
+      handle: 'user103',
+      type: PrizeSetTypeEnum.PASSED_REVIEW,
     });
   });
 
-  it('awards only one placement per member even with multiple passing submissions', async () => {
+  it('preserves multiple passing submissions from the same member', async () => {
     const challenge = buildChallenge({
       prizeSets: [buildPlacementPrizeSet(3)],
       numOfSubmissions: 3,
@@ -475,9 +483,14 @@ describe('ChallengeCompletionService', () => {
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
 
-    expect(winners).toHaveLength(2);
-    expect(winners.map((winner) => winner.userId)).toEqual([101, 102]);
-    expect(winners.map((winner) => winner.placement)).toEqual([1, 2]);
+    expect(winners).toHaveLength(3);
+    expect(winners.map((winner) => winner.userId)).toEqual([101, 101, 102]);
+    expect(winners.map((winner) => winner.placement)).toEqual([1, 2, 3]);
+    expect(winners.map((winner) => winner.type)).toEqual([
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+    ]);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
@@ -508,6 +521,11 @@ describe('ChallengeCompletionService', () => {
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
     expect(winners).toHaveLength(summaries.length);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
+    expect(winners.map((winner) => winner.type)).toEqual([
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+    ]);
   });
 
   it('creates post-mortem reviews for reviewers and copilots when zero submissions trigger cancellation', async () => {

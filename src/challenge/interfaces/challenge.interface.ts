@@ -41,7 +41,7 @@ export interface IChallengeWinner {
   userId: number;
   handle: string;
   placement: number;
-  type?: string;
+  type?: PrizeSetTypeEnum;
 }
 
 export interface IChallengePrize {

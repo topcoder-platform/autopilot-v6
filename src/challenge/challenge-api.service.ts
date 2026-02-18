@@ -1558,7 +1558,12 @@ export class ChallengeApiService {
         });
 
         await tx.challengeWinner.deleteMany({
-          where: { challengeId, type: PrizeSetTypeEnum.PLACEMENT },
+          where: {
+            challengeId,
+            type: {
+              in: [PrizeSetTypeEnum.PLACEMENT, PrizeSetTypeEnum.PASSED_REVIEW],
+            },
+          },
         });
 
         if (winners.length) {
@@ -1568,7 +1573,10 @@ export class ChallengeApiService {
               userId: winner.userId,
               handle: winner.handle,
               placement: winner.placement,
-              type: PrizeSetTypeEnum.PLACEMENT,
+              type:
+                winner.type === PrizeSetTypeEnum.PASSED_REVIEW
+                  ? PrizeSetTypeEnum.PASSED_REVIEW
+                  : PrizeSetTypeEnum.PLACEMENT,
               createdBy: 'Autopilot',
               updatedBy: 'Autopilot',
             })),
