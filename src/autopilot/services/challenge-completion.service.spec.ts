@@ -359,6 +359,32 @@ describe('ChallengeCompletionService', () => {
     );
   });
 
+  it('triggers finance payments when challenge is already COMPLETED', async () => {
+    const challenge = buildChallenge({
+      status: ChallengeStatusEnum.COMPLETED,
+      winners: [
+        {
+          userId: 101,
+          handle: 'user101',
+          placement: 1,
+          type: PrizeSetTypeEnum.PLACEMENT,
+        },
+      ],
+      prizeSets: [buildPlacementPrizeSet(1)],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).not.toHaveBeenCalled();
+    expect(challengeApiService.completeChallenge).not.toHaveBeenCalled();
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+  });
+
   it('stores remaining passing submissions as passed review winners', async () => {
     const challenge = buildChallenge({
       prizeSets: [
