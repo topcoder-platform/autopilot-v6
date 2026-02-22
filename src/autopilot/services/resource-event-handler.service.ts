@@ -30,7 +30,8 @@ import { getReviewerConfigsForPhase } from '../utils/reviewer.utils';
 @Injectable()
 export class ResourceEventHandler {
   private readonly logger = new Logger(ResourceEventHandler.name);
-  private readonly reviewRoleNames: Set<string>;
+  private readonly normalizedReviewRoleNames: Set<string>;
+  private readonly normalizedApprovalPhaseNames: Set<string>;
   private readonly iterativeRoles: string[];
 
   constructor(
@@ -53,7 +54,17 @@ export class ResourceEventHandler {
         ...configuredPostMortemRoles,
       ]),
     );
-    this.reviewRoleNames = this.computeReviewRoleNames(postMortemRoles);
+    const reviewRoleNames = this.computeReviewRoleNames(postMortemRoles);
+    this.normalizedReviewRoleNames = new Set(
+      Array.from(reviewRoleNames)
+        .map((roleName) => this.normalizeName(roleName))
+        .filter((roleName): roleName is string => Boolean(roleName)),
+    );
+    this.normalizedApprovalPhaseNames = new Set(
+      Array.from(APPROVAL_PHASE_NAMES)
+        .map((phaseName) => this.normalizeName(phaseName))
+        .filter((phaseName): phaseName is string => Boolean(phaseName)),
+    );
     this.iterativeRoles = PHASE_ROLE_MAP[ITERATIVE_REVIEW_PHASE_NAME] ?? [
       'Iterative Reviewer',
     ];
@@ -102,11 +113,32 @@ export class ResourceEventHandler {
         return;
       }
 
-      if (roleName === 'Approver') {
+      if (this.isApproverRole(roleName)) {
+        const normalizedCurrentPhaseNames = new Set(
+          (challenge.currentPhaseNames ?? [])
+            .map((phaseName) => this.normalizeName(phaseName))
+            .filter((phaseName): phaseName is string => Boolean(phaseName)),
+        );
         const approvalPhases =
-          challenge.phases?.filter(
-            (phase) => phase.isOpen && APPROVAL_PHASE_NAMES.has(phase.name),
-          ) ?? [];
+          challenge.phases?.filter((phase) => {
+            const normalizedPhaseName = this.normalizeName(phase.name);
+            if (
+              !normalizedPhaseName ||
+              !this.normalizedApprovalPhaseNames.has(normalizedPhaseName)
+            ) {
+              return false;
+            }
+            return (
+              phase.isOpen ||
+              normalizedCurrentPhaseNames.has(normalizedPhaseName)
+            );
+          }) ?? [];
+
+        if (!approvalPhases.length) {
+          this.logger.debug(
+            `No active Approval phases found for challenge ${challengeId}; skipping reassignment for resource ${resourceId}.`,
+          );
+        }
 
         for (const phase of approvalPhases) {
           try {
@@ -414,9 +446,22 @@ export class ResourceEventHandler {
   }
 
   private isReviewRole(roleName?: string | null): boolean {
-    if (!roleName) {
-      return false;
+    const normalizedRoleName = this.normalizeName(roleName);
+    return normalizedRoleName
+      ? this.normalizedReviewRoleNames.has(normalizedRoleName)
+      : false;
+  }
+
+  private isApproverRole(roleName?: string | null): boolean {
+    const normalizedRoleName = this.normalizeName(roleName);
+    return normalizedRoleName === 'approver';
+  }
+
+  private normalizeName(value?: string | null): string | null {
+    if (typeof value !== 'string') {
+      return null;
     }
-    return this.reviewRoleNames.has(roleName);
+    const normalized = value.trim().toLowerCase();
+    return normalized || null;
   }
 }
