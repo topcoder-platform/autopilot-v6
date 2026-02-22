@@ -324,6 +324,10 @@ export class ReviewService {
             COALESCE(r."finalScore", 0),
             COALESCE(r."initialScore", 0)
           ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
+          AND GREATEST(
+            COALESCE(r."finalScore", 0),
+            COALESCE(r."initialScore", 0)
+          ) > COALESCE(sc."minScore", 0)
         ORDER BY COALESCE(r."finalScore", r."initialScore") DESC,
                  s."submittedDate" ASC NULLS LAST,
                  s."id" ASC

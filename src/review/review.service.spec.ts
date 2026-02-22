@@ -132,7 +132,7 @@ describe('ReviewService', () => {
   describe('getTopCheckpointReviewScores', () => {
     const phaseId = 'phase-checkpoint-review';
 
-    it('filters to checkpoint reviews that meet minimum passing score', async () => {
+    it('filters to checkpoint reviews that meet minimum passing score and beat min score', async () => {
       prismaMock.$queryRaw.mockResolvedValue([
         { memberId: '123', submissionId: 'submission-1', score: 92 },
       ]);
@@ -157,6 +157,7 @@ describe('ReviewService', () => {
       expect(sqlText).toContain('GREATEST(');
       expect(sqlText).toContain('minimumPassingScore');
       expect(sqlText).toContain('minScore');
+      expect(sqlText).toContain('> COALESCE(sc."minScore", 0)');
       expect(sqlText).toContain('"scorecard"');
     });
   });
