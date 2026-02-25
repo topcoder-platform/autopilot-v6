@@ -7,10 +7,17 @@ import {
   PhaseTransitionPayload,
   AutopilotOperator,
 } from '../autopilot/interfaces/autopilot.interface';
+import { IChallenge } from '../challenge/interfaces/challenge.interface';
 
 @Injectable()
 export class SyncService {
   private readonly logger = new Logger(SyncService.name);
+  private static readonly PAYABLE_CHALLENGE_STATUSES = [
+    'COMPLETED',
+    'CANCELLED_FAILED_REVIEW',
+  ] as const;
+  private static readonly PAYABLE_CHALLENGE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+  private static readonly PAYABLE_CHALLENGE_PAGE_SIZE = 200;
 
   constructor(
     private readonly autopilotService: AutopilotService,
@@ -31,6 +38,7 @@ export class SyncService {
       let added = 0;
       let updated = 0;
       let removed = 0;
+      let payableReplayed = 0;
 
       const activeChallenges =
         await this.challengeApiService.getAllActiveChallenges({
@@ -149,13 +157,97 @@ export class SyncService {
         }
       }
 
+      payableReplayed = await this.reconcileRecentPayableChallenges();
+
       // New: Summary log
       this.logger.log(
-        `Challenge synchronization completed. Added: ${added}, Updated: ${updated}, Removed: ${removed}.`,
+        `Challenge synchronization completed. Added: ${added}, Updated: ${updated}, Removed: ${removed}, Payable replayed: ${payableReplayed}.`,
       );
     } catch (error) {
       const err = error as Error;
       this.logger.error('Challenge synchronization failed', err.stack);
     }
+  }
+
+  /**
+   * Returns true when a challenge update timestamp falls within the payable
+   * reconciliation lookback window.
+   *
+   * @param challenge challenge snapshot from the Challenge API
+   * @param now current timestamp used for comparison
+   * @returns true if the challenge was updated recently enough to reconcile
+   */
+  private isWithinPayableLookback(challenge: IChallenge, now: Date): boolean {
+    const updatedAtMs = new Date(challenge.updated).getTime();
+    if (!Number.isFinite(updatedAtMs)) {
+      return false;
+    }
+
+    return (
+      now.getTime() - updatedAtMs <= SyncService.PAYABLE_CHALLENGE_LOOKBACK_MS
+    );
+  }
+
+  /**
+   * Replays recent payable-status challenges through the regular challenge
+   * update handler so finance generation can still occur when Kafka update
+   * events are missed or delayed.
+   *
+   * @returns number of payable challenges replayed
+   */
+  private async reconcileRecentPayableChallenges(): Promise<number> {
+    const now = new Date();
+    let replayed = 0;
+
+    for (const status of SyncService.PAYABLE_CHALLENGE_STATUSES) {
+      let challenges: IChallenge[] = [];
+
+      try {
+        challenges = await this.challengeApiService.getAllActiveChallenges({
+          status,
+          page: 1,
+          perPage: SyncService.PAYABLE_CHALLENGE_PAGE_SIZE,
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[FINANCE RECONCILIATION] Failed to fetch ${status} challenges: ${err.message}`,
+          err.stack,
+        );
+        continue;
+      }
+
+      const recentChallenges = challenges.filter((challenge) =>
+        this.isWithinPayableLookback(challenge, now),
+      );
+
+      if (!recentChallenges.length) {
+        continue;
+      }
+
+      this.logger.log(
+        `[FINANCE RECONCILIATION] Replaying ${recentChallenges.length} recent ${status} challenge update(s).`,
+      );
+
+      for (const challenge of recentChallenges) {
+        try {
+          await this.autopilotService.handleChallengeUpdate({
+            id: challenge.id,
+            projectId: challenge.projectId,
+            status: challenge.status,
+            operator: AutopilotOperator.SYSTEM_SYNC,
+          });
+          replayed++;
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[FINANCE RECONCILIATION] Failed to replay challenge update for ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+    }
+
+    return replayed;
   }
 }
