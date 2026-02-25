@@ -67,6 +67,7 @@ type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
 type PrismaQueryLogger = {
   $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
 };
+const FINAL_FIX_PHASE_NAME = 'Final Fix';
 
 @Injectable()
 export class ChallengeApiService {
@@ -1557,6 +1558,41 @@ export class ChallengeApiService {
       phaseTypeId,
       phaseName,
       phaseDescription,
+      durationSeconds,
+    );
+  }
+
+  /**
+   * Creates a follow-up Final Fix phase after a failed Approval even when the
+   * challenge timeline does not already contain a Final Fix phase instance.
+   *
+   * @param challengeId challenge identifier
+   * @param predecessorPhaseId Approval phase instance that was just closed
+   * @param durationSeconds desired duration in seconds for the new Final Fix phase
+   * @returns created Final Fix phase
+   */
+  async createFinalFixPhaseAfterApproval(
+    challengeId: string,
+    predecessorPhaseId: string,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    const finalFixPhaseType = await this.prisma.phase.findFirst({
+      where: { name: FINAL_FIX_PHASE_NAME },
+    });
+
+    if (!finalFixPhaseType) {
+      throw new NotFoundException(
+        `Phase type "${FINAL_FIX_PHASE_NAME}" is not configured in the system.`,
+      );
+    }
+
+    return this.createContinuationPhase(
+      'challenge.createFinalFixPhase',
+      challengeId,
+      predecessorPhaseId,
+      finalFixPhaseType.id,
+      finalFixPhaseType.name,
+      finalFixPhaseType.description ?? null,
       durationSeconds,
     );
   }

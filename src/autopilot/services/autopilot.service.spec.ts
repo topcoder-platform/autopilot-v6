@@ -112,6 +112,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createIterativeReviewPhase: jest.fn(),
       createApprovalPhase: jest.fn(),
       createFinalFixPhase: jest.fn(),
+      createFinalFixPhaseAfterApproval: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
     reviewService = {
@@ -785,6 +786,48 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       );
       expect(challengeApiService.createApprovalPhase).not.toHaveBeenCalled();
       expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    });
+
+    it('creates fallback Final Fix by phase type when challenge timeline has no Final Fix template', async () => {
+      const approvalPhase = buildApprovalPhase({
+        predecessor: null,
+      });
+      challengeApiService.getChallengeById.mockResolvedValueOnce(
+        buildChallenge([approvalPhase]),
+      );
+
+      reviewService.getScorecardPassingScore.mockResolvedValueOnce(90);
+      reviewService.getReviewById.mockResolvedValueOnce({
+        id: 'review-approval',
+        phaseId: 'phase-approval',
+        resourceId: 'resource-approval',
+        submissionId: 'submission-approval',
+        scorecardId: 'scorecard-approval',
+        score: 72,
+        status: 'COMPLETED',
+      });
+
+      const fallbackFinalFix: IPhase = {
+        ...buildFinalFixPhase(),
+        id: 'phase-final-fix-fallback',
+        isOpen: true,
+        actualEndDate: null,
+        predecessor: approvalPhase.id,
+      };
+      challengeApiService.createFinalFixPhaseAfterApproval.mockResolvedValueOnce(
+        fallbackFinalFix,
+      );
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(
+        challengeApiService.createFinalFixPhaseAfterApproval,
+      ).toHaveBeenCalledWith(
+        'challenge-approval',
+        'phase-approval',
+        expect.any(Number),
+      );
+      expect(challengeApiService.createFinalFixPhase).not.toHaveBeenCalled();
     });
   });
 

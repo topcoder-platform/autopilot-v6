@@ -586,9 +586,19 @@ export class AutopilotService {
       );
 
     if (!finalFixTemplate?.phaseId) {
-      this.logger.error(
-        `Unable to create follow-up Final Fix phase for challenge ${challenge.id}; template Final Fix phase metadata is missing.`,
-      );
+      try {
+        await this.challengeApiService.createFinalFixPhaseAfterApproval(
+          challenge.id,
+          approvalPhase.id,
+          Math.max(approvalPhase.duration || 0, 1),
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to create fallback Final Fix phase for challenge ${challenge.id} after approval rejection: ${err.message}`,
+          err.stack,
+        );
+      }
       return;
     }
 
