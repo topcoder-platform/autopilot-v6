@@ -22,6 +22,7 @@ import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
+  AI_SCREENING_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
@@ -89,6 +90,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly approvalCloseRetryAttempts = new Map<string, number>();
   private readonly approvalCloseRetryBaseDelayMs = 10 * 60 * 1000;
   private readonly approvalCloseRetryMaxDelayMs = 60 * 60 * 1000;
+  private readonly aiScreeningCloseRetryAttempts = new Map<string, number>();
+  private readonly aiScreeningCloseRetryBaseDelayMs = 10 * 60 * 1000;
+  private readonly aiScreeningCloseRetryMaxDelayMs = 60 * 60 * 1000;
   private readonly submitterRoles: string[];
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
@@ -501,6 +505,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const isScreeningPhase =
         SCREENING_PHASE_NAMES.has(phaseName) ||
         SCREENING_PHASE_NAMES.has(data.phaseTypeName);
+      const isAiScreeningPhase =
+        phaseName === AI_SCREENING_PHASE_NAME ||
+        data.phaseTypeName === AI_SCREENING_PHASE_NAME;
       const isApprovalPhase =
         APPROVAL_PHASE_NAMES.has(phaseName) ||
         APPROVAL_PHASE_NAMES.has(data.phaseTypeName);
@@ -643,6 +650,47 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             data,
             undefined,
             'unable to verify review readiness',
+          );
+          return;
+        }
+      }
+
+      // Block closing AI Screening until all configured AI workflows are completed
+      if (operation === 'close' && isAiScreeningPhase) {
+        try {
+          const challenge = await this.challengeApiService.getChallengeById(
+            data.challengeId,
+          );
+          const aiWorkflowIds = this.getAiWorkflowIdsForPhase(
+            challenge,
+            phaseDetails,
+          );
+
+          const inProgressAiWorkflows =
+            await this.reviewService.getInProgressAiWorkflowRunCount(
+              data.challengeId,
+              aiWorkflowIds,
+            );
+
+          if (inProgressAiWorkflows > 0) {
+            await this.deferAiScreeningPhaseClosure(
+              data,
+              inProgressAiWorkflows,
+              `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
+            );
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI SCREENING LATE] Unable to verify AI workflow readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferAiScreeningPhaseClosure(
+            data,
+            undefined,
+            'unable to verify AI workflow readiness',
           );
           return;
         }
@@ -943,6 +991,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         if (operation === 'close' && isApprovalPhase) {
           this.approvalCloseRetryAttempts.delete(
             this.buildApprovalPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+
+        if (operation === 'close' && isAiScreeningPhase) {
+          this.aiScreeningCloseRetryAttempts.delete(
+            this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId),
           );
         }
 
@@ -2189,6 +2243,93 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     phaseId: string,
   ): string {
     return `${challengeId}|${phaseId}|screening-close`;
+  }
+
+  private async deferAiScreeningPhaseClosure(
+    data: PhaseTransitionPayload,
+    pendingCount?: number,
+    reason?: string,
+  ): Promise<void> {
+    const key = this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId);
+    const attempt = (this.aiScreeningCloseRetryAttempts.get(key) ?? 0) + 1;
+    this.aiScreeningCloseRetryAttempts.set(key, attempt);
+
+    const delay = this.computeAiScreeningCloseRetryDelay(attempt);
+    const nextRun = new Date(Date.now() + delay).toISOString();
+
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      date: nextRun,
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+    };
+
+    try {
+      await this.schedulePhaseTransition(payload);
+      const pendingDescription =
+        typeof pendingCount === 'number' && pendingCount >= 0
+          ? pendingCount
+          : 'unknown';
+
+      const reasonMessage =
+        reason ?? `${pendingDescription} in-progress AI workflow run(s) detected`;
+
+      this.logger.warn(
+        `[AI SCREENING LATE] Deferred closing AI screening phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[AI SCREENING LATE] Failed to reschedule close for AI screening phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      this.aiScreeningCloseRetryAttempts.delete(key);
+      throw err;
+    }
+  }
+
+  private computeAiScreeningCloseRetryDelay(attempt: number): number {
+    return this.computeBackoffDelay(
+      attempt,
+      this.aiScreeningCloseRetryBaseDelayMs,
+      this.aiScreeningCloseRetryMaxDelayMs,
+    );
+  }
+
+  private buildAiScreeningPhaseKey(
+    challengeId: string,
+    phaseId: string,
+  ): string {
+    return `${challengeId}|${phaseId}|ai-screening-close`;
+  }
+
+  private getAiWorkflowIdsForPhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): string[] {
+    const challengePhase = challenge.phases?.find(
+      (candidate) => candidate.id === phase.id,
+    );
+    // const phaseTemplateId = challengePhase?.phaseId ?? phase.phaseId ?? null;
+
+    return Array.from(
+      new Set(
+        (challenge.reviewers ?? [])
+          // we don't actually care about ai review phaseId, they always run
+          // .filter((reviewer) => {
+          //   if (!reviewer.aiWorkflowId) {
+          //     return false;
+          //   }
+
+          //   if (!phaseTemplateId) {
+          //     return true;
+          //   }
+
+          //   return reviewer.phaseId === phaseTemplateId;
+          // })
+          .map((reviewer) => reviewer.aiWorkflowId)
+          .filter((workflowId): workflowId is string => Boolean(workflowId)),
+      ),
+    );
   }
 
   private async deferApprovalPhaseClosure(

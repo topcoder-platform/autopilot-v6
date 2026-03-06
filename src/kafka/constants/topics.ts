@@ -9,6 +9,7 @@ export const KAFKA_TOPICS = {
   RESOURCE_DELETED: 'challenge.action.resource.delete',
   REVIEW_COMPLETED: 'review.action.completed',
   REVIEW_APPEAL_RESPONDED: 'review.action.appeal.responded',
+  AI_WORKFLOW_COMPLETED: 'aiworkflow.action.completed',
   FIRST2FINISH_SUBMISSION_RECEIVED: 'first2finish.submission.received',
   TOPGEAR_SUBMISSION_RECEIVED: 'topgear.submission.received',
 } as const;

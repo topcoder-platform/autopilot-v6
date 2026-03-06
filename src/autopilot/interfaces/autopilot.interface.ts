@@ -133,6 +133,16 @@ export interface AppealRespondedPayload {
   finalScore: number;
 }
 
+export interface AiWorkflowCompletedPayload {
+  challengeId: string;
+  submissionId: string;
+  aiWorkflowRunId: string;
+  aiWorkflowId: string;
+  status: string;
+  score: number;
+  completedAt: string;
+}
+
 export interface First2FinishSubmissionPayload {
   challengeId: string;
   submissionId: string;

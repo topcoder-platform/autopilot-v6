@@ -82,6 +82,7 @@ export interface SubmissionSummary {
 export class ReviewService {
   private static readonly REVIEW_TABLE = Prisma.sql`"review"`;
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
+  private static readonly AI_WORKFLOW_RUN_TABLE = Prisma.sql`"aiWorkflowRun"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -1031,6 +1032,77 @@ export class ReviewService {
         source: ReviewService.name,
         details: {
           phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getInProgressAiWorkflowRunCount(
+    challengeId: string,
+    workflowIds: string[],
+  ): Promise<number> {
+    const normalizedWorkflowIds = Array.from(
+      new Set(
+        (workflowIds ?? [])
+          .map((workflowId) => workflowId?.trim())
+          .filter((workflowId): workflowId is string => Boolean(workflowId)),
+      ),
+    );
+
+    if (!challengeId || normalizedWorkflowIds.length === 0) {
+      return 0;
+    }
+
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_WORKFLOW_RUN_TABLE} run
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} submission
+        ON submission."id" = run."submissionId"
+      WHERE submission."challengeId" = ${challengeId}
+        AND run."workflowId" IN (${Prisma.join(normalizedWorkflowIds)})
+        AND run."completedAt" IS NULL
+        AND (
+          run."status" IS NULL
+          OR UPPER((run."status")::text) NOT IN (
+            'COMPLETED',
+            'FAILED',
+            'ERROR',
+            'CANCELLED',
+            'CANCELED',
+            'SKIPPED',
+            'TIMED_OUT',
+            'SUCCESS',
+            'DONE'
+          )
+        )
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          workflowCount: normalizedWorkflowIds.length,
+          inProgressCount: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          workflowCount: normalizedWorkflowIds.length,
           error: err.message,
         },
       });
