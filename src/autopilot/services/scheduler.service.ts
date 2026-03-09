@@ -67,6 +67,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         nextPhases: any[],
       ) => Promise<void> | void)
     | null = null;
+  private phaseChainCallbackInitialized = false;
   private finalizationRetryTimers = new Map<string, NodeJS.Timeout>();
   private finalizationAttempts = new Map<string, number>();
   private readonly finalizationRetryBaseDelayMs = 60_000;
@@ -215,6 +216,25 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.initializationPromise;
+
+      // Wait for phase chain callback (with timeout)
+      const callbackTimeout = 30000; // 30 seconds
+      const startTime = Date.now();
+      while (!this.phaseChainCallbackInitialized && Date.now() - startTime < callbackTimeout) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      if (!this.phaseChainCallbackInitialized) {
+        this.logger.error(
+          `[LIFECYCLE] Phase chain callback was not registered within ${callbackTimeout}ms. ` +
+          `This indicates a service initialization issue. Phase chaining will not work.`,
+        );
+        throw new Error('Phase chain callback not registered - service initialization failed');
+      }
+
+      this.logger.log(
+        `[LIFECYCLE] SchedulerService fully initialized with phase chain callback (pid ${process.pid}).`,
+      );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -261,6 +281,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     ) => Promise<void> | void,
   ): void {
     this.phaseChainCallback = callback;
+      this.phaseChainCallbackInitialized = true;
     Logger.log(
       `[PHASE CHAIN] Phase chain callback registered (pid ${process.pid}).`,
       SchedulerService.name,
