@@ -619,7 +619,6 @@ export class AutopilotService {
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,
-        skipReviewCompletionCheck: true,
       });
     } catch (error) {
       const err = error as Error;

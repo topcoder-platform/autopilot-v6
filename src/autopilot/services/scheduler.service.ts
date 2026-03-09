@@ -1093,7 +1093,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 state: 'END',
                 operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
                 date: new Date().toISOString(),
-                skipReviewCompletionCheck: true,
               };
 
               await this.advancePhase(closePayload);

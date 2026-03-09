@@ -1313,7 +1313,6 @@ export class PhaseScheduleManager {
             operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
             projectStatus,
             date: new Date().toISOString(),
-            skipReviewCompletionCheck: true,
           };
 
           await this.schedulerService.advancePhase(closePayload);
