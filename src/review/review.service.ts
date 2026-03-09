@@ -8,6 +8,10 @@ interface SubmissionRecord {
   id: string;
 }
 
+interface AiFailedDecisionRecord {
+  submissionId: string;
+}
+
 export interface ActiveContestSubmission {
   id: string;
   memberId: string | null;
@@ -82,7 +86,8 @@ export interface SubmissionSummary {
 export class ReviewService {
   private static readonly REVIEW_TABLE = Prisma.sql`"review"`;
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
-  private static readonly AI_WORKFLOW_RUN_TABLE = Prisma.sql`"aiWorkflowRun"`;
+  private static readonly AI_REVIEW_CONFIG_TABLE = Prisma.sql`"aiReviewConfig"`;
+  private static readonly AI_REVIEW_DECISION_TABLE = Prisma.sql`"aiReviewDecision"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -817,6 +822,145 @@ export class ReviewService {
     }
   }
 
+  async getAiFailedDecisionSubmissionIds(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<Set<string>> {
+    const uniqueSubmissionIds = Array.from(
+      new Set(
+        submissionIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueSubmissionIds.length) {
+      return new Set();
+    }
+
+    const submissionList = Prisma.join(
+      uniqueSubmissionIds.map((id) => Prisma.sql`${id}`),
+    );
+
+    const query = Prisma.sql`
+      WITH ranked_decisions AS (
+        SELECT
+          d."submissionId" AS "submissionId",
+          UPPER((d."status")::text) AS "decisionStatus",
+          ROW_NUMBER() OVER (
+            PARTITION BY d."submissionId"
+            ORDER BY
+              c."version" DESC,
+              COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+              d."id" DESC
+          ) AS "decisionRank"
+        FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+        INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+          ON c."id" = d."configId"
+        WHERE c."challengeId" = ${challengeId}
+          AND d."submissionId" IN (${submissionList})
+      )
+      SELECT "submissionId"
+      FROM ranked_decisions
+      WHERE "decisionRank" = 1
+        AND "decisionStatus" IN ('FAILED', 'ERROR')
+    `;
+
+    try {
+      const rows =
+        await this.prisma.$queryRaw<AiFailedDecisionRecord[]>(query);
+      const failedIds = new Set(
+        rows.map((record) => record.submissionId).filter(Boolean),
+      );
+
+      void this.dbLogger.logAction('review.getAiFailedDecisionSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          evaluatedSubmissionCount: uniqueSubmissionIds.length,
+          aiFailedSubmissionCount: failedIds.size,
+        },
+      });
+
+      return failedIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getAiFailedDecisionSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          evaluatedSubmissionCount: uniqueSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async markSubmissionsAsAiFailedReview(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<number> {
+    const uniqueSubmissionIds = Array.from(
+      new Set(
+        submissionIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueSubmissionIds.length) {
+      return 0;
+    }
+
+    const submissionList = Prisma.join(
+      uniqueSubmissionIds.map((id) => Prisma.sql`${id}`),
+    );
+
+    const query = Prisma.sql`
+      UPDATE ${ReviewService.SUBMISSION_TABLE}
+      SET
+        "status" = 'AI_FAILED_REVIEW',
+        "updatedAt" = NOW()
+      WHERE "challengeId" = ${challengeId}
+        AND "id" IN (${submissionList})
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) = 'ACTIVE'
+        )
+    `;
+
+    try {
+      const updated = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.markSubmissionsAsAiFailedReview', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          submissionCount: uniqueSubmissionIds.length,
+          updatedCount: updated,
+        },
+      });
+
+      return updated;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.markSubmissionsAsAiFailedReview', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          submissionCount: uniqueSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getPassedScreeningSubmissionIds(
     challengeId: string,
     screeningScorecardIds: string[],
@@ -1032,77 +1176,6 @@ export class ReviewService {
         source: ReviewService.name,
         details: {
           phaseId,
-          error: err.message,
-        },
-      });
-      throw err;
-    }
-  }
-
-  async getInProgressAiWorkflowRunCount(
-    challengeId: string,
-    workflowIds: string[],
-  ): Promise<number> {
-    const normalizedWorkflowIds = Array.from(
-      new Set(
-        (workflowIds ?? [])
-          .map((workflowId) => workflowId?.trim())
-          .filter((workflowId): workflowId is string => Boolean(workflowId)),
-      ),
-    );
-
-    if (!challengeId || normalizedWorkflowIds.length === 0) {
-      return 0;
-    }
-
-    const query = Prisma.sql`
-      SELECT COUNT(*)::int AS count
-      FROM ${ReviewService.AI_WORKFLOW_RUN_TABLE} run
-      INNER JOIN ${ReviewService.SUBMISSION_TABLE} submission
-        ON submission."id" = run."submissionId"
-      WHERE submission."challengeId" = ${challengeId}
-        AND run."workflowId" IN (${Prisma.join(normalizedWorkflowIds)})
-        AND run."completedAt" IS NULL
-        AND (
-          run."status" IS NULL
-          OR UPPER((run."status")::text) NOT IN (
-            'COMPLETED',
-            'FAILED',
-            'ERROR',
-            'CANCELLED',
-            'CANCELED',
-            'SKIPPED',
-            'TIMED_OUT',
-            'SUCCESS',
-            'DONE'
-          )
-        )
-    `;
-
-    try {
-      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
-      const rawCount = Number(record?.count ?? 0);
-      const count = Number.isFinite(rawCount) ? rawCount : 0;
-
-      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
-        challengeId,
-        status: 'SUCCESS',
-        source: ReviewService.name,
-        details: {
-          workflowCount: normalizedWorkflowIds.length,
-          inProgressCount: count,
-        },
-      });
-
-      return count;
-    } catch (error) {
-      const err = error as Error;
-      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
-        challengeId,
-        status: 'ERROR',
-        source: ReviewService.name,
-        details: {
-          workflowCount: normalizedWorkflowIds.length,
           error: err.message,
         },
       });

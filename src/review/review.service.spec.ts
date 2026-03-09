@@ -231,6 +231,98 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getAiFailedDecisionSubmissionIds', () => {
+    it('returns empty set when no submission ids are provided', async () => {
+      const result = await service.getAiFailedDecisionSubmissionIds(
+        challengeId,
+        [],
+      );
+
+      expect(result).toEqual(new Set());
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('returns failed submission ids when ai decision status is FAILED or ERROR', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        { submissionId: 'submission-1' },
+        { submissionId: 'submission-2' },
+      ]);
+
+      const result = await service.getAiFailedDecisionSubmissionIds(
+        challengeId,
+        ['submission-1', 'submission-2', 'submission-3'],
+      );
+
+      expect(result).toEqual(new Set(['submission-1', 'submission-2']));
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('"aiReviewDecision"');
+      expect(sqlText).toContain('"aiReviewConfig"');
+      expect(sqlText).toContain("'FAILED', 'ERROR'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getAiFailedDecisionSubmissionIds',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            evaluatedSubmissionCount: 3,
+            aiFailedSubmissionCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('markSubmissionsAsAiFailedReview', () => {
+    it('returns 0 when submission ids are missing', async () => {
+      const result = await service.markSubmissionsAsAiFailedReview(
+        challengeId,
+        [],
+      );
+
+      expect(result).toBe(0);
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('updates submission status to AI_FAILED_REVIEW and logs success', async () => {
+      prismaMock.$executeRaw.mockResolvedValueOnce(2);
+
+      const result = await service.markSubmissionsAsAiFailedReview(
+        challengeId,
+        ['submission-1', 'submission-2'],
+      );
+
+      expect(result).toBe(2);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$executeRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+      expect(sqlText).toContain("'AI_FAILED_REVIEW'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.markSubmissionsAsAiFailedReview',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            submissionCount: 2,
+            updatedCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
   describe('updatePendingReviewScorecards', () => {
     const phaseId = 'phase-1';
     const scorecardId = 'scorecard-123';
