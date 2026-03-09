@@ -1068,6 +1068,46 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        if (operation === 'open' && isAiScreeningPhase) {
+          try {
+            const challenge =
+              await this.challengeApiService.getChallengeById(data.challengeId);
+            const aiWorkflowIds = this.getAiWorkflowIdsForPhase(
+              challenge,
+              phaseDetails,
+            );
+
+            const inProgressAiWorkflows =
+              await this.reviewService.getInProgressAiWorkflowRunCount(
+                data.challengeId,
+                aiWorkflowIds,
+              );
+
+            if (inProgressAiWorkflows === 0) {
+              this.logger.log(
+                `[AI SCREENING] No pending AI workflow runs for challenge ${data.challengeId}; closing phase ${data.phaseId} immediately after open.`,
+              );
+
+              const closePayload: PhaseTransitionPayload = {
+                ...data,
+                state: 'END',
+                operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+                date: new Date().toISOString(),
+                skipReviewCompletionCheck: true,
+              };
+
+              await this.advancePhase(closePayload);
+              return;
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
         if (operation === 'close') {
           if (phaseName === SUBMISSION_PHASE_NAME) {
             try {
