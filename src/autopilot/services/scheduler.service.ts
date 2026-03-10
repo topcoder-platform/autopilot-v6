@@ -59,6 +59,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
   private topgearPostMortemLocks = new Set<string>();
   private scheduledJobs = new Map<string, PhaseTransitionPayload>();
+  private static phaseChainCallback:
+    | ((
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        nextPhases: any[],
+      ) => Promise<void> | void)
+    | null = null;
   private phaseChainCallback:
     | ((
         challengeId: string,
@@ -120,6 +128,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     @Inject(forwardRef(() => First2FinishService))
     private readonly first2FinishService: First2FinishService,
   ) {
+    this.phaseChainCallback = SchedulerService.phaseChainCallback;
+    SchedulerService.phaseChainCallback = null;
     this.submitterRoles = getNormalizedStringArray(
       this.configService.get('autopilot.submitterRoles'),
       ['Submitter'],
@@ -216,25 +226,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.initializationPromise;
-
-      // Wait for phase chain callback (with timeout)
-      const callbackTimeout = 30000; // 30 seconds
-      const startTime = Date.now();
-      while (!this.phaseChainCallbackInitialized && Date.now() - startTime < callbackTimeout) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-
-      if (!this.phaseChainCallbackInitialized) {
-        this.logger.error(
-          `[LIFECYCLE] Phase chain callback was not registered within ${callbackTimeout}ms. ` +
-          `This indicates a service initialization issue. Phase chaining will not work.`,
-        );
-        throw new Error('Phase chain callback not registered - service initialization failed');
-      }
-
-      this.logger.log(
-        `[LIFECYCLE] SchedulerService fully initialized with phase chain callback (pid ${process.pid}).`,
-      );
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -280,8 +271,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       nextPhases: any[],
     ) => Promise<void> | void,
   ): void {
-    this.phaseChainCallback = callback;
-      this.phaseChainCallbackInitialized = true;
+    SchedulerService.phaseChainCallback = callback;
     Logger.log(
       `[PHASE CHAIN] Phase chain callback registered (pid ${process.pid}).`,
       SchedulerService.name,
