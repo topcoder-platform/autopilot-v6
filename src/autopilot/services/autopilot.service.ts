@@ -42,6 +42,7 @@ import {
 } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
+const FINAL_FIX_PHASE_NAME = 'Final Fix';
 
 @Injectable()
 export class AutopilotService {
@@ -49,6 +50,7 @@ export class AutopilotService {
 
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly approvalResubmissionLocks = new Set<string>();
 
   constructor(
     private readonly phaseScheduleManager: PhaseScheduleManager,
@@ -153,21 +155,29 @@ export class AutopilotService {
 
     // Ensure screening/review records exist when a submission arrives during an open phase
     try {
-      const challenge = await this.challengeApiService.getChallengeById(
-        challengeId,
-      );
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
 
       if (!isActiveStatus(challenge.status)) {
         return;
       }
 
-      const submissionType = (payload.type || '').toString().trim().toUpperCase();
+      const submissionType = (payload.type || '')
+        .toString()
+        .trim()
+        .toUpperCase();
+      const isContestSubmission =
+        submissionType === 'CONTEST_SUBMISSION' || !submissionType;
+
+      if (isContestSubmission && submissionId) {
+        await this.handleApprovalSubmissionLoop(challenge, submissionId);
+      }
 
       // Map submission types to relevant open phases to sync
       const targetPhaseNames = new Set<string>();
       if (submissionType === 'CHECKPOINT_SUBMISSION') {
         targetPhaseNames.add('Checkpoint Screening');
-      } else if (submissionType === 'CONTEST_SUBMISSION' || !submissionType) {
+      } else if (isContestSubmission) {
         // Fallback: standard contest submission or unspecified type
         targetPhaseNames.add('Screening');
       }
@@ -177,12 +187,19 @@ export class AutopilotService {
       }
 
       const openTargets = (challenge.phases ?? []).filter(
-        (p) => p.isOpen && (SCREENING_PHASE_NAMES.has(p.name) || REVIEW_PHASE_NAMES.has(p.name)) && targetPhaseNames.has(p.name),
+        (p) =>
+          p.isOpen &&
+          (SCREENING_PHASE_NAMES.has(p.name) ||
+            REVIEW_PHASE_NAMES.has(p.name)) &&
+          targetPhaseNames.has(p.name),
       );
 
       for (const phase of openTargets) {
         try {
-          await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+          await this.phaseReviewService.handlePhaseOpened(
+            challengeId,
+            phase.id,
+          );
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -302,7 +319,7 @@ export class AutopilotService {
         return;
       }
 
-      // Approval: compare against minimum passing score and create a follow-up Approval phase if it fails
+      // Approval: close phase on completion, but on failure reopen the Final Fix loop instead of chaining successors.
       if (APPROVAL_PHASE_NAMES.has(phase.name)) {
         const scorecardId = review.scorecardId ?? payload.scorecardId ?? null;
         const passingScore =
@@ -331,58 +348,29 @@ export class AutopilotService {
           operator: AutopilotOperator.SYSTEM,
           projectStatus: challenge.status,
           preventFinalization: !reviewPassed,
+          skipPhaseChain: !reviewPassed,
         });
 
         if (reviewPassed) {
           this.logger.log(
             `Approval review passed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}).`,
           );
+          await this.closeOpenFinalFixPhases(challenge);
           return;
         }
 
         this.logger.log(
-          `Approval review failed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}). Creating another Approval phase.`,
+          `Approval review failed for challenge ${challenge.id} (score ${normalizedScore} / passing ${passingScore}). Opening Final Fix to wait for another submission.`,
         );
 
-        if (!phase.phaseId) {
-          this.logger.error(
-            `Cannot create follow-up Approval phase for challenge ${challenge.id}; missing phase template ID on phase ${phase.id}.`,
-          );
-          return;
-        }
-
-        try {
-          const nextApproval = await this.challengeApiService.createApprovalPhase(
-            challenge.id,
-            phase.id,
-            phase.phaseId,
-            phase.name,
-            phase.description ?? null,
-            Math.max(phase.duration || 0, 1),
-          );
-
-          await this.createFollowUpApprovalReviews(
-            challenge,
-            nextApproval,
-            review,
-            payload,
-          );
-
-          await this.phaseReviewService.handlePhaseOpened(
-            challenge.id,
-            nextApproval.id,
-          );
-        } catch (error) {
-          const err = error as Error;
-          this.logger.error(
-            `Failed to create follow-up Approval phase for challenge ${challenge.id}: ${err.message}`,
-            err.stack,
-          );
-        }
+        await this.ensureFollowUpFinalFixPhase(challenge, phase);
         return;
       }
 
-      if (!REVIEW_PHASE_NAMES.has(phase.name) && !SCREENING_PHASE_NAMES.has(phase.name)) {
+      if (
+        !REVIEW_PHASE_NAMES.has(phase.name) &&
+        !SCREENING_PHASE_NAMES.has(phase.name)
+      ) {
         return;
       }
 
@@ -423,47 +411,266 @@ export class AutopilotService {
     }
   }
 
-  private async createFollowUpApprovalReviews(
+  private async handleApprovalSubmissionLoop(
     challenge: IChallenge,
-    nextPhase: IPhase,
-    review: {
-      submissionId: string | null;
-      scorecardId: string | null;
-      resourceId: string;
-    },
-    payload: ReviewCompletedPayload,
+    submissionId: string,
   ): Promise<void> {
-    const submissionId = review.submissionId ?? payload.submissionId ?? null;
+    const phases = challenge.phases ?? [];
 
-    if (!submissionId) {
+    if (
+      phases.some(
+        (phase) => phase.isOpen && APPROVAL_PHASE_NAMES.has(phase.name),
+      )
+    ) {
+      return;
+    }
+
+    const openFinalFixPhases = phases.filter(
+      (phase) => phase.isOpen && this.isFinalFixPhaseName(phase.name),
+    );
+
+    if (!openFinalFixPhases.length) {
+      return;
+    }
+
+    const closedApprovalPhases = phases.filter(
+      (phase) =>
+        APPROVAL_PHASE_NAMES.has(phase.name) &&
+        !phase.isOpen &&
+        Boolean(phase.actualEndDate),
+    );
+
+    if (!closedApprovalPhases.length) {
+      return;
+    }
+
+    const selectedFinalFix =
+      this.getLatestPhase(openFinalFixPhases, (phase) => {
+        const predecessor = this.resolvePhaseByIdentifier(
+          challenge,
+          phase.predecessor,
+        );
+        return Boolean(
+          predecessor && APPROVAL_PHASE_NAMES.has(predecessor.name),
+        );
+      }) ?? this.getLatestPhase(openFinalFixPhases);
+
+    const approvalTemplate = this.getLatestPhase(
+      closedApprovalPhases.filter((phase) => Boolean(phase.phaseId)),
+    );
+
+    if (!selectedFinalFix || !approvalTemplate?.phaseId) {
       this.logger.warn(
-        `Unable to assign follow-up approval review for challenge ${challenge.id}; submissionId missing.`,
+        `Unable to open next Approval phase for challenge ${challenge.id}; missing Final Fix or Approval template metadata.`,
       );
       return;
     }
 
-    let scorecardId =
-      review.scorecardId ??
-      payload.scorecardId ??
-      selectScorecardId(
-        challenge.reviewers ?? [],
-        () =>
-          this.logger.warn(
-            `Missing scorecard configuration for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}.`,
-          ),
-        (choices) =>
-          this.logger.warn(
-            `Multiple scorecards ${choices.join(', ')} detected for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}; defaulting to ${choices[0]}.`,
-          ),
-        nextPhase.phaseId ?? undefined,
+    await this.createApprovalForFinalFixSubmission(
+      challenge.id,
+      selectedFinalFix.id,
+      approvalTemplate,
+      submissionId,
+    );
+  }
+
+  private async createApprovalForFinalFixSubmission(
+    challengeId: string,
+    finalFixPhaseId: string,
+    approvalTemplate: IPhase,
+    submissionId: string,
+  ): Promise<void> {
+    if (this.approvalResubmissionLocks.has(challengeId)) {
+      this.logger.debug(
+        `Approval continuation already in progress for challenge ${challengeId}; skipping duplicate submission trigger.`,
       );
+      return;
+    }
+
+    this.approvalResubmissionLocks.add(challengeId);
+
+    try {
+      const refreshedChallenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!isActiveStatus(refreshedChallenge.status)) {
+        return;
+      }
+
+      const refreshedPhases = refreshedChallenge.phases ?? [];
+      if (
+        refreshedPhases.some(
+          (phase) => phase.isOpen && APPROVAL_PHASE_NAMES.has(phase.name),
+        )
+      ) {
+        return;
+      }
+
+      const activeFinalFix = refreshedPhases.find(
+        (phase) =>
+          phase.id === finalFixPhaseId &&
+          phase.isOpen &&
+          this.isFinalFixPhaseName(phase.name),
+      );
+
+      if (!activeFinalFix) {
+        return;
+      }
+
+      const latestApprovalTemplate =
+        this.getLatestPhase(
+          refreshedPhases.filter(
+            (phase) =>
+              APPROVAL_PHASE_NAMES.has(phase.name) && Boolean(phase.phaseId),
+          ),
+        ) ?? approvalTemplate;
+
+      if (!latestApprovalTemplate.phaseId) {
+        this.logger.warn(
+          `Cannot create continuation Approval for challenge ${challengeId}; missing phase template ID.`,
+        );
+        return;
+      }
+
+      const nextApproval = await this.challengeApiService.createApprovalPhase(
+        challengeId,
+        activeFinalFix.id,
+        latestApprovalTemplate.phaseId,
+        latestApprovalTemplate.name,
+        latestApprovalTemplate.description ?? null,
+        Math.max(latestApprovalTemplate.duration || 0, 1),
+      );
+
+      await this.createApprovalReviewsForSubmission(
+        refreshedChallenge,
+        nextApproval,
+        submissionId,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to open continuation Approval for challenge ${challengeId} after Final Fix submission ${submissionId}: ${err.message}`,
+        err.stack,
+      );
+    } finally {
+      this.approvalResubmissionLocks.delete(challengeId);
+    }
+  }
+
+  private async ensureFollowUpFinalFixPhase(
+    challenge: IChallenge,
+    approvalPhase: IPhase,
+  ): Promise<void> {
+    const phases = challenge.phases ?? [];
+    const openFinalFixPhase = phases.find(
+      (phase) => phase.isOpen && this.isFinalFixPhaseName(phase.name),
+    );
+
+    if (openFinalFixPhase) {
+      this.logger.log(
+        `Final Fix phase ${openFinalFixPhase.id} is already open for challenge ${challenge.id}; waiting for next submission.`,
+      );
+      return;
+    }
+
+    const predecessorPhase = this.resolvePhaseByIdentifier(
+      challenge,
+      approvalPhase.predecessor,
+    );
+
+    const finalFixTemplate =
+      (predecessorPhase && this.isFinalFixPhaseName(predecessorPhase.name)
+        ? predecessorPhase
+        : null) ??
+      this.getLatestPhase(phases, (phase) =>
+        this.isFinalFixPhaseName(phase.name),
+      );
+
+    if (!finalFixTemplate?.phaseId) {
+      try {
+        await this.challengeApiService.createFinalFixPhaseAfterApproval(
+          challenge.id,
+          approvalPhase.id,
+          Math.max(approvalPhase.duration || 0, 1),
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to create fallback Final Fix phase for challenge ${challenge.id} after approval rejection: ${err.message}`,
+          err.stack,
+        );
+      }
+      return;
+    }
+
+    try {
+      await this.challengeApiService.createFinalFixPhase(
+        challenge.id,
+        approvalPhase.id,
+        finalFixTemplate.phaseId,
+        finalFixTemplate.name,
+        finalFixTemplate.description ?? null,
+        Math.max(finalFixTemplate.duration || 0, 1),
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to create follow-up Final Fix phase for challenge ${challenge.id} after approval rejection: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  private async closeOpenFinalFixPhases(challenge: IChallenge): Promise<void> {
+    const openFinalFixPhases = (challenge.phases ?? []).filter(
+      (phase) => phase.isOpen && this.isFinalFixPhaseName(phase.name),
+    );
+
+    for (const finalFixPhase of openFinalFixPhases) {
+      try {
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: finalFixPhase.id,
+          phaseTypeName: finalFixPhase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM,
+          projectStatus: challenge.status,
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `Failed to close Final Fix phase ${finalFixPhase.id} for challenge ${challenge.id} after approval pass: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+  }
+
+  private async createApprovalReviewsForSubmission(
+    challenge: IChallenge,
+    approvalPhase: IPhase,
+    submissionId: string,
+  ): Promise<void> {
+    const scorecardId = selectScorecardId(
+      challenge.reviewers ?? [],
+      () =>
+        this.logger.warn(
+          `Missing scorecard configuration for continuation Approval phase ${approvalPhase.id} on challenge ${challenge.id}.`,
+        ),
+      (choices) =>
+        this.logger.warn(
+          `Multiple scorecards ${choices.join(', ')} detected for continuation Approval phase ${approvalPhase.id} on challenge ${challenge.id}; defaulting to ${choices[0]}.`,
+        ),
+      approvalPhase.phaseId ?? undefined,
+    );
 
     if (!scorecardId) {
       return;
     }
 
+    const roleNames = PHASE_ROLE_MAP[approvalPhase.name] ?? ['Approver'];
     let approverResources: Array<{ id: string }> = [];
-    const roleNames = PHASE_ROLE_MAP[nextPhase.name] ?? ['Approver'];
 
     try {
       approverResources = await this.resourcesService.getReviewerResources(
@@ -473,52 +680,43 @@ export class AutopilotService {
     } catch (error) {
       const err = error as Error;
       this.logger.error(
-        `Failed to load approver resources for follow-up Approval phase ${nextPhase.id} on challenge ${challenge.id}: ${err.message}`,
+        `Failed to load approver resources for continuation Approval phase ${approvalPhase.id} on challenge ${challenge.id}: ${err.message}`,
         err.stack,
       );
       return;
     }
 
-    const resourceMap = new Map<string, { id: string }>();
-    for (const resource of approverResources) {
-      if (resource?.id) {
-        resourceMap.set(resource.id, { id: resource.id });
-      }
-    }
+    const uniqueResources = Array.from(
+      new Set(
+        approverResources.map((resource) => resource?.id).filter(Boolean),
+      ),
+    );
 
-    if (review?.resourceId) {
-      resourceMap.set(review.resourceId, { id: review.resourceId });
-    }
-    if (payload.reviewerResourceId) {
-      resourceMap.set(payload.reviewerResourceId, {
-        id: payload.reviewerResourceId,
-      });
-    }
-
-    if (!resourceMap.size) {
+    if (!uniqueResources.length) {
       this.logger.warn(
-        `Unable to assign follow-up approval review for challenge ${challenge.id}; no approver resources found.`,
+        `Unable to assign continuation Approval review for challenge ${challenge.id}; no approver resources found.`,
       );
       return;
     }
 
     let createdCount = 0;
-    for (const resource of resourceMap.values()) {
+    for (const resourceId of uniqueResources) {
       try {
         const created = await this.reviewService.createPendingReview(
           submissionId,
-          resource.id,
-          nextPhase.id,
+          resourceId,
+          approvalPhase.id,
           scorecardId,
           challenge.id,
         );
+
         if (created) {
           createdCount += 1;
         }
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `Failed to create follow-up approval review for challenge ${challenge.id}, phase ${nextPhase.id}, resource ${resource.id}: ${err.message}`,
+          `Failed to create continuation Approval review for challenge ${challenge.id}, phase ${approvalPhase.id}, resource ${resourceId}: ${err.message}`,
           err.stack,
         );
       }
@@ -526,11 +724,11 @@ export class AutopilotService {
 
     if (createdCount > 0) {
       this.logger.log(
-        `Created ${createdCount} follow-up approval review(s) for challenge ${challenge.id}, phase ${nextPhase.id}, submission ${submissionId}.`,
+        `Created ${createdCount} continuation Approval review(s) for challenge ${challenge.id}, phase ${approvalPhase.id}, submission ${submissionId}.`,
       );
     } else {
       this.logger.warn(
-        `No follow-up approval reviews created for challenge ${challenge.id}, phase ${nextPhase.id}; a pending review may already exist.`,
+        `No continuation Approval reviews created for challenge ${challenge.id}, phase ${approvalPhase.id}; pending review pairs may already exist.`,
       );
     }
   }
@@ -627,6 +825,53 @@ export class AutopilotService {
         err.stack,
       );
     }
+  }
+
+  private resolvePhaseByIdentifier(
+    challenge: IChallenge,
+    phaseReference: string | null | undefined,
+  ): IPhase | null {
+    if (!phaseReference) {
+      return null;
+    }
+
+    return (
+      challenge.phases.find(
+        (phase) =>
+          phase.id === phaseReference || phase.phaseId === phaseReference,
+      ) ?? null
+    );
+  }
+
+  private getLatestPhase(
+    phases: IPhase[],
+    predicate?: (phase: IPhase) => boolean,
+  ): IPhase | null {
+    const filtered = predicate ? phases.filter(predicate) : phases;
+    if (!filtered.length) {
+      return null;
+    }
+
+    return (
+      [...filtered]
+        .sort((a, b) => {
+          return this.getPhaseSortTime(a) - this.getPhaseSortTime(b);
+        })
+        .at(-1) ?? null
+    );
+  }
+
+  private getPhaseSortTime(phase: IPhase): number {
+    const timestamp = new Date(
+      phase.actualStartDate ?? phase.scheduledStartDate,
+    ).getTime();
+
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  private isFinalFixPhaseName(name?: string | null): boolean {
+    const normalized = name?.trim().toLowerCase();
+    return normalized === FINAL_FIX_PHASE_NAME.toLowerCase();
   }
 
   async handleAppealResponded(payload: AppealRespondedPayload): Promise<void> {
@@ -855,8 +1100,6 @@ export class AutopilotService {
       throw err;
     }
   }
-
-  
 
   async openAndScheduleNextPhases(
     challengeId: string,

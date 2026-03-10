@@ -18,8 +18,11 @@ export class ReviewApiService {
     private readonly auth0Service: Auth0Service,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {
-    this.baseUrl = (this.configService.get<string>('review.baseUrl') || '').trim();
-    this.timeoutMs = this.configService.get<number>('review.timeoutMs') ?? 15000;
+    this.baseUrl = (
+      this.configService.get<string>('review.baseUrl') || ''
+    ).trim();
+    this.timeoutMs =
+      this.configService.get<number>('review.timeoutMs') ?? 15000;
 
     if (!this.baseUrl) {
       this.logger.warn(
@@ -89,7 +92,7 @@ export class ReviewApiService {
       );
       return response.data;
     } catch (error) {
-      const err = error as any;
+      const err = error;
       const message = err?.message || 'Unknown error';
       const status = err?.response?.status;
       const data = err?.response?.data;
@@ -114,7 +117,9 @@ export class ReviewApiService {
     }
   }
 
-  async getReviewOpportunitiesByChallengeId(challengeId: string): Promise<any[]> {
+  async getReviewOpportunitiesByChallengeId(
+    challengeId: string,
+  ): Promise<any[]> {
     const url = this.buildUrl(`/review-opportunities/challenge/${challengeId}`);
     if (!url) {
       await this.dbLogger.logAction('review.getOpportunitiesByChallenge', {
@@ -142,7 +147,7 @@ export class ReviewApiService {
       );
       return Array.isArray(response.data) ? response.data : [];
     } catch (error) {
-      const err = error as any;
+      const err = error;
       const message = err?.message || 'Unknown error';
       const status = err?.response?.status;
       const data = err?.response?.data;

@@ -30,7 +30,9 @@ export class MembersService {
       new Set(
         idCandidates
           .map((value) => value?.trim())
-          .filter((value): value is string => Boolean(value) && /^\d+$/.test(value)),
+          .filter(
+            (value): value is string => Boolean(value) && /^\d+$/.test(value),
+          ),
       ),
     );
 
@@ -67,7 +69,9 @@ export class MembersService {
           memberIds.map((id) => Prisma.sql`${BigInt(id)}`),
         );
 
-        const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; email: string | null }>>(
+        const rows = await this.prisma.$queryRaw<
+          Array<{ userId: bigint; email: string | null }>
+        >(
           Prisma.sql`
             SELECT "userId", "email"
             FROM "member"
@@ -88,7 +92,9 @@ export class MembersService {
           handles.map((handle) => Prisma.sql`${handle}`),
         );
 
-        const rows = await this.prisma.$queryRaw<Array<{ handleLower: string; email: string | null }>>(
+        const rows = await this.prisma.$queryRaw<
+          Array<{ handleLower: string; email: string | null }>
+        >(
           Prisma.sql`
             SELECT "handleLower", "email"
             FROM "member"

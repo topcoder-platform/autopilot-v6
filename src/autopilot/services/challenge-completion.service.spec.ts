@@ -1,14 +1,15 @@
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
-import type { ReviewService, SubmissionSummary } from '../../review/review.service';
+import type {
+  ReviewService,
+  SubmissionSummary,
+} from '../../review/review.service';
 import type { ResourcesService } from '../../resources/resources.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
 import type { KafkaService } from '../../kafka/kafka.service';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
-import {
-  POST_MORTEM_REVIEWER_ROLE_NAME,
-} from '../constants/review.constants';
+import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 import type {
   IChallenge,
   IChallengePrizeSet,
@@ -18,25 +19,51 @@ import type { ReviewSummationApiService } from './review-summation-api.service';
 
 describe('ChallengeCompletionService', () => {
   let challengeApiService: {
-    getChallengeById: jest.MockedFunction<ChallengeApiService['getChallengeById']>;
-    cancelChallenge: jest.MockedFunction<ChallengeApiService['cancelChallenge']>;
-    completeChallenge: jest.MockedFunction<ChallengeApiService['completeChallenge']>;
-    createPostMortemPhasePreserving: jest.MockedFunction<ChallengeApiService['createPostMortemPhasePreserving']>;
-    setCheckpointWinners: jest.MockedFunction<ChallengeApiService['setCheckpointWinners']>;
+    getChallengeById: jest.MockedFunction<
+      ChallengeApiService['getChallengeById']
+    >;
+    cancelChallenge: jest.MockedFunction<
+      ChallengeApiService['cancelChallenge']
+    >;
+    completeChallenge: jest.MockedFunction<
+      ChallengeApiService['completeChallenge']
+    >;
+    createPostMortemPhasePreserving: jest.MockedFunction<
+      ChallengeApiService['createPostMortemPhasePreserving']
+    >;
+    setCheckpointWinners: jest.MockedFunction<
+      ChallengeApiService['setCheckpointWinners']
+    >;
   };
   let reviewService: {
-    generateReviewSummaries: jest.MockedFunction<ReviewService['generateReviewSummaries']>;
-    getScorecardIdByName: jest.MockedFunction<ReviewService['getScorecardIdByName']>;
-    createPendingReview: jest.MockedFunction<ReviewService['createPendingReview']>;
-    getTopCheckpointReviewScores: jest.MockedFunction<ReviewService['getTopCheckpointReviewScores']>;
+    generateReviewSummaries: jest.MockedFunction<
+      ReviewService['generateReviewSummaries']
+    >;
+    getScorecardIdByName: jest.MockedFunction<
+      ReviewService['getScorecardIdByName']
+    >;
+    createPendingReview: jest.MockedFunction<
+      ReviewService['createPendingReview']
+    >;
+    getTopCheckpointReviewScores: jest.MockedFunction<
+      ReviewService['getTopCheckpointReviewScores']
+    >;
   };
   let resourcesService: {
-    getMemberHandleMap: jest.MockedFunction<ResourcesService['getMemberHandleMap']>;
-    getResourcesByRoleNames: jest.MockedFunction<ResourcesService['getResourcesByRoleNames']>;
-    ensureResourcesForMembers: jest.MockedFunction<ResourcesService['ensureResourcesForMembers']>;
+    getMemberHandleMap: jest.MockedFunction<
+      ResourcesService['getMemberHandleMap']
+    >;
+    getResourcesByRoleNames: jest.MockedFunction<
+      ResourcesService['getResourcesByRoleNames']
+    >;
+    ensureResourcesForMembers: jest.MockedFunction<
+      ResourcesService['ensureResourcesForMembers']
+    >;
   };
   let financeApiService: {
-    generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
+    generateChallengePayments: jest.MockedFunction<
+      FinanceApiService['generateChallengePayments']
+    >;
   };
   let kafkaService: {
     produce: jest.MockedFunction<KafkaService['produce']>;
@@ -105,7 +132,10 @@ describe('ChallengeCompletionService', () => {
       { memberId: '103', submissionId: 'sub-3', score: 85 },
     ]);
 
-    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+    await service.assignCheckpointWinners(
+      challenge.id,
+      'phase-checkpoint-review',
+    );
 
     expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledTimes(1);
     expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
@@ -144,7 +174,10 @@ describe('ChallengeCompletionService', () => {
       { memberId: '103', submissionId: 'sub-3', score: 90 },
     ]);
 
-    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+    await service.assignCheckpointWinners(
+      challenge.id,
+      'phase-checkpoint-review',
+    );
 
     expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledTimes(1);
     expect(challengeApiService.setCheckpointWinners.mock.calls[0][1]).toEqual([
@@ -169,7 +202,10 @@ describe('ChallengeCompletionService', () => {
     });
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
-    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+    await service.assignCheckpointWinners(
+      challenge.id,
+      'phase-checkpoint-review',
+    );
 
     expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
       challenge.id,
@@ -184,7 +220,10 @@ describe('ChallengeCompletionService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
     reviewService.getTopCheckpointReviewScores.mockResolvedValue([]);
 
-    await service.assignCheckpointWinners(challenge.id, 'phase-checkpoint-review');
+    await service.assignCheckpointWinners(
+      challenge.id,
+      'phase-checkpoint-review',
+    );
 
     expect(challengeApiService.setCheckpointWinners).toHaveBeenCalledWith(
       challenge.id,
@@ -253,22 +292,20 @@ describe('ChallengeCompletionService', () => {
       getChallengeById: jest.fn(),
       cancelChallenge: jest.fn().mockResolvedValue(undefined),
       completeChallenge: jest.fn().mockResolvedValue(undefined),
-      createPostMortemPhasePreserving: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'post-mortem-phase-id',
-          phaseId: 'post-mortem-template',
-          name: 'Post-Mortem',
-          description: null,
-          isOpen: true,
-          duration: 0,
-          scheduledStartDate: baseTimestamp,
-          scheduledEndDate: baseTimestamp,
-          actualStartDate: baseTimestamp,
-          actualEndDate: null,
-          predecessor: null,
-          constraints: [],
-        }),
+      createPostMortemPhasePreserving: jest.fn().mockResolvedValue({
+        id: 'post-mortem-phase-id',
+        phaseId: 'post-mortem-template',
+        name: 'Post-Mortem',
+        description: null,
+        isOpen: true,
+        duration: 0,
+        scheduledStartDate: baseTimestamp,
+        scheduledEndDate: baseTimestamp,
+        actualStartDate: baseTimestamp,
+        actualEndDate: null,
+        predecessor: null,
+        constraints: [],
+      }),
       setCheckpointWinners: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -280,15 +317,13 @@ describe('ChallengeCompletionService', () => {
     };
 
     resourcesService = {
-      getMemberHandleMap: jest
-        .fn()
-        .mockResolvedValue(
-          new Map([
-            ['101', 'user101'],
-            ['102', 'user102'],
-            ['103', 'user103'],
-          ]),
-        ),
+      getMemberHandleMap: jest.fn().mockResolvedValue(
+        new Map([
+          ['101', 'user101'],
+          ['102', 'user102'],
+          ['103', 'user103'],
+        ]),
+      ),
       getResourcesByRoleNames: jest.fn().mockResolvedValue([]),
       ensureResourcesForMembers: jest.fn().mockResolvedValue([]),
     };
@@ -296,7 +331,9 @@ describe('ChallengeCompletionService', () => {
     financeApiService = {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
     } as unknown as {
-      generateChallengePayments: jest.MockedFunction<FinanceApiService['generateChallengePayments']>;
+      generateChallengePayments: jest.MockedFunction<
+        FinanceApiService['generateChallengePayments']
+      >;
     };
 
     kafkaService = {
@@ -322,7 +359,33 @@ describe('ChallengeCompletionService', () => {
     );
   });
 
-  it('limits winners to the number of placement prizes', async () => {
+  it('triggers finance payments when challenge is already COMPLETED', async () => {
+    const challenge = buildChallenge({
+      status: ChallengeStatusEnum.COMPLETED,
+      winners: [
+        {
+          userId: 101,
+          handle: 'user101',
+          placement: 1,
+          type: PrizeSetTypeEnum.PLACEMENT,
+        },
+      ],
+      prizeSets: [buildPlacementPrizeSet(1)],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(reviewSummationApiService.finalizeSummations).not.toHaveBeenCalled();
+    expect(challengeApiService.completeChallenge).not.toHaveBeenCalled();
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+  });
+
+  it('stores remaining passing submissions as passed review winners', async () => {
     const challenge = buildChallenge({
       prizeSets: [
         buildPlacementPrizeSet(2),
@@ -366,20 +429,28 @@ describe('ChallengeCompletionService', () => {
     );
 
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
-    expect(winners).toHaveLength(2);
+    expect(winners).toHaveLength(3);
     expect(winners[0]).toMatchObject({
       userId: 101,
       placement: 1,
       handle: 'user101',
+      type: PrizeSetTypeEnum.PLACEMENT,
     });
     expect(winners[1]).toMatchObject({
       userId: 102,
       placement: 2,
       handle: 'user102',
+      type: PrizeSetTypeEnum.PLACEMENT,
+    });
+    expect(winners[2]).toMatchObject({
+      userId: 103,
+      placement: 1,
+      handle: 'user103',
+      type: PrizeSetTypeEnum.PASSED_REVIEW,
     });
   });
 
-  it('awards only one placement per member even with multiple passing submissions', async () => {
+  it('preserves multiple passing submissions from the same member', async () => {
     const challenge = buildChallenge({
       prizeSets: [buildPlacementPrizeSet(3)],
       numOfSubmissions: 3,
@@ -421,7 +492,9 @@ describe('ChallengeCompletionService', () => {
       },
     ];
 
-    reviewService.generateReviewSummaries.mockResolvedValueOnce(duplicateSummaries);
+    reviewService.generateReviewSummaries.mockResolvedValueOnce(
+      duplicateSummaries,
+    );
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const result = await service.finalizeChallenge(challenge.id);
@@ -436,9 +509,14 @@ describe('ChallengeCompletionService', () => {
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
 
-    expect(winners).toHaveLength(2);
-    expect(winners.map((winner) => winner.userId)).toEqual([101, 102]);
-    expect(winners.map((winner) => winner.placement)).toEqual([1, 2]);
+    expect(winners).toHaveLength(3);
+    expect(winners.map((winner) => winner.userId)).toEqual([101, 101, 102]);
+    expect(winners.map((winner) => winner.placement)).toEqual([1, 2, 3]);
+    expect(winners.map((winner) => winner.type)).toEqual([
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+    ]);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
@@ -469,6 +547,11 @@ describe('ChallengeCompletionService', () => {
     const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
     expect(winners).toHaveLength(summaries.length);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
+    expect(winners.map((winner) => winner.type)).toEqual([
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+      PrizeSetTypeEnum.PLACEMENT,
+    ]);
   });
 
   it('creates post-mortem reviews for reviewers and copilots when zero submissions trigger cancellation', async () => {
@@ -581,7 +664,9 @@ describe('ChallengeCompletionService', () => {
       challenge.id,
       ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
     );
-    expect(challengeApiService.createPostMortemPhasePreserving).toHaveBeenCalledWith(
+    expect(
+      challengeApiService.createPostMortemPhasePreserving,
+    ).toHaveBeenCalledWith(
       challenge.id,
       'submission-phase-id',
       expect.any(Number),

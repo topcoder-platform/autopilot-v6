@@ -17,8 +17,11 @@ export class FinanceApiService {
     private readonly auth0Service: Auth0Service,
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {
-    this.baseUrl = (this.configService.get<string>('finance.baseUrl') || '').trim();
-    this.timeoutMs = this.configService.get<number>('finance.timeoutMs') ?? 15000;
+    this.baseUrl = (
+      this.configService.get<string>('finance.baseUrl') || ''
+    ).trim();
+    this.timeoutMs =
+      this.configService.get<number>('finance.timeoutMs') ?? 15000;
 
     if (!this.baseUrl) {
       this.logger.warn(
@@ -77,7 +80,7 @@ export class FinanceApiService {
       );
       return true;
     } catch (error) {
-      const err = error as any;
+      const err = error;
       const message = err?.message || 'Unknown error';
       const status = err?.response?.status;
       const data = err?.response?.data;

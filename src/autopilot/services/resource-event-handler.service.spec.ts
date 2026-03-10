@@ -133,11 +133,56 @@ describe('ResourceEventHandler', () => {
 
       await handler.handleResourceCreated(payload);
 
-      expect(reviewService.reassignPendingReviewsToResource).toHaveBeenCalledWith(
-        'phase-approval',
-        resourceId,
+      expect(
+        reviewService.reassignPendingReviewsToResource,
+      ).toHaveBeenCalledWith('phase-approval', resourceId, challengeId);
+      expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
+    });
+
+    it('reassigns approval reviews when approval is current even if phase is not flagged open', async () => {
+      const payload: ResourceEventPayload = {
+        id: resourceId,
         challengeId,
-      );
+        memberId: '222',
+        memberHandle: 'approver',
+        roleId: 'role-approver',
+        created: new Date().toISOString(),
+        createdBy: 'system',
+      };
+
+      resourcesService.getResourceById.mockResolvedValue({
+        id: resourceId,
+        roleName: 'approver',
+        memberId: 'user-1',
+        memberHandle: 'handle',
+        challengeId,
+        roleId: 'role-approver',
+      } as unknown as any);
+
+      challengeApiService.getChallengeById.mockResolvedValue({
+        id: challengeId,
+        status: 'ACTIVE',
+        type: 'Design',
+        projectId: 'project-1',
+        currentPhaseNames: ['Approval'],
+        phases: [
+          {
+            id: 'phase-approval',
+            phaseId: 'phase-template-approval',
+            name: 'Approval',
+            isOpen: false,
+          },
+        ],
+        reviewers: [],
+      } as unknown as any);
+
+      reviewService.reassignPendingReviewsToResource.mockResolvedValue(1);
+
+      await handler.handleResourceCreated(payload);
+
+      expect(
+        reviewService.reassignPendingReviewsToResource,
+      ).toHaveBeenCalledWith('phase-approval', resourceId, challengeId);
       expect(phaseReviewService.handlePhaseOpened).not.toHaveBeenCalled();
     });
 
@@ -190,7 +235,9 @@ describe('ResourceEventHandler', () => {
 
       await handler.handleResourceCreated(payload);
 
-      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
+      expect(
+        reviewAssignmentService.ensureAssignmentsOrSchedule,
+      ).not.toHaveBeenCalled();
       expect(schedulerService.advancePhase).toHaveBeenCalledWith({
         projectId: 321,
         challengeId,
@@ -250,7 +297,9 @@ describe('ResourceEventHandler', () => {
       await handler.handleResourceCreated(payload);
 
       expect(schedulerService.advancePhase).not.toHaveBeenCalled();
-      expect(reviewAssignmentService.ensureAssignmentsOrSchedule).not.toHaveBeenCalled();
+      expect(
+        reviewAssignmentService.ensureAssignmentsOrSchedule,
+      ).not.toHaveBeenCalled();
     });
   });
 });

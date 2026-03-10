@@ -306,7 +306,10 @@ export class First2FinishService {
       return;
     }
 
-    const scorecardId = this.pickIterativeScorecard(challenge, latestIterativePhase);
+    const scorecardId = this.pickIterativeScorecard(
+      challenge,
+      latestIterativePhase,
+    );
     if (!scorecardId) {
       this.logger.warn(
         `Unable to determine scorecard for iterative review phase on challenge ${challenge.id}.`,
@@ -483,7 +486,10 @@ export class First2FinishService {
       return;
     }
 
-    const timer = setTimeout(executeVerification, this.iterativeAssignmentRetryMs);
+    const timer = setTimeout(
+      executeVerification,
+      this.iterativeAssignmentRetryMs,
+    );
     this.iterativeAssignmentRetryTimers.set(challengeId, timer);
   }
 
@@ -502,8 +508,7 @@ export class First2FinishService {
 
       const activePhase =
         challenge.phases.find(
-          (phase) =>
-            phase.name === ITERATIVE_REVIEW_PHASE_NAME && phase.isOpen,
+          (phase) => phase.name === ITERATIVE_REVIEW_PHASE_NAME && phase.isOpen,
         ) ?? null;
 
       if (!activePhase) {
@@ -650,9 +655,8 @@ export class First2FinishService {
       return;
     }
 
-    const submissionIds = await this.reviewService.getAllSubmissionIdsOrdered(
-      challengeId,
-    );
+    const submissionIds =
+      await this.reviewService.getAllSubmissionIdsOrdered(challengeId);
 
     const recentPairs = await this.reviewService.getExistingReviewPairs(
       latestIterativePhase.id,
@@ -788,11 +792,7 @@ export class First2FinishService {
   }
 
   private canReuseSeedIterativePhase(phase: IPhase): boolean {
-    return (
-      !phase.isOpen &&
-      !phase.actualStartDate &&
-      !phase.actualEndDate
-    );
+    return !phase.isOpen && !phase.actualStartDate && !phase.actualEndDate;
   }
 
   private async reopenSeedIterativePhase(
@@ -960,9 +960,8 @@ export class First2FinishService {
       phase.id,
       challengeId,
     );
-    const historicalPairs = await this.reviewService.getReviewerSubmissionPairs(
-      challengeId,
-    );
+    const historicalPairs =
+      await this.reviewService.getReviewerSubmissionPairs(challengeId);
     const usedPairs = new Set<string>([...pendingPairs, ...historicalPairs]);
 
     for (const reviewer of reviewers) {
@@ -999,7 +998,8 @@ export class First2FinishService {
       return true;
     }
 
-    const message = typeof candidate.message === 'string' ? candidate.message : '';
+    const message =
+      typeof candidate.message === 'string' ? candidate.message : '';
 
     return (
       message.includes('already exists') || message.includes('duplicate key')

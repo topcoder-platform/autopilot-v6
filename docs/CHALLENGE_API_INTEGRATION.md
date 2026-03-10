@@ -30,14 +30,16 @@ Autopilot now queries the Challenge database directly through Prisma. This appro
 ### SyncService
 
 - **File**: `src/sync/sync.service.ts`
-- **Responsibility**: Runs a cron job (configured through `SYNC_CRON_SCHEDULE`) to keep the in-memory scheduler aligned with the latest challenge data.
+- **Responsibility**: Runs a cron job (configured through `SYNC_CRON_SCHEDULE`) to keep the in-memory scheduler aligned with the latest challenge data and reconcile recent payable challenge statuses for finance generation.
 - **Logic**:
   1. Fetch all ACTIVE challenges from the database through `ChallengeApiService`.
   2. Compare active phases with the currently scheduled jobs.
   3. Reconcile differences:
      - **New/Updated Phases**: Schedule or reschedule jobs when timing or state changes.
      - **Obsolete Jobs**: Cancel jobs that no longer have corresponding active phases.
-  4. Log a summary of the changes (added, updated, removed).
+  4. Fetch recent `COMPLETED` and `CANCELLED_FAILED_REVIEW` challenges and replay them through `AutopilotService.handleChallengeUpdate`.
+  5. This replay path ensures finance payment generation still runs when a payable challenge update Kafka event is delayed or missed.
+  6. Log a summary of the reconciliation changes (added, updated, removed, payable replayed).
 
 ## 3. Kafka Event Handling
 

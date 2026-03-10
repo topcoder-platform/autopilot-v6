@@ -31,9 +31,7 @@ export class ChallengeCompletionService {
     private readonly kafkaService: KafkaService,
   ) {}
 
-  private async ensureCancelledPostMortem(
-    challengeId: string,
-  ): Promise<void> {
+  private async ensureCancelledPostMortem(challengeId: string): Promise<void> {
     try {
       const challenge =
         await this.challengeApiService.getChallengeById(challengeId);
@@ -51,7 +49,7 @@ export class ChallengeCompletionService {
           scorecardId = await this.reviewService.getScorecardIdByName(
             'Topcoder Post Mortem',
           );
-        } catch (_) {
+        } catch {
           // Already logged inside review service; leave as null
         }
       }
@@ -93,10 +91,10 @@ export class ChallengeCompletionService {
       // Assign to Post-Mortem resources if scorecard is available
       if (scorecardId) {
         const reviewerAndCopilotResources =
-          await this.resourcesService.getResourcesByRoleNames(
-            challengeId,
-            ['Reviewer', 'Copilot'],
-          );
+          await this.resourcesService.getResourcesByRoleNames(challengeId, [
+            'Reviewer',
+            'Copilot',
+          ]);
         const postMortemResources =
           await this.resourcesService.ensureResourcesForMembers(
             challengeId,
@@ -167,6 +165,58 @@ export class ChallengeCompletionService {
     return this.countPrizesByType(prizeSets, PrizeSetTypeEnum.CHECKPOINT);
   }
 
+  private getSubmissionTimestamp(submittedDate: Date | null): number {
+    if (!submittedDate) {
+      return 0;
+    }
+
+    const timestamp = submittedDate.getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
+  private buildWinnerRecord(
+    challengeId: string,
+    summary: { submissionId: string; memberId: string | null },
+    handleMap: Map<string, string>,
+    placement: number,
+    type: PrizeSetTypeEnum,
+  ): IChallengeWinner | null {
+    const recordTypeLabel =
+      type === PrizeSetTypeEnum.PASSED_REVIEW
+        ? 'passed review placement'
+        : 'winner placement';
+
+    if (!summary.memberId) {
+      this.logger.warn(
+        `Skipping ${recordTypeLabel} for submission ${summary.submissionId} on challenge ${challengeId} because memberId is missing.`,
+      );
+      return null;
+    }
+
+    const memberId = summary.memberId.trim();
+    if (!memberId) {
+      this.logger.warn(
+        `Skipping ${recordTypeLabel} for submission ${summary.submissionId} on challenge ${challengeId} because memberId is blank.`,
+      );
+      return null;
+    }
+
+    const numericMemberId = Number(memberId);
+    if (!Number.isFinite(numericMemberId)) {
+      this.logger.warn(
+        `Skipping ${recordTypeLabel} for submission ${summary.submissionId} on challenge ${challengeId} because memberId ${memberId} is not numeric.`,
+      );
+      return null;
+    }
+
+    return {
+      userId: numericMemberId,
+      handle: handleMap.get(memberId) ?? memberId,
+      placement,
+      type,
+    };
+  }
+
   private async publishChallengeCompletionUpdate(
     challengeId: string,
     winners: IChallengeWinner[],
@@ -235,12 +285,11 @@ export class ChallengeCompletionService {
         return;
       }
 
-      const topScores =
-        await this.reviewService.getTopCheckpointReviewScores(
-          challengeId,
-          phaseId,
-          checkpointPrizeLimit,
-        );
+      const topScores = await this.reviewService.getTopCheckpointReviewScores(
+        challengeId,
+        phaseId,
+        checkpointPrizeLimit,
+      );
 
       if (!topScores.length) {
         this.logger.warn(
@@ -302,10 +351,7 @@ export class ChallengeCompletionService {
         }
       }
 
-      await this.challengeApiService.setCheckpointWinners(
-        challengeId,
-        winners,
-      );
+      await this.challengeApiService.setCheckpointWinners(challengeId, winners);
 
       this.logger.log(
         `Assigned ${winners.length} checkpoint winner(s) for challenge ${challengeId} after closing phase ${phaseId}.`,
@@ -326,6 +372,15 @@ export class ChallengeCompletionService {
 
     const normalizedStatus = (challenge.status ?? '').toUpperCase();
     if (normalizedStatus !== ChallengeStatusEnum.ACTIVE) {
+      if (
+        normalizedStatus === ChallengeStatusEnum.COMPLETED ||
+        normalizedStatus === ChallengeStatusEnum.CANCELLED_FAILED_REVIEW
+      ) {
+        this.logger.log(
+          `Challenge ${challengeId} is already ${challenge.status}; ensuring finance payments are generated.`,
+        );
+        void this.financeApiService.generateChallengePayments(challengeId);
+      }
       this.logger.log(
         `Challenge ${challengeId} is not ACTIVE (status: ${challenge.status}); skipping finalization attempt.`,
       );
@@ -379,89 +434,73 @@ export class ChallengeCompletionService {
         return b.aggregateScore - a.aggregateScore;
       }
 
-      const timeA = a.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
-      const timeB = b.submittedDate?.getTime() ?? Number.POSITIVE_INFINITY;
-      if (timeA === timeB) {
-        return 0;
+      const timeDiff =
+        this.getSubmissionTimestamp(a.submittedDate) -
+        this.getSubmissionTimestamp(b.submittedDate);
+      if (timeDiff !== 0) {
+        return timeDiff;
       }
-      return timeA - timeB;
+
+      return a.submissionId.localeCompare(b.submissionId);
     });
 
-    const memberIds = sortedSummaries
-      .map((summary) => summary.memberId?.trim())
-      .filter((id): id is string => Boolean(id));
+    const memberIds = Array.from(
+      new Set(
+        sortedSummaries
+          .map((summary) => summary.memberId?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
 
     const handleMap = await this.resourcesService.getMemberHandleMap(
       challengeId,
       memberIds,
     );
 
-    const winners: IChallengeWinner[] = [];
-    const seenMembers = new Set<string>();
-    const seenSubmissionIds = new Set<string>();
     const placementPrizeLimit = this.countPlacementPrizes(
       challenge.prizeSets ?? [],
     );
-    const maxWinnerCount =
+    const placementWinnerLimit =
       placementPrizeLimit > 0 ? placementPrizeLimit : sortedSummaries.length;
+    const placementSummaries = sortedSummaries.slice(0, placementWinnerLimit);
+    const passedReviewSummaries = sortedSummaries.slice(placementWinnerLimit);
 
-    for (const summary of sortedSummaries) {
-      if (winners.length >= maxWinnerCount) {
-        break;
-      }
+    const placementWinners = placementSummaries
+      .map((summary, index) =>
+        this.buildWinnerRecord(
+          challengeId,
+          summary,
+          handleMap,
+          index + 1,
+          PrizeSetTypeEnum.PLACEMENT,
+        ),
+      )
+      .filter((winner): winner is IChallengeWinner => winner !== null);
 
-      if (!summary.memberId) {
-        this.logger.warn(
-          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId is missing.`,
-        );
-        continue;
-      }
+    const passedReviewWinners = passedReviewSummaries
+      .map((summary, index) =>
+        this.buildWinnerRecord(
+          challengeId,
+          summary,
+          handleMap,
+          index + 1,
+          PrizeSetTypeEnum.PASSED_REVIEW,
+        ),
+      )
+      .filter((winner): winner is IChallengeWinner => winner !== null);
 
-      if (seenSubmissionIds.has(summary.submissionId)) {
-        this.logger.warn(
-          `Skipping winner placement for duplicate submission ${summary.submissionId} on challenge ${challengeId}.`,
-        );
-        continue;
-      }
-
-      const memberId = summary.memberId.trim();
-      if (!memberId) {
-        this.logger.warn(
-          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId is blank.`,
-        );
-        continue;
-      }
-
-      if (seenMembers.has(memberId)) {
-        this.logger.log(
-          `Skipping additional placement for member ${memberId} on challenge ${challengeId}; already awarded.`,
-        );
-        continue;
-      }
-
-      const numericMemberId = Number(memberId);
-      if (!Number.isFinite(numericMemberId)) {
-        this.logger.warn(
-          `Skipping winner placement for submission ${summary.submissionId} on challenge ${challengeId} because memberId ${memberId} is not numeric.`,
-        );
-        continue;
-      }
-
-      winners.push({
-        userId: numericMemberId,
-        handle: handleMap.get(memberId) ?? memberId,
-        placement: winners.length + 1,
-      });
-      seenMembers.add(memberId);
-      seenSubmissionIds.add(summary.submissionId);
-    }
+    const winners = [...placementWinners, ...passedReviewWinners];
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    await this.publishChallengeCompletionUpdate(challengeId, winners, challenge);
+    await this.publishChallengeCompletionUpdate(
+      challengeId,
+      placementWinners,
+      challenge,
+    );
     this.logger.log(
-      `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s).`,
+      `Marked challenge ${challengeId} as COMPLETED with ${placementWinners.length} winner(s) and ${passedReviewWinners.length} passed review record(s).`,
     );
     return true;
   }

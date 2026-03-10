@@ -1,9 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicator, HealthCheckError } from '@nestjs/terminus';
-import {
-  KafkaConnectionState,
-  KafkaService,
-} from '../kafka/kafka.service';
+import { KafkaConnectionState, KafkaService } from '../kafka/kafka.service';
 import { LoggerService } from '../common/services/logger.service';
 
 @Injectable()
@@ -25,8 +22,7 @@ export class KafkaHealthIndicator extends HealthIndicator {
           this.getStatus(key, false, {
             state: status.state,
             reconnectAttempts: status.reconnectAttempts,
-            reason:
-              status.reason || 'Kafka reconnection attempts exhausted',
+            reason: status.reason || 'Kafka reconnection attempts exhausted',
             timestamp,
           }),
         );

@@ -31,6 +31,8 @@ export interface PhaseTransitionPayload {
   date?: string;
   challengeId: string; // Changed to string to support UUIDs
   preventFinalization?: boolean;
+  // Skip automatic successor phase opening for this transition
+  skipPhaseChain?: boolean;
   // When closing Iterative Review phases after a passing score, skip follow-up iterative processing
   skipIterativePhaseRefresh?: boolean;
   // Skip completed review count validation when closure is triggered by review completion

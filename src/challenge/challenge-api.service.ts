@@ -64,6 +64,10 @@ type ChallengeWithRelations = Prisma.ChallengeGetPayload<
 
 type ChallengePhaseWithConstraints = ChallengeWithRelations['phases'][number];
 type ChallengePrizeSetWithPrizes = ChallengeWithRelations['prizeSets'][number];
+type PrismaQueryLogger = {
+  $on(eventType: 'query', callback: (event: Prisma.QueryEvent) => void): void;
+};
+const FINAL_FIX_PHASE_NAME = 'Final Fix';
 
 @Injectable()
 export class ChallengeApiService {
@@ -71,6 +75,8 @@ export class ChallengeApiService {
   private readonly defaultPageSize = 50;
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
+  private readonly checkpointWinnerQueryLogIds = new Set<string>();
+  private checkpointWinnerQueryLoggerAttached = false;
 
   constructor(
     private readonly prisma: ChallengePrismaService,
@@ -85,6 +91,7 @@ export class ChallengeApiService {
       this.configService.get('autopilot.appealsResponsePhaseNames'),
       DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
     );
+    this.attachCheckpointWinnerQueryLogger();
   }
 
   async getAllActiveChallenges(
@@ -540,6 +547,18 @@ export class ChallengeApiService {
         return result;
       }
 
+      if (operation === 'open' && shouldAdjustSchedule) {
+        try {
+          await this.rescheduleSuccessorPhases(challengeId, targetPhase.id);
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to reschedule successor phases for challenge ${challengeId} after opening phase ${targetPhase.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
       const updatedChallenge = await this.prisma.challenge.findUnique({
         ...challengeWithRelationsArgs,
         where: { id: challengeId },
@@ -681,7 +700,8 @@ export class ChallengeApiService {
 
           const predecessorKeys = this.buildPhaseIdentifiers(currentPhase);
           for (const predecessorKey of predecessorKeys) {
-            const successors = successorsByPredecessor.get(predecessorKey) || [];
+            const successors =
+              successorsByPredecessor.get(predecessorKey) || [];
             for (const successor of successors) {
               if (visited.has(successor.id)) {
                 continue;
@@ -691,8 +711,9 @@ export class ChallengeApiService {
               if (!successor.actualStartDate) {
                 const durationSeconds =
                   this.computePhaseDurationSeconds(successor);
-                const alignToPredecessorStart =
-                  this.isIterativeReviewPhaseName(successor.name);
+                const alignToPredecessorStart = this.isIterativeReviewPhaseName(
+                  successor.name,
+                );
                 const desiredStartSource =
                   alignToPredecessorStart && currentPhase.scheduledStartDate
                     ? currentPhase.scheduledStartDate
@@ -805,16 +826,13 @@ export class ChallengeApiService {
     return identifiers;
   }
 
-  private isIterativeReviewPhaseName(
-    phaseName?: string | null,
-  ): boolean {
+  private isIterativeReviewPhaseName(phaseName?: string | null): boolean {
     const normalized = phaseName?.trim();
     if (!normalized) {
       return false;
     }
     return (
-      normalized.toLowerCase() ===
-      ITERATIVE_REVIEW_PHASE_NAME.toLowerCase()
+      normalized.toLowerCase() === ITERATIVE_REVIEW_PHASE_NAME.toLowerCase()
     );
   }
 
@@ -824,16 +842,11 @@ export class ChallengeApiService {
   ): Set<string> {
     const resolved = this.normalizeStringArray(source, Array.from(fallback));
     return new Set(
-      resolved
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
+      resolved.map((value) => value.trim()).filter((value) => value.length > 0),
     );
   }
 
-  private normalizeStringArray(
-    source: unknown,
-    fallback: string[],
-  ): string[] {
+  private normalizeStringArray(source: unknown, fallback: string[]): string[] {
     if (Array.isArray(source)) {
       const normalized = source
         .map((item) =>
@@ -873,17 +886,18 @@ export class ChallengeApiService {
   }
 
   private mapChallenge(challenge: ChallengeWithRelations): IChallenge {
-    const metadata = (challenge.metadata ?? []).reduce<
-      Record<string, string>
-    >((acc, entry) => {
-      const key = entry?.name?.trim();
-      if (!key) {
-        return acc;
-      }
+    const metadata = (challenge.metadata ?? []).reduce<Record<string, string>>(
+      (acc, entry) => {
+        const key = entry?.name?.trim();
+        if (!key) {
+          return acc;
+        }
 
-      acc[key] = entry.value ?? '';
-      return acc;
-    }, {});
+        acc[key] = entry.value ?? '';
+        return acc;
+      },
+      {},
+    );
 
     return {
       id: challenge.id,
@@ -918,10 +932,10 @@ export class ChallengeApiService {
       discussions: [],
       events: [],
       prizeSets:
-        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) || [],
+        challenge.prizeSets?.map((prizeSet) => this.mapPrizeSet(prizeSet)) ||
+        [],
       terms: [],
-      skills:
-        challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
+      skills: challenge.skills?.map((skill) => ({ id: skill.skillId })) || [],
       attachments: [],
       track: challenge.track?.name ?? '',
       type: challenge.type?.name ?? '',
@@ -1220,7 +1234,9 @@ export class ChallengeApiService {
     openImmediately = false,
   ): Promise<IPhase> {
     const now = new Date();
-    const end = new Date(now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000);
+    const end = new Date(
+      now.getTime() + Math.max(durationHours, 1) * 60 * 60 * 1000,
+    );
     let closedApprovalPhaseCount = 0;
 
     try {
@@ -1302,7 +1318,10 @@ export class ChallengeApiService {
             name: postMortemPhaseType.name,
             description: postMortemPhaseType.description,
             predecessor: predecessorPhase.phaseId ?? predecessorPhase.id,
-            duration: Math.max(Math.round((end.getTime() - now.getTime()) / 1000), 1),
+            duration: Math.max(
+              Math.round((end.getTime() - now.getTime()) / 1000),
+              1,
+            ),
             scheduledStartDate: now,
             scheduledEndDate: end,
             actualStartDate: openImmediately ? now : null,
@@ -1524,6 +1543,60 @@ export class ChallengeApiService {
     );
   }
 
+  async createFinalFixPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    phaseTypeId: string,
+    phaseName: string,
+    phaseDescription: string | null,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    return this.createContinuationPhase(
+      'challenge.createFinalFixPhase',
+      challengeId,
+      predecessorPhaseId,
+      phaseTypeId,
+      phaseName,
+      phaseDescription,
+      durationSeconds,
+    );
+  }
+
+  /**
+   * Creates a follow-up Final Fix phase after a failed Approval even when the
+   * challenge timeline does not already contain a Final Fix phase instance.
+   *
+   * @param challengeId challenge identifier
+   * @param predecessorPhaseId Approval phase instance that was just closed
+   * @param durationSeconds desired duration in seconds for the new Final Fix phase
+   * @returns created Final Fix phase
+   */
+  async createFinalFixPhaseAfterApproval(
+    challengeId: string,
+    predecessorPhaseId: string,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    const finalFixPhaseType = await this.prisma.phase.findFirst({
+      where: { name: FINAL_FIX_PHASE_NAME },
+    });
+
+    if (!finalFixPhaseType) {
+      throw new NotFoundException(
+        `Phase type "${FINAL_FIX_PHASE_NAME}" is not configured in the system.`,
+      );
+    }
+
+    return this.createContinuationPhase(
+      'challenge.createFinalFixPhase',
+      challengeId,
+      predecessorPhaseId,
+      finalFixPhaseType.id,
+      finalFixPhaseType.name,
+      finalFixPhaseType.description ?? null,
+      durationSeconds,
+    );
+  }
+
   async completeChallenge(
     challengeId: string,
     winners: IChallengeWinner[],
@@ -1540,7 +1613,12 @@ export class ChallengeApiService {
         });
 
         await tx.challengeWinner.deleteMany({
-          where: { challengeId, type: PrizeSetTypeEnum.PLACEMENT },
+          where: {
+            challengeId,
+            type: {
+              in: [PrizeSetTypeEnum.PLACEMENT, PrizeSetTypeEnum.PASSED_REVIEW],
+            },
+          },
         });
 
         if (winners.length) {
@@ -1550,7 +1628,10 @@ export class ChallengeApiService {
               userId: winner.userId,
               handle: winner.handle,
               placement: winner.placement,
-              type: PrizeSetTypeEnum.PLACEMENT,
+              type:
+                winner.type === PrizeSetTypeEnum.PASSED_REVIEW
+                  ? PrizeSetTypeEnum.PASSED_REVIEW
+                  : PrizeSetTypeEnum.PLACEMENT,
               createdBy: 'Autopilot',
               updatedBy: 'Autopilot',
             })),
@@ -1562,7 +1643,10 @@ export class ChallengeApiService {
         challengeId,
         status: 'SUCCESS',
         source: ChallengeApiService.name,
-        details: { winnersCount: winners.length, endDate: endDate.toISOString() },
+        details: {
+          winnersCount: winners.length,
+          endDate: endDate.toISOString(),
+        },
       });
     } catch (error) {
       const err = error as Error;
@@ -1583,6 +1667,7 @@ export class ChallengeApiService {
     challengeId: string,
     winners: IChallengeWinner[],
   ): Promise<void> {
+    this.checkpointWinnerQueryLogIds.add(challengeId);
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.challengeWinner.deleteMany({
@@ -1622,7 +1707,71 @@ export class ChallengeApiService {
         },
       });
       throw err;
+    } finally {
+      this.checkpointWinnerQueryLogIds.delete(challengeId);
     }
+  }
+
+  private attachCheckpointWinnerQueryLogger(): void {
+    if (this.checkpointWinnerQueryLoggerAttached) {
+      return;
+    }
+
+    const dbDebugEnabled =
+      this.configService.get<boolean>('autopilot.dbDebug') ?? false;
+    if (!dbDebugEnabled) {
+      return;
+    }
+
+    this.checkpointWinnerQueryLoggerAttached = true;
+
+    const prismaWithLogger = this.prisma as unknown as PrismaQueryLogger;
+    prismaWithLogger.$on('query', (event) => {
+      if (this.checkpointWinnerQueryLogIds.size === 0) {
+        return;
+      }
+
+      const query = event.query ?? '';
+      const normalizedQuery = query.trimStart().toUpperCase();
+      if (!normalizedQuery.startsWith('INSERT')) {
+        return;
+      }
+
+      if (!query.includes('"ChallengeWinner"')) {
+        return;
+      }
+
+      const params = event.params ?? '';
+      if (!params.includes('CHECKPOINT')) {
+        return;
+      }
+
+      let matchedChallengeId: string | undefined;
+      for (const challengeId of this.checkpointWinnerQueryLogIds) {
+        if (params.includes(challengeId)) {
+          matchedChallengeId = challengeId;
+          break;
+        }
+      }
+
+      if (!matchedChallengeId) {
+        return;
+      }
+
+      void this.dbLogger.logAction(
+        'challenge.setCheckpointWinners.insertQuery',
+        {
+          challengeId: matchedChallengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: {
+            query,
+            params,
+            durationMs: event.duration,
+          },
+        },
+      );
+    });
   }
 
   async cancelChallenge(

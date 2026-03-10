@@ -202,9 +202,8 @@ export class ResourcesService {
     `;
 
     try {
-      const recipients = await this.prisma.$queryRaw<
-        ReviewerResourceRecord[]
-      >(query);
+      const recipients =
+        await this.prisma.$queryRaw<ReviewerResourceRecord[]>(query);
 
       void this.dbLogger.logAction(
         'resources.getPhaseChangeNotificationResources',
@@ -530,9 +529,7 @@ export class ResourcesService {
     }
 
     const memberIds = Array.from(uniqueMembers.keys());
-    const memberIdList = Prisma.join(
-      memberIds.map((id) => Prisma.sql`${id}`),
-    );
+    const memberIdList = Prisma.join(memberIds.map((id) => Prisma.sql`${id}`));
 
     let existing: ReviewerResourceRecord[] = [];
     if (memberIds.length) {
@@ -569,7 +566,9 @@ export class ResourcesService {
 
             const resourceId = randomUUID();
             const memberHandle =
-              source.memberHandle?.trim() || source.memberId?.trim() || memberId;
+              source.memberHandle?.trim() ||
+              source.memberId?.trim() ||
+              memberId;
 
             await tx.$executeRaw(
               Prisma.sql`

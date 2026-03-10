@@ -9,7 +9,8 @@ export function getMemberReviewerConfigs(
   }
 
   return reviewers.filter(
-    (reviewer) => reviewer.isMemberReview && reviewer.phaseId === phaseTemplateId,
+    (reviewer) =>
+      reviewer.isMemberReview && reviewer.phaseId === phaseTemplateId,
   );
 }
 
@@ -36,11 +37,10 @@ export function getRequiredReviewerCountForPhase(
     return 0;
   }
 
-  return configs
-    .reduce((total, config) => {
-      const count = config.memberReviewerCount ?? 1;
-      return total + Math.max(count, 0);
-    }, 0);
+  return configs.reduce((total, config) => {
+    const count = config.memberReviewerCount ?? 1;
+    return total + Math.max(count, 0);
+  }, 0);
 }
 
 export function selectScorecardId(

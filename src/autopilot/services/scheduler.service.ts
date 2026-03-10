@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { KafkaService } from '../../kafka/kafka.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import { PhaseReviewService } from './phase-review.service';
+import { ReviewAssignmentService } from './review-assignment.service';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import {
@@ -119,6 +120,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly kafkaService: KafkaService,
     private readonly challengeApiService: ChallengeApiService,
     private readonly phaseReviewService: PhaseReviewService,
+    private readonly reviewAssignmentService: ReviewAssignmentService,
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly financeApiService: FinanceApiService,
     private readonly reviewService: ReviewService,
@@ -511,8 +513,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const isAppealsResponsePhase =
         this.isAppealsResponsePhaseName(phaseName) ||
         this.isAppealsResponsePhaseName(data.phaseTypeName);
-      const isAppealsRelatedPhase =
-        isAppealsPhase || isAppealsResponsePhase;
+      const isAppealsRelatedPhase = isAppealsPhase || isAppealsResponsePhase;
       const isScreeningPhase =
         SCREENING_PHASE_NAMES.has(phaseName) ||
         SCREENING_PHASE_NAMES.has(data.phaseTypeName);
@@ -554,14 +555,37 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
 
+      if (operation === 'open' && isReviewPhase) {
+        const canOpenNow =
+          await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+            data.challengeId,
+            phaseDetails,
+            async (): Promise<boolean> => {
+              await this.advancePhase({
+                ...data,
+                state: 'START',
+                phaseTypeName: phaseName,
+                operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+                projectStatus: data.projectStatus ?? ChallengeStatusEnum.ACTIVE,
+                date: new Date().toISOString(),
+              });
+
+              return true;
+            },
+          );
+
+        if (!canOpenNow) {
+          return;
+        }
+      }
+
       // Registration close handling
       if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
         try {
           // Only defer scheduler-initiated closes for Topgear tasks
           if (isSchedulerInitiated) {
-            const regChallenge = await this.challengeApiService.getChallengeById(
-              data.challengeId,
-            );
+            const regChallenge =
+              await this.challengeApiService.getChallengeById(data.challengeId);
             if (isTopgearTaskChallenge(regChallenge.type)) {
               await this.deferTopgearRegistrationPhaseClosure(data);
               return;
@@ -726,10 +750,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             return;
           }
 
-          const pendingScreening = await this.reviewService.getPendingReviewCount(
-            data.phaseId,
-            data.challengeId,
-          );
+          const pendingScreening =
+            await this.reviewService.getPendingReviewCount(
+              data.phaseId,
+              data.challengeId,
+            );
 
           if (pendingScreening > 0) {
             await this.deferScreeningPhaseClosure(data, pendingScreening);
@@ -770,10 +795,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             return;
           }
 
-          const pendingApproval = await this.reviewService.getPendingReviewCount(
-            data.phaseId,
-            data.challengeId,
-          );
+          const pendingApproval =
+            await this.reviewService.getPendingReviewCount(
+              data.phaseId,
+              data.challengeId,
+            );
 
           if (pendingApproval > 0) {
             await this.deferApprovalPhaseClosure(data, pendingApproval);
@@ -809,8 +835,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      if (operation === 'close' && isTopgearSubmissionPhase && isSchedulerInitiated) {
-        const handled = await this.handleTopgearSubmissionLate(data, phaseDetails);
+      if (
+        operation === 'close' &&
+        isTopgearSubmissionPhase &&
+        isSchedulerInitiated
+      ) {
+        const handled = await this.handleTopgearSubmissionLate(
+          data,
+          phaseDetails,
+        );
         if (handled) {
           return;
         }
@@ -818,8 +851,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       if (operation === 'close' && isAppealsResponsePhase) {
         try {
-          const pendingAppeals =
-            await this.reviewService.getPendingAppealCount(data.challengeId);
+          const pendingAppeals = await this.reviewService.getPendingAppealCount(
+            data.challengeId,
+          );
 
           if (pendingAppeals > 0) {
             await this.deferAppealsPhaseClosure(data, pendingAppeals);
@@ -840,8 +874,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // Safety check: do not open Appeals if predecessor review has pending reviews
       if (operation === 'open' && isAppealsPhase) {
         try {
-          const challenge =
-            await this.challengeApiService.getChallengeById(data.challengeId);
+          const challenge = await this.challengeApiService.getChallengeById(
+            data.challengeId,
+          );
 
           const phaseToOpen = challenge.phases?.find(
             (p) => p.id === data.phaseId,
@@ -873,10 +908,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
 
           if (predecessor && REVIEW_PHASE_NAMES.has(predecessor.name)) {
-            const pendingReviews = await this.reviewService.getPendingReviewCount(
-              predecessor.id,
-              data.challengeId,
-            );
+            const pendingReviews =
+              await this.reviewService.getPendingReviewCount(
+                predecessor.id,
+                data.challengeId,
+              );
 
             if (pendingReviews > 0) {
               await this.deferAppealsPhaseOpen(data, pendingReviews);
@@ -910,11 +946,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         );
 
         try {
-          await this.phaseChangeNotificationService.sendPhaseChangeNotification({
-            challengeId: data.challengeId,
-            phaseId: data.phaseId,
-            operation,
-          });
+          await this.phaseChangeNotificationService.sendPhaseChangeNotification(
+            {
+              challengeId: data.challengeId,
+              phaseId: data.phaseId,
+              operation,
+            },
+          );
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -926,6 +964,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         let skipPhaseChain = false;
         let skipFinalization = false;
         let appealsOpenedImmediately = false;
+
+        if (data.skipPhaseChain) {
+          skipPhaseChain = true;
+          this.logger.debug?.(
+            `[PHASE CHAIN] Skipping automatic successor opening for challenge ${data.challengeId}, phase ${data.phaseId} due to skipPhaseChain flag.`,
+          );
+        }
 
         if (operation === 'close' && isReviewPhase) {
           let appealsSuccessors =
@@ -965,13 +1010,14 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 if (callbackResult instanceof Promise) {
                   await callbackResult;
                 }
-
-                appealsOpenedImmediately = true;
               } else {
                 this.logger.warn(
-                  `[APPEALS FAST-TRACK] Phase chain callback not set; unable to auto-open appeals for challenge ${data.challengeId}.`,
+                  `[APPEALS FAST-TRACK] Phase chain callback not set; opening ${appealsSuccessors.length} appeals-related phase(s) directly for challenge ${data.challengeId}.`,
                 );
               }
+
+              await this.openAppealsPhasesNow(data, appealsSuccessors);
+              appealsOpenedImmediately = true;
             } catch (error) {
               const err = error as Error;
               this.logger.error(
@@ -1050,10 +1096,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        if (operation === 'open' && isAppealsResponsePhase && isSchedulerInitiated) {
+        if (
+          operation === 'open' &&
+          isAppealsResponsePhase &&
+          isSchedulerInitiated
+        ) {
           try {
-            const totalAppeals =
-              await this.reviewService.getTotalAppealCount(data.challengeId);
+            const totalAppeals = await this.reviewService.getTotalAppealCount(
+              data.challengeId,
+            );
 
             if (totalAppeals === 0) {
               this.logger.log(
@@ -1274,7 +1325,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               const callbackResult = this.phaseChainCallback(
                 data.challengeId,
                 data.projectId,
-                data.projectStatus,
+                data.projectStatus ?? ChallengeStatusEnum.ACTIVE,
                 phasesToOpen,
               );
 
@@ -1284,8 +1335,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               }
             } else {
               this.logger.warn(
-                `[PHASE CHAIN] Phase chain callback not set, cannot open and schedule next phases for challenge ${data.challengeId}`,
+                `[PHASE CHAIN] Phase chain callback not set, falling back to direct phase open for challenge ${data.challengeId}`,
               );
+              await this.openAndScheduleNextPhasesFallback(data, phasesToOpen);
             }
           } catch (error) {
             const err = error as Error;
@@ -1356,12 +1408,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     const completedPhases = phases
       .filter((phase) => Boolean(phase.actualEndDate))
       .sort((a, b) => {
-        const aTime = a.actualEndDate
-          ? new Date(a.actualEndDate).getTime()
-          : 0;
-        const bTime = b.actualEndDate
-          ? new Date(b.actualEndDate).getTime()
-          : 0;
+        const aTime = a.actualEndDate ? new Date(a.actualEndDate).getTime() : 0;
+        const bTime = b.actualEndDate ? new Date(b.actualEndDate).getTime() : 0;
         return aTime - bTime;
       });
 
@@ -1500,8 +1548,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     phase: IPhase,
   ): Promise<boolean> {
     try {
-      const challenge =
-        await this.challengeApiService.getChallengeById(data.challengeId);
+      const challenge = await this.challengeApiService.getChallengeById(
+        data.challengeId,
+      );
 
       if (!isTopgearTaskChallenge(challenge.type)) {
         return false;
@@ -1559,10 +1608,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private async ensureTopgearPostMortemReview(
     challenge: IChallenge,
     submissionPhase: IPhase,
-    data: PhaseTransitionPayload,
   ): Promise<void> {
     // Prevent concurrent duplicate creations for the same challenge within this process
-    this.topgearPostMortemLocks = this.topgearPostMortemLocks || new Set<string>();
+    this.topgearPostMortemLocks =
+      this.topgearPostMortemLocks || new Set<string>();
     if (this.topgearPostMortemLocks.has(challenge.id)) {
       this.logger.debug?.(
         `[TOPGEAR] Post-Mortem creation already in progress for challenge ${challenge.id}; skipping.`,
@@ -1571,56 +1620,56 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
     this.topgearPostMortemLocks.add(challenge.id);
     try {
-    // Determine scorecard to use: env var or fallback by name
-    let scorecardId = this.topgearPostMortemScorecardId;
-    if (!scorecardId) {
-      try {
-        scorecardId = await this.reviewService.getScorecardIdByName(
-          'Topgear Task Post Mortem',
-        );
-      } catch (err) {
-        // Already logged in review service
-      }
-    }
-
-    if (!scorecardId) {
-      this.logger.warn(
-        `[TOPGEAR] Post-mortem scorecard is not configured or found by name; skipping creation for challenge ${challenge.id}.`,
-      );
-      return;
-    }
-
-    let postMortemPhase =
-      challenge.phases?.find((p) => isPostMortemPhaseName(p.name)) ?? null;
-
-    if (!postMortemPhase) {
-      try {
-        // Create a Post-Mortem phase chained after the submission phase, but keep it closed.
-        // We preserve future phases (e.g., Iterative Review) and let phase chain open Post-Mortem
-        // only after the submission phase is closed (which will happen after a successful IR).
-        postMortemPhase =
-          await this.challengeApiService.createPostMortemPhasePreserving(
-            challenge.id,
-            submissionPhase.id,
-            this.postMortemDurationHours,
-            false,
+      // Determine scorecard to use: env var or fallback by name
+      let scorecardId = this.topgearPostMortemScorecardId;
+      if (!scorecardId) {
+        try {
+          scorecardId = await this.reviewService.getScorecardIdByName(
+            'Topgear Task Post Mortem',
           );
-        this.logger.log(
-          `[TOPGEAR] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${challenge.id} due to late submission.`,
-        );
-      } catch (error) {
-        const err = error as Error;
-        this.logger.error(
-          `[TOPGEAR] Failed to create Post-Mortem phase for challenge ${challenge.id}: ${err.message}`,
-          err.stack,
+        } catch {
+          // Already logged in review service
+        }
+      }
+
+      if (!scorecardId) {
+        this.logger.warn(
+          `[TOPGEAR] Post-mortem scorecard is not configured or found by name; skipping creation for challenge ${challenge.id}.`,
         );
         return;
       }
-    }
 
-    // Do NOT pre-create pending reviews or schedule closure here.
-    // The phase chain will open Post-Mortem only after submission closes (after successful IR),
-    // and standard open-phase handling will create pending reviews and schedule closure.
+      let postMortemPhase =
+        challenge.phases?.find((p) => isPostMortemPhaseName(p.name)) ?? null;
+
+      if (!postMortemPhase) {
+        try {
+          // Create a Post-Mortem phase chained after the submission phase, but keep it closed.
+          // We preserve future phases (e.g., Iterative Review) and let phase chain open Post-Mortem
+          // only after the submission phase is closed (which will happen after a successful IR).
+          postMortemPhase =
+            await this.challengeApiService.createPostMortemPhasePreserving(
+              challenge.id,
+              submissionPhase.id,
+              this.postMortemDurationHours,
+              false,
+            );
+          this.logger.log(
+            `[TOPGEAR] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${challenge.id} due to late submission.`,
+          );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[TOPGEAR] Failed to create Post-Mortem phase for challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+          return;
+        }
+      }
+
+      // Do NOT pre-create pending reviews or schedule closure here.
+      // The phase chain will open Post-Mortem only after submission closes (after successful IR),
+      // and standard open-phase handling will create pending reviews and schedule closure.
     } finally {
       this.topgearPostMortemLocks.delete(challenge.id);
     }
@@ -1726,11 +1775,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         `[ZERO REGISTRATIONS] No registered submitters found for challenge ${data.challengeId}; transitioning to Post-Mortem phase.`,
       );
 
-      const postMortemPhase = await this.challengeApiService.createPostMortemPhase(
-        data.challengeId,
-        data.phaseId,
-        this.postMortemDurationHours,
-      );
+      const postMortemPhase =
+        await this.challengeApiService.createPostMortemPhase(
+          data.challengeId,
+          data.phaseId,
+          this.postMortemDurationHours,
+        );
 
       await this.createPostMortemPendingReviewsForCopilot(
         data.challengeId,
@@ -1898,16 +1948,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const reviewerAndCopilotResources =
-        await this.resourcesService.getResourcesByRoleNames(
-          challengeId,
-          ['Reviewer', 'Copilot'],
-        );
-      const resources =
-        await this.resourcesService.ensureResourcesForMembers(
-          challengeId,
-          reviewerAndCopilotResources,
-          POST_MORTEM_REVIEWER_ROLE_NAME,
-        );
+        await this.resourcesService.getResourcesByRoleNames(challengeId, [
+          'Reviewer',
+          'Copilot',
+        ]);
+      const resources = await this.resourcesService.ensureResourcesForMembers(
+        challengeId,
+        reviewerAndCopilotResources,
+        POST_MORTEM_REVIEWER_ROLE_NAME,
+      );
 
       if (!resources.length) {
         this.logger.log(
@@ -1976,12 +2025,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const resources =
-        await this.resourcesService.ensureResourcesForMembers(
-          challengeId,
-          copilots,
-          POST_MORTEM_REVIEWER_ROLE_NAME,
-        );
+      const resources = await this.resourcesService.ensureResourcesForMembers(
+        challengeId,
+        copilots,
+        POST_MORTEM_REVIEWER_ROLE_NAME,
+      );
 
       if (!resources.length) {
         this.logger.log(
@@ -2042,8 +2090,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         ? ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS
         : ChallengeStatusEnum.CANCELLED_ZERO_REGISTRATIONS;
 
-      const challenge =
-        await this.challengeApiService.getChallengeById(data.challengeId);
+      const challenge = await this.challengeApiService.getChallengeById(
+        data.challengeId,
+      );
       const currentStatus = (challenge.status ?? '').toUpperCase();
 
       if (currentStatus === status) {
@@ -2053,10 +2102,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      if (
-        currentStatus.startsWith('CANCELLED') &&
-        currentStatus !== status
-      ) {
+      if (currentStatus.startsWith('CANCELLED') && currentStatus !== status) {
         this.logger.warn(
           `${statusTag} Challenge ${data.challengeId} already cancelled as ${currentStatus}; skipping status override to ${status} after Post-Mortem completion.`,
         );
@@ -2132,9 +2178,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     useMemberConfigs: boolean,
   ): Promise<{ satisfied: boolean; expected: number; actual: number }> {
     try {
-      const challenge = await this.challengeApiService.getChallengeById(
-        challengeId,
-      );
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
 
       const phase = challenge?.phases?.find((p) => p.id === phaseId);
 
@@ -2165,11 +2210,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       const effectiveRoles = roleNames.length ? roleNames : ['Reviewer'];
 
-      const reviewers =
-        await this.resourcesService.getReviewerResources(
-          challengeId,
-          effectiveRoles,
-        );
+      const reviewers = await this.resourcesService.getReviewerResources(
+        challengeId,
+        effectiveRoles,
+      );
 
       return {
         satisfied: reviewers.length >= expected,
@@ -2264,7 +2308,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           : 'unknown';
 
       const reasonMessage =
-        reason ?? `${pendingDescription} incomplete screening review(s) detected`;
+        reason ??
+        `${pendingDescription} incomplete screening review(s) detected`;
 
       this.logger.warn(
         `[SCREENING LATE] Deferred closing screening phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
@@ -2288,10 +2333,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private buildScreeningPhaseKey(
-    challengeId: string,
-    phaseId: string,
-  ): string {
+  private buildScreeningPhaseKey(challengeId: string, phaseId: string): string {
     return `${challengeId}|${phaseId}|screening-close`;
   }
 
@@ -2408,7 +2450,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           : 'unknown';
 
       const reasonMessage =
-        reason ?? `${pendingDescription} incomplete approval review(s) detected`;
+        reason ??
+        `${pendingDescription} incomplete approval review(s) detected`;
 
       this.logger.warn(
         `[APPROVAL LATE] Deferred closing approval phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
@@ -2432,10 +2475,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private buildApprovalPhaseKey(
-    challengeId: string,
-    phaseId: string,
-  ): string {
+  private buildApprovalPhaseKey(challengeId: string, phaseId: string): string {
     return `${challengeId}|${phaseId}|approval-close`;
   }
 
@@ -2498,15 +2538,306 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return this.appealsPhaseNames.has(normalized);
   }
 
-  private isAppealsResponsePhaseName(
-    phaseName?: string | null,
-  ): boolean {
+  private isAppealsResponsePhaseName(phaseName?: string | null): boolean {
     const normalized = phaseName?.trim();
     if (!normalized) {
       return false;
     }
 
     return this.appealsResponsePhaseNames.has(normalized);
+  }
+
+  private async resolveProjectContext(
+    data: PhaseTransitionPayload,
+  ): Promise<{ projectId: number; projectStatus: string } | null> {
+    let projectId = data.projectId;
+    let projectStatus = data.projectStatus;
+
+    if (!Number.isFinite(projectId) || !projectStatus) {
+      try {
+        const challenge = await this.challengeApiService.getChallengeById(
+          data.challengeId,
+        );
+        if (!Number.isFinite(projectId)) {
+          projectId = challenge.projectId;
+        }
+        if (!projectStatus) {
+          projectStatus = challenge.status;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS FAST-TRACK] Failed to resolve project context for challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+        return null;
+      }
+    }
+
+    if (!Number.isFinite(projectId)) {
+      this.logger.warn(
+        `[APPEALS FAST-TRACK] Missing projectId for challenge ${data.challengeId}; skipping direct appeals open.`,
+      );
+      return null;
+    }
+
+    return {
+      projectId,
+      projectStatus: projectStatus ?? ChallengeStatusEnum.ACTIVE,
+    };
+  }
+
+  private async openAndScheduleNextPhasesFallback(
+    data: PhaseTransitionPayload,
+    phases: IPhase[],
+  ): Promise<void> {
+    if (!phases.length) {
+      return;
+    }
+
+    const context = await this.resolveProjectContext(data);
+    if (!context) {
+      this.logger.warn(
+        `[PHASE CHAIN] Unable to resolve project context for challenge ${data.challengeId}; skipping fallback phase open.`,
+      );
+      return;
+    }
+
+    if (!isActiveStatus(context.projectStatus)) {
+      this.logger.log(
+        `[PHASE CHAIN] Challenge ${data.challengeId} is not ACTIVE (status: ${context.projectStatus}); skipping fallback phase open.`,
+      );
+      return;
+    }
+
+    let openedCount = 0;
+    let deferredCount = 0;
+
+    for (const phase of phases) {
+      if (!phase || phase.actualEndDate) {
+        continue;
+      }
+
+      const openPhaseCallback = async (): Promise<boolean> =>
+        await this.openPhaseAndScheduleFallback(data, phase, context);
+
+      let canOpen = true;
+      try {
+        canOpen =
+          await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
+            data.challengeId,
+            phase,
+            openPhaseCallback,
+          );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to verify reviewer assignments for phase ${phase.id} on challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+        continue;
+      }
+
+      if (!canOpen) {
+        deferredCount += 1;
+        continue;
+      }
+
+      const opened = await openPhaseCallback();
+      if (opened) {
+        openedCount += 1;
+      }
+    }
+
+    const summaryParts = [
+      `opened and scheduled ${openedCount} out of ${phases.length}`,
+    ];
+    if (deferredCount > 0) {
+      summaryParts.push(
+        `deferred ${deferredCount} awaiting reviewer assignments`,
+      );
+    }
+
+    this.logger.log(
+      `[PHASE CHAIN] Fallback ${summaryParts.join(', ')} for challenge ${data.challengeId}`,
+    );
+  }
+
+  private async openPhaseAndScheduleFallback(
+    data: PhaseTransitionPayload,
+    phase: IPhase,
+    context: { projectId: number; projectStatus: string },
+  ): Promise<boolean> {
+    const now = new Date().toISOString();
+    const openPayload: PhaseTransitionPayload = {
+      projectId: context.projectId,
+      challengeId: data.challengeId,
+      phaseId: phase.id,
+      phaseTypeName: phase.name,
+      state: 'START',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus: context.projectStatus,
+      date: now,
+    };
+
+    try {
+      await this.advancePhase(openPayload);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${data.challengeId} via fallback: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    let updatedPhase: IPhase | null = null;
+    try {
+      updatedPhase = await this.challengeApiService.getPhaseDetails(
+        data.challengeId,
+        phase.id,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to load phase ${phase.id} after fallback open for challenge ${data.challengeId}: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    if (!updatedPhase) {
+      this.logger.warn(
+        `[PHASE CHAIN] Phase ${phase.id} not found after fallback open for challenge ${data.challengeId}; skipping scheduling.`,
+      );
+      return false;
+    }
+
+    if (updatedPhase.actualEndDate) {
+      return true;
+    }
+
+    if (!updatedPhase.scheduledEndDate) {
+      this.logger.warn(
+        `[PHASE CHAIN] Opened phase ${updatedPhase.name} (${updatedPhase.id}) has no scheduled end date; skipping scheduling.`,
+      );
+      return true;
+    }
+
+    if (this.isAppealsResponsePhaseName(updatedPhase.name)) {
+      try {
+        const totalAppeals = await this.reviewService.getTotalAppealCount(
+          data.challengeId,
+        );
+
+        if (totalAppeals === 0) {
+          this.logger.log(
+            `[APPEALS RESPONSE] No appeals detected for challenge ${data.challengeId}; closing phase ${updatedPhase.id} immediately after fallback open.`,
+          );
+
+          await this.advancePhase({
+            projectId: context.projectId,
+            challengeId: data.challengeId,
+            phaseId: updatedPhase.id,
+            phaseTypeName: updatedPhase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+            projectStatus: context.projectStatus,
+            date: new Date().toISOString(),
+          });
+          return true;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS RESPONSE] Unable to auto-close phase ${updatedPhase.id} for challenge ${data.challengeId} after fallback open: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    const closePayload: PhaseTransitionPayload = {
+      projectId: context.projectId,
+      challengeId: data.challengeId,
+      phaseId: updatedPhase.id,
+      phaseTypeName: updatedPhase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+      projectStatus: context.projectStatus,
+      date: updatedPhase.scheduledEndDate,
+    };
+
+    try {
+      await this.schedulePhaseTransitionWithCancellation(closePayload);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[PHASE CHAIN] Failed to schedule closure for phase ${updatedPhase.id} on challenge ${data.challengeId} after fallback open: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  private async schedulePhaseTransitionWithCancellation(
+    payload: PhaseTransitionPayload,
+  ): Promise<void> {
+    const jobId = this.buildJobId(payload.challengeId, payload.phaseId);
+    const existing = this.getScheduledTransition(jobId);
+
+    if (existing) {
+      const canceled = await this.cancelScheduledTransition(jobId);
+      if (!canceled) {
+        this.logger.warn(
+          `[PHASE CHAIN] Failed to cancel existing schedule ${jobId} before fallback scheduling.`,
+        );
+      }
+    }
+
+    await this.schedulePhaseTransition(payload);
+  }
+
+  private async openAppealsPhasesNow(
+    data: PhaseTransitionPayload,
+    phases: IPhase[],
+  ): Promise<void> {
+    if (!phases.length) {
+      return;
+    }
+
+    const context = await this.resolveProjectContext(data);
+    if (!context) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    for (const phase of phases) {
+      if (!phase || phase.actualEndDate) {
+        continue;
+      }
+
+      try {
+        await this.advancePhase({
+          projectId: context.projectId,
+          challengeId: data.challengeId,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'START',
+          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+          projectStatus: context.projectStatus,
+          date: now,
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[APPEALS FAST-TRACK] Failed to open appeals phase ${phase.id} for challenge ${data.challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
   }
 
   private async deferAppealsPhaseOpen(
@@ -2565,7 +2896,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     const scorecardIds = new Set<string>();
 
     for (const templateId of screeningPhaseTemplateIds) {
-      const configs = getReviewerConfigsForPhase(challenge.reviewers, templateId);
+      const configs = getReviewerConfigsForPhase(
+        challenge.reviewers,
+        templateId,
+      );
 
       for (const config of configs) {
         const scorecardId = config.scorecardId?.trim();
@@ -2580,7 +2914,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const { legacy } = challenge;
 
       if (legacy && typeof legacy === 'object') {
-        const { screeningScorecardId } = legacy as { screeningScorecardId?: unknown };
+        const { screeningScorecardId } = legacy as {
+          screeningScorecardId?: unknown;
+        };
 
         if (typeof screeningScorecardId === 'string') {
           const trimmedScorecardId = screeningScorecardId.trim();

@@ -19,7 +19,11 @@ describe('ReviewService', () => {
       $transaction: jest
         .fn()
         .mockImplementation(
-          async (callback: (tx: { $executeRaw: typeof executeRawMock }) => Promise<void>) => {
+          async (
+            callback: (tx: {
+              $executeRaw: typeof executeRawMock;
+            }) => Promise<void>,
+          ) => {
             await callback({ $executeRaw: executeRawMock });
           },
         ),
@@ -122,6 +126,39 @@ describe('ReviewService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('getTopCheckpointReviewScores', () => {
+    const phaseId = 'phase-checkpoint-review';
+
+    it('filters to checkpoint reviews that meet minimum passing score and beat min score', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        { memberId: '123', submissionId: 'submission-1', score: 92 },
+      ]);
+
+      const winners = await service.getTopCheckpointReviewScores(
+        challengeId,
+        phaseId,
+        3,
+      );
+
+      expect(winners).toEqual([
+        { memberId: '123', submissionId: 'submission-1', score: 92 },
+      ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('GREATEST(');
+      expect(sqlText).toContain('minimumPassingScore');
+      expect(sqlText).toContain('minScore');
+      expect(sqlText).toContain('> COALESCE(sc."minScore", 0)');
+      expect(sqlText).toContain('"scorecard"');
     });
   });
 
@@ -457,7 +494,9 @@ describe('ReviewService', () => {
   });
 
   describe('generateReviewSummaries', () => {
-    const buildReviewSummationRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
+    const buildReviewSummationRow = (
+      overrides: Partial<Record<string, unknown>> = {},
+    ) => ({
       submissionId: 'submission-1',
       legacySubmissionId: 'legacy-1',
       memberId: '123456',
@@ -470,7 +509,9 @@ describe('ReviewService', () => {
       ...overrides,
     });
 
-    const buildAggregationRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
+    const buildAggregationRow = (
+      overrides: Partial<Record<string, unknown>> = {},
+    ) => ({
       submissionId: 'submission-1',
       legacySubmissionId: 'legacy-1',
       memberId: '123456',
@@ -513,6 +554,47 @@ describe('ReviewService', () => {
             submissionCount: 1,
             passingCount: 1,
             rebuiltFromReviews: true,
+          }),
+        }),
+      );
+    });
+
+    it('uses minimum passing score when summations mark a submission as passing', async () => {
+      prismaMock.$queryRaw
+        .mockResolvedValueOnce([
+          buildReviewSummationRow({
+            aggregateScore: '24.03',
+            isPassing: true,
+            minimumPassingScore: '80',
+          }),
+        ])
+        .mockResolvedValueOnce([]);
+
+      const summaries = await service.generateReviewSummaries(challengeId);
+
+      expect(summaries).toEqual([
+        {
+          submissionId: 'submission-1',
+          legacySubmissionId: 'legacy-1',
+          memberId: '123456',
+          submittedDate: new Date('2024-10-21T10:00:00.000Z'),
+          aggregateScore: 24.03,
+          scorecardId: 'scorecard-1',
+          scorecardLegacyId: 'legacy-scorecard',
+          passingScore: 80,
+          isPassing: false,
+        },
+      ]);
+
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.generateReviewSummaries',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            submissionCount: 1,
+            passingCount: 0,
+            rebuiltFromReviews: false,
           }),
         }),
       );

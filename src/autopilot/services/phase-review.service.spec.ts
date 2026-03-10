@@ -32,9 +32,7 @@ const basePhase = {
   constraints: [],
 };
 
-const buildChallenge = (
-  metadata: Record<string, string>,
-): IChallenge => ({
+const buildChallenge = (metadata: Record<string, string>): IChallenge => ({
   id: 'challenge-1',
   name: 'Test Challenge',
   description: null,
@@ -172,12 +170,8 @@ describe('PhaseReviewService', () => {
       },
     ] as any);
     reviewService.createPendingReview.mockResolvedValue(true);
-    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
-      new Set(),
-    );
-    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
-      new Set(),
-    );
+    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
     reviewService.getActiveCheckpointSubmissionIds.mockResolvedValue([]);
@@ -280,9 +274,7 @@ describe('PhaseReviewService', () => {
         (callArgs) => callArgs[0],
       );
 
-    expect(createdSubmissionIds).toEqual([
-      'latest-submission',
-    ]);
+    expect(createdSubmissionIds).toEqual(['latest-submission']);
     expect(createdSubmissionIds).not.toContain('old-submission');
   });
 
@@ -383,9 +375,10 @@ describe('PhaseReviewService', () => {
 
     await service.handlePhaseOpened(challenge.id, basePhase.id);
 
-    expect(
-      reviewService.getFailedScreeningSubmissionIds,
-    ).toHaveBeenCalledWith(challenge.id, ['screening-scorecard']);
+    expect(reviewService.getFailedScreeningSubmissionIds).toHaveBeenCalledWith(
+      challenge.id,
+      ['screening-scorecard'],
+    );
 
     const createdSubmissionIds =
       reviewService.createPendingReview.mock.calls.map(
@@ -482,10 +475,7 @@ describe('PhaseReviewService', () => {
       postMortemResources as any,
     );
 
-    await service.handlePhaseOpenedForChallenge(
-      challenge,
-      postMortemPhase.id,
-    );
+    await service.handlePhaseOpenedForChallenge(challenge, postMortemPhase.id);
 
     expect(resourcesService.ensureResourcesForMembers).toHaveBeenCalledWith(
       challenge.id,
@@ -571,9 +561,7 @@ describe('PhaseReviewService', () => {
       'scorecard-1',
       challenge.id,
     );
-    expect(
-      challengeCompletionService.finalizeChallenge,
-    ).not.toHaveBeenCalled();
+    expect(challengeCompletionService.finalizeChallenge).not.toHaveBeenCalled();
   });
 
   it('cancels the challenge when approval opens without passing submissions', async () => {
@@ -658,9 +646,10 @@ describe('PhaseReviewService', () => {
       challenge.id,
       ['Checkpoint Reviewer'],
     );
-    expect(
-      reviewService.getCheckpointPassedSubmissionIds,
-    ).toHaveBeenCalledWith(challenge.id, 'screening-scorecard');
+    expect(reviewService.getCheckpointPassedSubmissionIds).toHaveBeenCalledWith(
+      challenge.id,
+      'screening-scorecard',
+    );
     expect(reviewService.createPendingReview).toHaveBeenCalledWith(
       'submission-1',
       'checkpoint-resource',
@@ -680,10 +669,7 @@ describe('PhaseReviewService', () => {
     const challenge = buildChallenge({});
     challenge.phases = [iterativePhase];
 
-    await service.handlePhaseOpenedForChallenge(
-      challenge,
-      iterativePhase.id,
-    );
+    await service.handlePhaseOpenedForChallenge(challenge, iterativePhase.id);
 
     expect(reviewService.createPendingReview).not.toHaveBeenCalled();
     expect(dbLogger.logAction).toHaveBeenCalledWith(

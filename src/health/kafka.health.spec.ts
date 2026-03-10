@@ -1,9 +1,6 @@
 import { HealthCheckError } from '@nestjs/terminus';
 import { KafkaHealthIndicator } from './kafka.health';
-import {
-  KafkaConnectionState,
-  KafkaService,
-} from '../kafka/kafka.service';
+import { KafkaConnectionState, KafkaService } from '../kafka/kafka.service';
 
 jest.mock('../kafka/kafka.service', () => {
   const KafkaConnectionStateMock = {

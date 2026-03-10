@@ -1,14 +1,16 @@
 import { ChallengeApiService } from './challenge-api.service';
 import type { ChallengePrismaService } from './challenge-prisma.service';
 import type { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
-import { ChallengeStatusEnum } from '@prisma/client';
+import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
 
 describe('ChallengeApiService - advancePhase scheduling', () => {
   const fixedNow = new Date('2025-09-27T06:00:00.000Z');
   const futureStart = new Date('2025-09-27T07:00:00.000Z');
   const phaseDurationSeconds = 7200;
-  const futureEnd = new Date(futureStart.getTime() + phaseDurationSeconds * 1000);
+  const futureEnd = new Date(
+    futureStart.getTime() + phaseDurationSeconds * 1000,
+  );
 
   let prisma: jest.Mocked<ChallengePrismaService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
@@ -16,6 +18,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let challengePhaseCreate: jest.Mock;
   let challengePhaseDeleteMany: jest.Mock;
   let challengePhaseUpdateMany: jest.Mock;
+  let challengePhaseFindMany: jest.Mock;
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
   let txChallengeFindUnique: jest.Mock;
@@ -31,6 +34,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     challengePhaseCreate = jest.fn().mockResolvedValue({ id: 'new-phase' });
     challengePhaseDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
     challengePhaseUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+    challengePhaseFindMany = jest.fn().mockResolvedValue([]);
     challengeUpdate = jest.fn().mockResolvedValue(undefined);
 
     challengeFindUnique = jest.fn();
@@ -47,6 +51,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         updateMany: challengePhaseUpdateMany,
         create: challengePhaseCreate,
         deleteMany: challengePhaseDeleteMany,
+        findMany: challengePhaseFindMany,
       },
       $transaction: jest.fn(),
     } as unknown as jest.Mocked<ChallengePrismaService>;
@@ -66,6 +71,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
           updateMany: challengePhaseUpdateMany,
           create: challengePhaseCreate,
           deleteMany: challengePhaseDeleteMany,
+          findMany: challengePhaseFindMany,
         },
       } as unknown as ChallengePrismaService);
     });
@@ -170,14 +176,19 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       .mockResolvedValueOnce(challengeRecord as any)
       .mockResolvedValueOnce(challengeRecord as any);
 
+    const rescheduleSpy = jest.spyOn(service, 'rescheduleSuccessorPhases');
+
     await service.advancePhase('challenge-1', 'phase-1', 'open');
 
     expect(challengeFindUnique).toHaveBeenCalled();
+    expect(rescheduleSpy).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
     expect(challengePhaseUpdate).toHaveBeenCalledWith({
       where: { id: reviewPhase.id },
       data: expect.objectContaining({
         scheduledStartDate: fixedNow,
-        scheduledEndDate: new Date(fixedNow.getTime() + phaseDurationSeconds * 1000),
+        scheduledEndDate: new Date(
+          fixedNow.getTime() + phaseDurationSeconds * 1000,
+        ),
         duration: phaseDurationSeconds,
       }),
     });
@@ -333,13 +344,19 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       .mockResolvedValueOnce(challengeRecord as any)
       .mockResolvedValueOnce(challengeRecord as any);
 
-    await service.advancePhase('challenge-late-phase', submissionPhase.id, 'open');
+    await service.advancePhase(
+      'challenge-late-phase',
+      submissionPhase.id,
+      'open',
+    );
 
     expect(challengePhaseUpdate).toHaveBeenCalledWith({
       where: { id: submissionPhase.id },
       data: expect.objectContaining({
         scheduledStartDate: lateNow,
-        scheduledEndDate: new Date(lateNow.getTime() + submissionPhase.duration * 1000),
+        scheduledEndDate: new Date(
+          lateNow.getTime() + submissionPhase.duration * 1000,
+        ),
         duration: submissionPhase.duration,
       }),
     });
@@ -413,7 +430,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
           {
             ...existingPostMortem,
             scheduledStartDate: fixedNow,
-            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            scheduledEndDate: new Date(
+              fixedNow.getTime() + 72 * 60 * 60 * 1000,
+            ),
             actualStartDate: fixedNow,
             actualEndDate: null,
             isOpen: true,
@@ -507,7 +526,9 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
             isOpen: true,
             duration: 72 * 60 * 60,
             scheduledStartDate: fixedNow,
-            scheduledEndDate: new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000),
+            scheduledEndDate: new Date(
+              fixedNow.getTime() + 72 * 60 * 60 * 1000,
+            ),
             actualStartDate: fixedNow,
             actualEndDate: null,
             predecessor: submissionPhase.phaseId,
@@ -793,7 +814,12 @@ describe('ChallengeApiService - end date handling', () => {
   it('sets the endDate when completing a challenge', async () => {
     const winners = [
       { userId: 123, handle: 'winner', placement: 1 },
-      { userId: 456, handle: 'runner-up', placement: 2 },
+      {
+        userId: 456,
+        handle: 'runner-up',
+        placement: 1,
+        type: PrizeSetTypeEnum.PASSED_REVIEW,
+      },
     ];
 
     await service.completeChallenge('challenge-123', winners);
@@ -807,11 +833,18 @@ describe('ChallengeApiService - end date handling', () => {
       },
     });
     expect(challengeWinnerDeleteMany).toHaveBeenCalledWith({
-      where: { challengeId: 'challenge-123', type: 'PLACEMENT' },
+      where: {
+        challengeId: 'challenge-123',
+        type: { in: ['PLACEMENT', 'PASSED_REVIEW'] },
+      },
     });
     expect(challengeWinnerCreateMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({ challengeId: 'challenge-123' }),
+        expect.objectContaining({
+          challengeId: 'challenge-123',
+          type: PrizeSetTypeEnum.PASSED_REVIEW,
+        }),
       ]),
     });
     expect(dbLogger.logAction).toHaveBeenCalledWith(
