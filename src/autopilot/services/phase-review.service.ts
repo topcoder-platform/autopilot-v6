@@ -476,6 +476,13 @@ export class PhaseReviewService {
       );
     }
 
+    if (submissionIds.length && isReviewPhase) {
+      submissionIds = await this.excludeAiFailedReviewSubmissions(
+        challengeId,
+        submissionIds,
+      );
+    }
+
     if (!submissionIds.length) {
       this.logPhaseAction('INFO', challengeId, {
         phaseId: phase.id,
@@ -601,6 +608,55 @@ export class PhaseReviewService {
       const err = error as Error;
       this.logger.error(
         `Failed to filter screened submissions for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return submissionIds;
+    }
+  }
+
+  private async excludeAiFailedReviewSubmissions(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<string[]> {
+    if (!submissionIds.length) {
+      return submissionIds;
+    }
+
+    try {
+      const aiFailedIds =
+        await this.reviewService.getAiFailedDecisionSubmissionIds(
+          challengeId,
+          submissionIds,
+        );
+
+      if (!aiFailedIds.size) {
+        return submissionIds;
+      }
+
+      const lockedSubmissionIds = submissionIds.filter((id) =>
+        aiFailedIds.has(id),
+      );
+
+      if (!lockedSubmissionIds.length) {
+        return submissionIds;
+      }
+
+      await this.reviewService.markSubmissionsAsAiFailedReview(
+        challengeId,
+        lockedSubmissionIds,
+      );
+
+      const filtered = submissionIds.filter((id) => !aiFailedIds.has(id));
+
+      this.logger.log(
+        `Excluded ${lockedSubmissionIds.length} submission(s) for challenge ${challengeId} due to failed AI review decisions.`,
+      );
+
+      return filtered;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to filter AI review decision submissions for challenge ${challengeId}: ${err.message}`,
         err.stack,
       );
       return submissionIds;

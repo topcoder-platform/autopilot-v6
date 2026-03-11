@@ -1,4 +1,5 @@
 export const ITERATIVE_REVIEW_PHASE_NAME = 'Iterative Review';
+export const AI_SCREENING_PHASE_NAME = 'AI Screening';
 export const POST_MORTEM_PHASE_NAME = 'Post-Mortem';
 export const POST_MORTEM_PHASE_ALTERNATE_NAME = 'Post-mortem';
 export const POST_MORTEM_PHASE_NAMES = new Set<string>([
