@@ -696,10 +696,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           const challenge = await this.challengeApiService.getChallengeById(
             data.challengeId,
           );
-          const aiWorkflowIds = this.getAiWorkflowIdsForPhase(
-            challenge,
-            phaseDetails,
-          );
+          const aiWorkflowIds = this.getAiWorkflowIds(challenge);
 
           const inProgressAiWorkflows =
             await this.reviewService.getInProgressAiWorkflowRunCount(
@@ -1132,12 +1129,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
         if (operation === 'open' && isAiScreeningPhase) {
           try {
-            const challenge =
-              await this.challengeApiService.getChallengeById(data.challengeId);
-            const aiWorkflowIds = this.getAiWorkflowIdsForPhase(
-              challenge,
-              phaseDetails,
+            const challenge = await this.challengeApiService.getChallengeById(
+              data.challengeId,
             );
+            const aiWorkflowIds = this.getAiWorkflowIds(challenge);
 
             const inProgressAiWorkflows =
               await this.reviewService.getInProgressAiWorkflowRunCount(
@@ -2394,30 +2389,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     return `${challengeId}|${phaseId}|ai-screening-close`;
   }
 
-  private getAiWorkflowIdsForPhase(
-    challenge: IChallenge,
-    phase: IPhase,
-  ): string[] {
-    const challengePhase = challenge.phases?.find(
-      (candidate) => candidate.id === phase.id,
-    );
-    // const phaseTemplateId = challengePhase?.phaseId ?? phase.phaseId ?? null;
-
+  private getAiWorkflowIds(challenge: IChallenge): string[] {
     return Array.from(
       new Set(
         (challenge.reviewers ?? [])
-          // we don't actually care about ai review phaseId, they always run
-          // .filter((reviewer) => {
-          //   if (!reviewer.aiWorkflowId) {
-          //     return false;
-          //   }
-
-          //   if (!phaseTemplateId) {
-          //     return true;
-          //   }
-
-          //   return reviewer.phaseId === phaseTemplateId;
-          // })
           .map((reviewer) => reviewer.aiWorkflowId)
           .filter((workflowId): workflowId is string => Boolean(workflowId)),
       ),
