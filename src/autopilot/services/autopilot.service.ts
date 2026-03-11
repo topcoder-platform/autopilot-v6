@@ -33,6 +33,7 @@ import {
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
   PHASE_ROLE_MAP,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
@@ -756,9 +757,8 @@ export class AutopilotService {
         return;
       }
 
-      // Import AI_SCREENING_PHASE_NAME from constants if needed
       const aiScreeningPhase = challenge.phases.find(
-        (p) => p.name === 'AI Screening',
+        (p) => p.name === AI_SCREENING_PHASE_NAME,
       );
 
       if (!aiScreeningPhase) {

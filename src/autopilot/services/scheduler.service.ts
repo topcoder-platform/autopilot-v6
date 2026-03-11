@@ -131,7 +131,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly first2FinishService: First2FinishService,
   ) {
     this.phaseChainCallback = SchedulerService.phaseChainCallback;
-    SchedulerService.phaseChainCallback = null;
     this.submitterRoles = getNormalizedStringArray(
       this.configService.get('autopilot.submitterRoles'),
       ['Submitter'],
@@ -274,6 +273,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     ) => Promise<void> | void,
   ): void {
     SchedulerService.phaseChainCallback = callback;
+    this.phaseChainCallback = callback;
     Logger.log(
       `[PHASE CHAIN] Phase chain callback registered (pid ${process.pid}).`,
       SchedulerService.name,
