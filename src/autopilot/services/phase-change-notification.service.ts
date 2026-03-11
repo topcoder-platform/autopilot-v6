@@ -3,8 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { ResourcesService } from '../../resources/resources.service';
+import type { ReviewerResourceRecord } from '../../resources/resources.service';
 import { MembersService } from '../../members/members.service';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
 import { Auth0Service } from '../../auth/auth0.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 
@@ -102,7 +104,7 @@ export class PhaseChangeNotificationService {
 
     const { challengeId, phaseId, operation } = params;
 
-    let resources;
+    let resources: ReviewerResourceRecord[] = [];
     try {
       resources =
         await this.resourcesService.getPhaseChangeNotificationResources(
@@ -202,7 +204,7 @@ export class PhaseChangeNotificationService {
       return;
     }
 
-    let challenge;
+    let challenge: IChallenge | null = null;
     try {
       challenge = await this.challengeApiService.getChallengeById(challengeId);
     } catch (error) {
@@ -285,7 +287,8 @@ export class PhaseChangeNotificationService {
       payload: {
         from: defaultNotificationEmail,
         replyTo: defaultNotificationEmail,
-        recipients: recipientEmails,
+        recipients: [defaultNotificationEmail],
+        bcc: recipientEmails,
         data: payloadData,
         sendgrid_template_id: this.sendgridTemplateId,
         version: 'v3',
@@ -397,7 +400,7 @@ export class PhaseChangeNotificationService {
 
     if (Number.isNaN(date.getTime())) {
       this.logger.warn(
-        `Unable to format phase date "${value}" for phase change notification payload.`,
+        `Unable to format phase date "${String(value)}" for phase change notification payload.`,
       );
 
       return typeof value === 'string' ? value : null;
