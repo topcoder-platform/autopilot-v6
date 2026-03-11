@@ -34,6 +34,7 @@ import {
   selectScorecardId,
 } from '../utils/reviewer.utils';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
+import { FinanceApiService } from '../../finance/finance-api.service';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -42,6 +43,10 @@ export class PhaseScheduleManager {
   private readonly appealsResponsePhaseNames: Set<string>;
   private readonly challengeStatusCache: Map<string, string>;
   private static readonly OVERDUE_PHASE_GRACE_PERIOD_MS = 60_000;
+  private static readonly PAYABLE_CHALLENGE_STATUSES = new Set([
+    'COMPLETED',
+    'CANCELLED_FAILED_REVIEW',
+  ]);
 
   constructor(
     private readonly schedulerService: SchedulerService,
@@ -52,6 +57,7 @@ export class PhaseScheduleManager {
     private readonly reviewApiService: ReviewApiService,
     private readonly configService: ConfigService,
     private readonly dbLogger: AutopilotDbLoggerService,
+    private readonly financeApiService: FinanceApiService,
   ) {
     this.schedulerService.setPhaseChainCallback(
       (
@@ -317,7 +323,14 @@ export class PhaseScheduleManager {
         await this.createReviewOpportunitiesForChallenge(challengeDetails);
       }
 
+      this.triggerFinanceGenerationForPayableStatus(
+        message.id,
+        previousStatus,
+        challengeDetails.status,
+      );
+
       if (!isActiveStatus(challengeDetails.status)) {
+        this.updateCachedStatus(message.id, challengeDetails.status);
         this.logger.log(
           `Skipping challenge ${message.id} update with status ${challengeDetails.status}; only ACTIVE challenges are processed.`,
         );
@@ -340,6 +353,12 @@ export class PhaseScheduleManager {
         }
 
         if (!isActiveStatus(challengeDetails.status)) {
+          this.triggerFinanceGenerationForPayableStatus(
+            message.id,
+            previousStatus,
+            challengeDetails.status,
+          );
+          this.updateCachedStatus(message.id, challengeDetails.status);
           this.logger.log(
             `Skipping challenge ${message.id} update after immediate processing; status is now ${challengeDetails.status}.`,
           );
@@ -464,6 +483,38 @@ export class PhaseScheduleManager {
         err.stack,
       );
     }
+  }
+
+  private isPayableChallengeStatus(status?: string): boolean {
+    if (!status) {
+      return false;
+    }
+
+    return PhaseScheduleManager.PAYABLE_CHALLENGE_STATUSES.has(
+      status.toUpperCase(),
+    );
+  }
+
+  private triggerFinanceGenerationForPayableStatus(
+    challengeId: string,
+    previousStatus: string | null,
+    currentStatus: string,
+  ): void {
+    if (!this.isPayableChallengeStatus(currentStatus)) {
+      return;
+    }
+
+    if (
+      previousStatus &&
+      previousStatus.toUpperCase() === currentStatus.toUpperCase()
+    ) {
+      return;
+    }
+
+    this.logger.log(
+      `[FINANCE] Challenge ${challengeId} transitioned to ${currentStatus}; triggering payment generation.`,
+    );
+    void this.financeApiService.generateChallengePayments(challengeId);
   }
 
   private async createReviewOpportunitiesForChallenge(

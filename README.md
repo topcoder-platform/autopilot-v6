@@ -160,7 +160,7 @@ The service is composed of several key modules that communicate over specific Ka
 | AutopilotService     | Central business logic for scheduling, updating, and canceling phase transitions. | challenge.notification.create, challenge.notification.update, autopilot.command | -                         |
 | SchedulerService     | Low-level job management using setTimeout. Triggers Kafka events when jobs execute. | -                                                  | autopilot.phase.transition |
 | RecoveryService      | Runs on startup to sync all active challenges from the database, scheduling them and processing overdue phases. | -                                                  | autopilot.phase.transition |
-| SyncService          | Runs a periodic cron job to reconcile the scheduler's state with the Challenge database. | -                                                  | -                         |
+| SyncService          | Runs a periodic cron job to reconcile scheduler jobs for ACTIVE challenges and replay recent payable challenge updates (`COMPLETED`, `CANCELLED_FAILED_REVIEW`) for finance generation safety. | -                                                  | -                         |
 | KafkaService         | Manages all Kafka producer/consumer connections with JSON serialization. | All                                                | All                       |
 
 

@@ -372,6 +372,15 @@ export class ChallengeCompletionService {
 
     const normalizedStatus = (challenge.status ?? '').toUpperCase();
     if (normalizedStatus !== ChallengeStatusEnum.ACTIVE) {
+      if (
+        normalizedStatus === ChallengeStatusEnum.COMPLETED ||
+        normalizedStatus === ChallengeStatusEnum.CANCELLED_FAILED_REVIEW
+      ) {
+        this.logger.log(
+          `Challenge ${challengeId} is already ${challenge.status}; ensuring finance payments are generated.`,
+        );
+        void this.financeApiService.generateChallengePayments(challengeId);
+      }
       this.logger.log(
         `Challenge ${challengeId} is not ACTIVE (status: ${challenge.status}); skipping finalization attempt.`,
       );

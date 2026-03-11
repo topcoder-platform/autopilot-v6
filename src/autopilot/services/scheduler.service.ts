@@ -906,6 +906,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         let skipFinalization = false;
         let appealsOpenedImmediately = false;
 
+        if (data.skipPhaseChain) {
+          skipPhaseChain = true;
+          this.logger.debug?.(
+            `[PHASE CHAIN] Skipping automatic successor opening for challenge ${data.challengeId}, phase ${data.phaseId} due to skipPhaseChain flag.`,
+          );
+        }
+
         if (operation === 'close' && isReviewPhase) {
           let appealsSuccessors =
             result.next?.phases?.filter(
@@ -1497,7 +1504,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private async ensureTopgearPostMortemReview(
     challenge: IChallenge,
     submissionPhase: IPhase,
-    data: PhaseTransitionPayload,
   ): Promise<void> {
     // Prevent concurrent duplicate creations for the same challenge within this process
     this.topgearPostMortemLocks =
@@ -1517,7 +1523,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           scorecardId = await this.reviewService.getScorecardIdByName(
             'Topgear Task Post Mortem',
           );
-        } catch (err) {
+        } catch {
           // Already logged in review service
         }
       }
