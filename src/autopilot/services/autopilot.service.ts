@@ -16,6 +16,7 @@ import {
   AppealRespondedPayload,
   First2FinishSubmissionPayload,
   TopgearSubmissionPayload,
+  AiWorkflowCompletedPayload,
 } from '../interfaces/autopilot.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
@@ -32,6 +33,7 @@ import {
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
   PHASE_ROLE_MAP,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
 import { ResourcesService } from '../../resources/resources.service';
@@ -728,6 +730,99 @@ export class AutopilotService {
     } else {
       this.logger.warn(
         `No continuation Approval reviews created for challenge ${challenge.id}, phase ${approvalPhase.id}; pending review pairs may already exist.`,
+      );
+    }
+  }
+
+  async handleAiWorkflowCompleted(
+    payload: AiWorkflowCompletedPayload,
+  ): Promise<void> {
+    const { challengeId } = payload;
+
+    if (!challengeId) {
+      this.logger.warn(
+        `AI workflow completion event missing challengeId; ignoring`,
+      );
+      return;
+    }
+
+    try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!challenge || !challenge.phases) {
+        this.logger.warn(
+          `Challenge ${challengeId} not found or has no phases; ignoring AI workflow completion`,
+        );
+        return;
+      }
+
+      const aiScreeningPhase = challenge.phases.find(
+        (p) => p.name === AI_SCREENING_PHASE_NAME,
+      );
+
+      if (!aiScreeningPhase) {
+        this.logger.debug(
+          `No AI Screening phase found for challenge ${challengeId}; ignoring AI workflow completion`,
+        );
+        return;
+      }
+
+      if (!aiScreeningPhase.isOpen) {
+        this.logger.debug(
+          `AI Screening phase ${aiScreeningPhase.id} already closed for challenge ${challengeId}; ignoring AI workflow completion event`,
+        );
+        return;
+      }
+
+      // Get all AI workflow IDs configured for this challenge
+      const aiWorkflowIds = Array.from(
+        new Set(
+          (challenge.reviewers ?? [])
+            .map((reviewer) => reviewer.aiWorkflowId)
+            .filter((workflowId): workflowId is string => Boolean(workflowId)),
+        ),
+      );
+
+      if (aiWorkflowIds.length === 0) {
+        this.logger.debug(
+          `No AI workflows configured for challenge ${challengeId}; ignoring completion event`,
+        );
+        return;
+      }
+
+      // Check if there are any remaining in-progress AI workflows
+      const inProgressAiWorkflows =
+        await this.reviewService.getInProgressAiWorkflowRunCount(
+          challengeId,
+          aiWorkflowIds,
+        );
+
+      if (inProgressAiWorkflows > 0) {
+        this.logger.debug(
+          `AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
+        );
+        return;
+      }
+
+      this.logger.log(
+        `All AI workflows completed for phase ${aiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
+      );
+
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: aiScreeningPhase.id,
+        phaseTypeName: aiScreeningPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to handle AI workflow completion for challenge ${challengeId}: ${err.message}`,
+        err.stack,
       );
     }
   }

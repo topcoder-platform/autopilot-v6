@@ -121,6 +121,8 @@ describe('PhaseReviewService', () => {
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
+      getAiFailedDecisionSubmissionIds: jest.fn(),
+      markSubmissionsAsAiFailedReview: jest.fn(),
       getCheckpointPassedSubmissionIds: jest.fn(),
       generateReviewSummaries: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
@@ -169,6 +171,8 @@ describe('PhaseReviewService', () => {
     ] as any);
     reviewService.createPendingReview.mockResolvedValue(true);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
+    reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
     reviewService.getActiveCheckpointSubmissionIds.mockResolvedValue([]);
     challengeCompletionService.finalizeChallenge.mockResolvedValue(true);
@@ -382,6 +386,42 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('locks and skips submissions that failed AI review decisions', async () => {
+    const challenge = buildChallenge({});
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'ai-failed-submission', memberId: '123', isLatest: true },
+      { id: 'eligible-submission', memberId: '456', isLatest: true },
+    ];
+
+    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
+      new Set(['ai-failed-submission']),
+    );
+    reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(1);
+
+    await service.handlePhaseOpened(challenge.id, basePhase.id);
+
+    expect(
+      reviewService.getAiFailedDecisionSubmissionIds,
+    ).toHaveBeenCalledWith(challenge.id, [
+      'ai-failed-submission',
+      'eligible-submission',
+    ]);
+    expect(reviewService.markSubmissionsAsAiFailedReview).toHaveBeenCalledWith(
+      challenge.id,
+      ['ai-failed-submission'],
+    );
+
+    const createdSubmissionIds =
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      );
+
+    expect(createdSubmissionIds).toEqual(['eligible-submission']);
   });
 
   it('creates post-mortem pending reviews for Post-Mortem Reviewer resources', async () => {

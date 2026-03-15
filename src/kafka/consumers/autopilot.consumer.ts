@@ -14,6 +14,7 @@ import {
   ResourceEventPayload,
   ReviewCompletedPayload,
   SubmissionAggregatePayload,
+  AiWorkflowCompletedPayload,
 } from 'src/autopilot/interfaces/autopilot.interface';
 
 @Injectable()
@@ -70,6 +71,10 @@ export class AutopilotConsumer {
         this.autopilotService.handleAppealResponded.bind(
           this.autopilotService,
         ) as (message: AppealRespondedPayload) => Promise<void>,
+      [KAFKA_TOPICS.AI_WORKFLOW_COMPLETED]:
+        this.autopilotService.handleAiWorkflowCompleted.bind(
+          this.autopilotService,
+        ) as (message: AiWorkflowCompletedPayload) => Promise<void>,
       [KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED]:
         this.autopilotService.handleFirst2FinishSubmission.bind(
           this.autopilotService,
@@ -136,6 +141,11 @@ export class AutopilotConsumer {
             case KAFKA_TOPICS.REVIEW_APPEAL_RESPONDED:
               await this.autopilotService.handleAppealResponded(
                 payload as AppealRespondedPayload,
+              );
+              break;
+            case KAFKA_TOPICS.AI_WORKFLOW_COMPLETED:
+              await this.autopilotService.handleAiWorkflowCompleted(
+                payload as AiWorkflowCompletedPayload,
               );
               break;
             case KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED:
