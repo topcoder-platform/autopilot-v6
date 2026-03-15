@@ -16,14 +16,11 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
   PHASE_ROLE_MAP,
   REGISTRATION_PHASE_NAME,
-  SUBMISSION_PHASE_NAME,
-  TOPGEAR_SUBMISSION_PHASE_NAME,
   isSubmissionPhaseName,
 } from '../constants/review.constants';
 import {
   describeChallengeType,
   isFirst2FinishChallenge as isSupportedChallengeType,
-  isTopgearTaskChallenge,
 } from '../constants/challenge.constants';
 import { isActiveStatus } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
@@ -586,7 +583,7 @@ export class First2FinishService {
       }
 
       try {
-        const created = await this.reviewService.createPendingReview(
+        const { created } = await this.reviewService.createPendingReview(
           submissionId,
           resourceId,
           phase.id,

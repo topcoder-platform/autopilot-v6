@@ -48,6 +48,9 @@ type ChallengeApiServiceMock = {
 
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
+  getMarathonMatchReviewReadiness: MockedMethod<
+    ReviewService['getMarathonMatchReviewReadiness']
+  >;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
   getActiveContestSubmissionIds: MockedMethod<
@@ -185,6 +188,8 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService = {
       getPendingReviewCount:
         createMockMethod<ReviewService['getPendingReviewCount']>(),
+      getMarathonMatchReviewReadiness:
+        createMockMethod<ReviewService['getMarathonMatchReviewReadiness']>(),
       getPendingAppealCount:
         createMockMethod<ReviewService['getPendingAppealCount']>(),
       getTotalAppealCount:
@@ -201,6 +206,11 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 0,
+      reviewedSubmissionCount: 0,
+      completedSubmissionCount: 0,
+    });
     reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
@@ -326,6 +336,82 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers closing Marathon Match review phases when latest submissions are missing review records', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 1,
+      completedSubmissionCount: 1,
+    });
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers closing Marathon Match review phases when latest submissions are not fully completed', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 2,
+      completedSubmissionCount: 1,
+    });
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -504,6 +590,64 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('closes Marathon Match review phases only after review records exist and all latest submissions are completed', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 2,
+      completedSubmissionCount: 2,
+    });
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+      payload.phaseId,
+      payload.challengeId,
+    );
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,

@@ -268,6 +268,70 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getMarathonMatchReviewReadiness', () => {
+    const phaseId = 'phase-review';
+
+    it('returns zero counts when challengeId or phaseId is missing', async () => {
+      const result = await service.getMarathonMatchReviewReadiness(
+        challengeId,
+        '',
+      );
+
+      expect(result).toEqual({
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+      });
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+      expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
+    });
+
+    it('returns latest-submission review readiness counts and logs success', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        {
+          expectedSubmissionCount: '3',
+          reviewedSubmissionCount: '2',
+          completedSubmissionCount: '1',
+        },
+      ]);
+
+      const readiness = await service.getMarathonMatchReviewReadiness(
+        challengeId,
+        phaseId,
+      );
+
+      expect(readiness).toEqual({
+        expectedSubmissionCount: 3,
+        reviewedSubmissionCount: 2,
+        completedSubmissionCount: 1,
+      });
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('ROW_NUMBER() OVER');
+      expect(sqlText).toContain('latest_submissions');
+      expect(sqlText).toContain('completedSubmissionCount');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getMarathonMatchReviewReadiness',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            phaseId,
+            expectedSubmissionCount: 3,
+            reviewedSubmissionCount: 2,
+            completedSubmissionCount: 1,
+          }),
+        }),
+      );
+    });
+  });
+
   describe('updatePendingReviewScorecards', () => {
     const phaseId = 'phase-1';
     const scorecardId = 'scorecard-123';

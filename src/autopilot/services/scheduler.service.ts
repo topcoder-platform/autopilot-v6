@@ -35,7 +35,10 @@ import {
   isPostMortemPhaseName,
 } from '../constants/review.constants';
 import { ResourcesService } from '../../resources/resources.service';
-import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import {
+  isMarathonMatchChallenge,
+  isTopgearTaskChallenge,
+} from '../constants/challenge.constants';
 import {
   IChallenge,
   IPhase,
@@ -606,55 +609,116 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       if (operation === 'close' && isReviewPhase) {
         try {
-          const coverage = await this.verifyReviewerCoverage(
-            data.challengeId,
-            data.phaseId,
-            phaseName,
-            true,
-          );
+          const reviewChallenge =
+            await this.challengeApiService.getChallengeById(data.challengeId);
 
-          if (coverage.expected <= 0) {
-            await this.deferReviewPhaseClosure(
-              data,
-              undefined,
-              'no reviewers are defined for this phase',
-            );
-            return;
-          }
-
-          if (!coverage.satisfied) {
-            await this.deferReviewPhaseClosure(
-              data,
-              undefined,
-              `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
-            );
-            return;
-          }
-
-          if (!data.skipReviewCompletionCheck) {
-            const completedReviews =
-              await this.reviewService.getCompletedReviewCountForPhase(
+          if (isMarathonMatchChallenge(reviewChallenge.type)) {
+            const reviewReadiness =
+              await this.reviewService.getMarathonMatchReviewReadiness(
+                data.challengeId,
                 data.phaseId,
               );
 
-            if (completedReviews <= 0) {
+            if (
+              reviewReadiness.expectedSubmissionCount > 0 &&
+              reviewReadiness.reviewedSubmissionCount <
+                reviewReadiness.expectedSubmissionCount
+            ) {
+              const missingReviewCount =
+                reviewReadiness.expectedSubmissionCount -
+                reviewReadiness.reviewedSubmissionCount;
+
               await this.deferReviewPhaseClosure(
                 data,
-                completedReviews,
-                'no completed reviews found',
+                missingReviewCount,
+                `waiting for Marathon Match review records to exist for all latest submissions (${reviewReadiness.reviewedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} present)`,
               );
               return;
             }
-          }
 
-          const pendingReviews = await this.reviewService.getPendingReviewCount(
-            data.phaseId,
-            data.challengeId,
-          );
+            if (
+              reviewReadiness.expectedSubmissionCount > 0 &&
+              reviewReadiness.completedSubmissionCount <
+                reviewReadiness.expectedSubmissionCount
+            ) {
+              const incompleteReviewCount =
+                reviewReadiness.expectedSubmissionCount -
+                reviewReadiness.completedSubmissionCount;
 
-          if (pendingReviews > 0) {
-            await this.deferReviewPhaseClosure(data, pendingReviews);
-            return;
+              await this.deferReviewPhaseClosure(
+                data,
+                incompleteReviewCount,
+                `waiting for Marathon Match system reviews to complete for all latest submissions (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed)`,
+              );
+              return;
+            }
+
+            const pendingReviews =
+              await this.reviewService.getPendingReviewCount(
+                data.phaseId,
+                data.challengeId,
+              );
+
+            if (pendingReviews > 0) {
+              await this.deferReviewPhaseClosure(
+                data,
+                pendingReviews,
+                'waiting for Marathon Match system reviews to complete',
+              );
+              return;
+            }
+          } else {
+            const coverage = await this.verifyReviewerCoverage(
+              data.challengeId,
+              data.phaseId,
+              phaseName,
+              true,
+            );
+
+            if (coverage.expected <= 0) {
+              await this.deferReviewPhaseClosure(
+                data,
+                undefined,
+                'no reviewers are defined for this phase',
+              );
+              return;
+            }
+
+            if (!coverage.satisfied) {
+              await this.deferReviewPhaseClosure(
+                data,
+                undefined,
+                `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
+              );
+              return;
+            }
+
+            if (!data.skipReviewCompletionCheck) {
+              const completedReviews =
+                await this.reviewService.getCompletedReviewCountForPhase(
+                  data.phaseId,
+                );
+
+              if (completedReviews <= 0) {
+                await this.deferReviewPhaseClosure(
+                  data,
+                  completedReviews,
+                  'no completed reviews found',
+                );
+                return;
+              }
+            }
+
+            const pendingReviews =
+              await this.reviewService.getPendingReviewCount(
+                data.phaseId,
+                data.challengeId,
+              );
+
+            if (pendingReviews > 0) {
+              await this.deferReviewPhaseClosure(data, pendingReviews);
+              return;
+            }
           }
         } catch (error) {
           const err = error as Error;
@@ -1864,7 +1928,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       let createdCount = 0;
       for (const resource of resources) {
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             null,
             resource.id,
             phaseId,
@@ -1937,7 +2001,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       let createdCount = 0;
       for (const resource of resources) {
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             null,
             resource.id,
             phaseId,

@@ -701,7 +701,7 @@ export class AutopilotService {
     let createdCount = 0;
     for (const resourceId of uniqueResources) {
       try {
-        const created = await this.reviewService.createPendingReview(
+        const { created } = await this.reviewService.createPendingReview(
           submissionId,
           resourceId,
           approvalPhase.id,

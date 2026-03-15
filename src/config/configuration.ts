@@ -8,6 +8,8 @@ import busConfig from './sections/bus.config';
 import auth0Config from './sections/auth0.config';
 import autopilotConfig from './sections/autopilot.config';
 import financeConfig from './sections/finance.config';
+import memberApiConfig from './sections/member-api.config';
+import marathonMatchConfig from './sections/marathon-match.config';
 
 export default () => ({
   app: appConfig(),
@@ -20,4 +22,6 @@ export default () => ({
   auth0: auth0Config(),
   autopilot: autopilotConfig(),
   finance: financeConfig(),
+  memberApi: memberApiConfig(),
+  marathonMatch: marathonMatchConfig(),
 });

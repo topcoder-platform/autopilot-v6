@@ -23,6 +23,12 @@ interface PendingCountRecord {
   count: number | string;
 }
 
+interface MarathonMatchReviewReadinessRecord {
+  expectedSubmissionCount: number | string;
+  reviewedSubmissionCount: number | string;
+  completedSubmissionCount: number | string;
+}
+
 interface ReviewDetailRecord {
   id: string;
   phaseId: string | null;
@@ -76,6 +82,12 @@ export interface SubmissionSummary {
   scorecardLegacyId: string | null;
   passingScore: number;
   isPassing: boolean;
+}
+
+export interface MarathonMatchReviewReadiness {
+  expectedSubmissionCount: number;
+  reviewedSubmissionCount: number;
+  completedSubmissionCount: number;
 }
 
 @Injectable()
@@ -1041,13 +1053,121 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Summarizes Marathon Match review readiness for the latest active contest
+   * submissions in one review phase.
+   * @param challengeId Challenge containing the latest contest submissions.
+   * @param phaseId Review phase that should contain one completed system review
+   * for each latest submission.
+   * @returns Counts for expected latest submissions, latest submissions with any
+   * review record in the phase, and latest submissions with at least one
+   * completed review in the phase.
+   * @throws Error when the readiness query fails.
+   */
+  async getMarathonMatchReviewReadiness(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<MarathonMatchReviewReadiness> {
+    if (!challengeId || !phaseId) {
+      return {
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+      };
+    }
+
+    const query = Prisma.sql`
+      WITH latest_submissions AS (
+        SELECT latest."id"
+        FROM (
+          SELECT
+            s."id",
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) AS row_num
+          FROM ${ReviewService.SUBMISSION_TABLE} s
+          WHERE s."challengeId" = ${challengeId}
+            AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+            AND (
+              s."type" IS NULL
+              OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+            )
+        ) latest
+        WHERE latest.row_num = 1
+      ),
+      submission_review_status AS (
+        SELECT
+          ls."id" AS "submissionId",
+          COUNT(r."id")::int AS "reviewCount",
+          COUNT(*) FILTER (
+            WHERE UPPER(COALESCE((r."status")::text, 'PENDING')) = 'COMPLETED'
+          )::int AS "completedReviewCount"
+        FROM latest_submissions ls
+        LEFT JOIN ${ReviewService.REVIEW_TABLE} r
+          ON r."submissionId" = ls."id"
+         AND r."phaseId" = ${phaseId}
+        GROUP BY ls."id"
+      )
+      SELECT
+        COUNT(*)::int AS "expectedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE "reviewCount" > 0
+        )::int AS "reviewedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE "completedReviewCount" > 0
+        )::int AS "completedSubmissionCount"
+      FROM submission_review_status
+    `;
+
+    try {
+      const [record] =
+        await this.prisma.$queryRaw<MarathonMatchReviewReadinessRecord[]>(
+          query,
+        );
+      const readiness = {
+        expectedSubmissionCount: Number(record?.expectedSubmissionCount ?? 0),
+        reviewedSubmissionCount: Number(record?.reviewedSubmissionCount ?? 0),
+        completedSubmissionCount: Number(record?.completedSubmissionCount ?? 0),
+      };
+
+      void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          ...readiness,
+        },
+      });
+
+      return readiness;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async createPendingReview(
     submissionId: string | null,
     resourceId: string,
     phaseId: string,
     scorecardId: string,
     challengeId: string,
-  ): Promise<boolean> {
+  ): Promise<{ created: boolean; reviewId: string | null }> {
     const insert = Prisma.sql`
       INSERT INTO ${ReviewService.REVIEW_TABLE} (
         "resourceId",
@@ -1145,7 +1265,7 @@ export class ReviewService {
         },
       });
 
-      return created;
+      return { created, reviewId };
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('review.createPendingReview', {

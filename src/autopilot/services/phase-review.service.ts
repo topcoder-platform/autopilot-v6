@@ -22,10 +22,14 @@ import {
   getReviewerConfigsForPhase,
   selectScorecardId,
 } from '../utils/reviewer.utils';
-import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import {
+  isMarathonMatchChallenge,
+  isTopgearTaskChallenge,
+} from '../constants/challenge.constants';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
+import { MarathonMatchReviewService } from '../../marathon-match/marathon-match-review.service';
 
 @Injectable()
 export class PhaseReviewService {
@@ -36,6 +40,7 @@ export class PhaseReviewService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
+    private readonly marathonMatchReviewService: MarathonMatchReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly dbLogger: AutopilotDbLoggerService,
@@ -76,6 +81,14 @@ export class PhaseReviewService {
       return;
     }
 
+    if (isMarathonMatchChallenge(challenge.type) && isReviewPhase) {
+      await this.marathonMatchReviewService.handleReviewPhaseOpened(
+        challenge,
+        phase,
+      );
+      return;
+    }
+
     if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
       this.logPhaseAction('INFO', challengeId, {
         phaseId: phase.id,
@@ -102,7 +115,7 @@ export class PhaseReviewService {
             scorecardId = await this.reviewService.getScorecardIdByName(
               'Topgear Task Post Mortem',
             );
-          } catch (_) {
+          } catch {
             // Logged inside review service; continue with null
           }
         }
@@ -118,7 +131,7 @@ export class PhaseReviewService {
             scorecardId = await this.reviewService.getScorecardIdByName(
               'Topcoder Post Mortem',
             );
-          } catch (_) {
+          } catch {
             // Logged inside review service; continue with null
           }
         }
@@ -164,7 +177,7 @@ export class PhaseReviewService {
       let createdCount = 0;
       for (const resource of reviewerResources) {
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             null,
             resource.id,
             phase.id,
@@ -504,7 +517,7 @@ export class PhaseReviewService {
         }
 
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             submissionId,
             resource.id,
             phase.id,
@@ -824,10 +837,19 @@ export class PhaseReviewService {
       try {
         return JSON.stringify(value);
       } catch {
-        return Object.prototype.toString.call(value);
+        return '[object Object]';
       }
     }
-    return String(value);
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+    if (typeof value === 'symbol') {
+      return value.description ? `Symbol(${value.description})` : 'Symbol()';
+    }
+    if (typeof value === 'function') {
+      return '[function]';
+    }
+    return 'unknown';
   }
 
   private parseBooleanFlag(value: unknown): boolean | null {
