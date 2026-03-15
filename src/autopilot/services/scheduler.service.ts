@@ -2422,7 +2422,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           : 'unknown';
 
       const reasonMessage =
-        reason ?? `${pendingDescription} in-progress AI workflow run(s) detected`;
+        reason ??
+        `${pendingDescription} in-progress AI workflow run(s) detected`;
 
       this.logger.warn(
         `[AI SCREENING LATE] Deferred closing AI screening phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,

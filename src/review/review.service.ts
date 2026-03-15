@@ -883,8 +883,7 @@ export class ReviewService {
     `;
 
     try {
-      const rows =
-        await this.prisma.$queryRaw<AiFailedDecisionRecord[]>(query);
+      const rows = await this.prisma.$queryRaw<AiFailedDecisionRecord[]>(query);
       const failedIds = new Set(
         rows.map((record) => record.submissionId).filter(Boolean),
       );

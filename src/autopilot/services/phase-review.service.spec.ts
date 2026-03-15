@@ -405,12 +405,10 @@ describe('PhaseReviewService', () => {
 
     await service.handlePhaseOpened(challenge.id, basePhase.id);
 
-    expect(
-      reviewService.getAiFailedDecisionSubmissionIds,
-    ).toHaveBeenCalledWith(challenge.id, [
-      'ai-failed-submission',
-      'eligible-submission',
-    ]);
+    expect(reviewService.getAiFailedDecisionSubmissionIds).toHaveBeenCalledWith(
+      challenge.id,
+      ['ai-failed-submission', 'eligible-submission'],
+    );
     expect(reviewService.markSubmissionsAsAiFailedReview).toHaveBeenCalledWith(
       challenge.id,
       ['ai-failed-submission'],
