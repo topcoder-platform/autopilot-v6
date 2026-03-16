@@ -16,6 +16,7 @@ import {
   isPostMortemPhaseName,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
@@ -466,19 +467,24 @@ export class PhaseReviewService {
         new Set(filteredSubmissions.map((submission) => submission.id)),
       );
     }
+
+    if (
+      submissionIds.length &&
+      this.challengeHasAiScreeningPhase(challenge) &&
+      (isReviewPhase || phase.name.toLowerCase().includes('screening'))
+    ) {
+      submissionIds = await this.excludeAiFailedReviewSubmissions(
+        challengeId,
+        submissionIds,
+      );
+    }
+
     if (
       submissionIds.length &&
       (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
     ) {
       submissionIds = await this.excludeFailedScreeningSubmissions(
         challenge,
-        submissionIds,
-      );
-    }
-
-    if (submissionIds.length && isReviewPhase) {
-      submissionIds = await this.excludeAiFailedReviewSubmissions(
-        challengeId,
         submissionIds,
       );
     }
@@ -568,6 +574,12 @@ export class PhaseReviewService {
       source: PhaseReviewService.name,
       details,
     });
+  }
+
+  private challengeHasAiScreeningPhase(challenge: IChallenge): boolean {
+    return (challenge.phases ?? []).some(
+      (phase) => phase.name === AI_SCREENING_PHASE_NAME,
+    );
   }
 
   private async excludeFailedScreeningSubmissions(
