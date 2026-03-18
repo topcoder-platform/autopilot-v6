@@ -49,6 +49,9 @@ type ChallengeApiServiceMock = {
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
+  getPendingAiDecisionsEscalationsCount: MockedMethod<
+    ReviewService['getPendingAiDecisionsEscalationsCount']
+  >;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
   getActiveContestSubmissionIds: MockedMethod<
     ReviewService['getActiveContestSubmissionIds']
@@ -190,6 +193,10 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getPendingReviewCount']>(),
       getPendingAppealCount:
         createMockMethod<ReviewService['getPendingAppealCount']>(),
+      getPendingAiDecisionsEscalationsCount:
+        createMockMethod<
+          ReviewService['getPendingAiDecisionsEscalationsCount']
+        >(),
       getTotalAppealCount:
         createMockMethod<ReviewService['getTotalAppealCount']>(),
       getActiveContestSubmissionIds:
@@ -205,6 +212,7 @@ describe('SchedulerService (review phase deferral)', () => {
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(0);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
     reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
@@ -297,7 +305,7 @@ describe('SchedulerService (review phase deferral)', () => {
 
     challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
-    reviewService.getPendingAppealCount.mockResolvedValue(3);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(3);
 
     const scheduleSpy = jest
       .spyOn(scheduler, 'schedulePhaseTransition')
@@ -310,7 +318,9 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.phaseId,
       payload.challengeId,
     );
-    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
       payload.challengeId,
     );
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
@@ -540,7 +550,9 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
-    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
       payload.challengeId,
     );
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
