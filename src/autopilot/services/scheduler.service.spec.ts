@@ -286,6 +286,36 @@ describe('SchedulerService (review phase deferral)', () => {
     ).toBeGreaterThan(Date.now());
   });
 
+  it('defers closing review phases when pending escalation requests exist', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getPendingAppealCount.mockResolvedValue(3);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+      payload.phaseId,
+      payload.challengeId,
+    );
+    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('defers closing review phases when no reviewers are defined', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({
@@ -510,6 +540,9 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
+    expect(reviewService.getPendingAppealCount).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,

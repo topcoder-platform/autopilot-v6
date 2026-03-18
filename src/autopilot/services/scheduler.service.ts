@@ -674,6 +674,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             await this.deferReviewPhaseClosure(data, pendingReviews);
             return;
           }
+
+          const pendingEscalationRequests =
+            await this.reviewService.getPendingAppealCount(data.challengeId);
+
+          if (pendingEscalationRequests > 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              pendingEscalationRequests,
+              `${pendingEscalationRequests} pending escalation request(s) detected`,
+            );
+            return;
+          }
         } catch (error) {
           const err = error as Error;
           this.logger.error(
