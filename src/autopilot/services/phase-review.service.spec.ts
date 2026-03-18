@@ -118,6 +118,7 @@ describe('PhaseReviewService', () => {
     reviewService = {
       getActiveContestSubmissions: jest.fn(),
       getActiveCheckpointSubmissionIds: jest.fn(),
+      deleteStalePendingSubmissionReviews: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
@@ -153,6 +154,7 @@ describe('PhaseReviewService', () => {
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.deleteStalePendingSubmissionReviews.mockResolvedValue(0);
     resourcesService.getReviewerResources.mockResolvedValue([
       {
         id: 'resource-1',
@@ -221,6 +223,13 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual([
+      'latest-submission',
+      'unique-submission',
+    ]);
+
+    expect(
+      reviewService.deleteStalePendingSubmissionReviews,
+    ).toHaveBeenCalledWith(challenge.phases[0].id, challenge.id, [
       'latest-submission',
       'unique-submission',
     ]);

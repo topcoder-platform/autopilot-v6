@@ -489,6 +489,27 @@ export class PhaseReviewService {
       );
     }
 
+    try {
+      const deletedStaleReviews =
+        await this.reviewService.deleteStalePendingSubmissionReviews(
+          phase.id,
+          challengeId,
+          submissionIds,
+        );
+
+      if (deletedStaleReviews > 0) {
+        this.logger.log(
+          `Deleted ${deletedStaleReviews} stale pending review assignment(s) for challenge ${challengeId}, phase ${phase.id}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to delete stale pending reviews for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+        err.stack,
+      );
+    }
+
     if (!submissionIds.length) {
       this.logPhaseAction('INFO', challengeId, {
         phaseId: phase.id,

@@ -1416,6 +1416,78 @@ export class ReviewService {
     }
   }
 
+  async deleteStalePendingSubmissionReviews(
+    phaseId: string,
+    challengeId: string,
+    allowedSubmissionIds: string[],
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+
+    if (!trimmedPhaseId || !challengeId) {
+      return 0;
+    }
+
+    const normalizedSubmissionIds = Array.from(
+      new Set(
+        (allowedSubmissionIds ?? [])
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter((id) => id.length > 0),
+      ),
+    );
+
+    const allowedCondition = normalizedSubmissionIds.length
+      ? Prisma.sql`AND "submissionId" NOT IN (
+          ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
+        )`
+      : Prisma.sql``;
+
+    const query = Prisma.sql`
+      DELETE FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND "submissionId" IS NOT NULL
+        AND "submissionId" IN (
+          SELECT "id"
+          FROM ${ReviewService.SUBMISSION_TABLE}
+          WHERE "challengeId" = ${challengeId}
+        )
+        ${allowedCondition}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
+    `;
+
+    try {
+      const deleted = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
+          deletedCount: deleted,
+        },
+      });
+
+      return deleted;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async reassignPendingReviewsToResource(
     phaseId: string,
     resourceId: string,
