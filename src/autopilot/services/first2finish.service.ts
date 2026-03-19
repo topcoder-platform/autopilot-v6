@@ -287,9 +287,7 @@ export class First2FinishService {
 
     // If an AI Screening phase is actively running, wait for it to finish
     const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) =>
-        p.name === AI_SCREENING_PHASE_NAME &&
-        (p.isOpen || (!!p.actualStartDate && !p.actualEndDate)),
+      (p) => p.name === AI_SCREENING_PHASE_NAME && p.isOpen,
     );
     if (aiScreeningPending) {
       this.logger.debug(
@@ -641,9 +639,7 @@ export class First2FinishService {
 
     // If an AI Screening phase is actively running, wait for it to finish
     const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) =>
-        p.name === AI_SCREENING_PHASE_NAME &&
-        (p.isOpen || (!!p.actualStartDate && !p.actualEndDate)),
+      (p) => p.name === AI_SCREENING_PHASE_NAME && p.isOpen,
     );
     if (aiScreeningPending) {
       this.logger.debug(
@@ -1016,7 +1012,7 @@ export class First2FinishService {
         return null;
       }
 
-      if (aiScreeningPhase.isOpen || !aiScreeningPhase.actualEndDate) {
+      if (aiScreeningPhase.isOpen) {
         this.logger.debug(
           `Awaiting AI Screening phase ${aiScreeningPhase.id} closure for challenge ${challenge.id} before creating next iterative review phase.`,
         );
