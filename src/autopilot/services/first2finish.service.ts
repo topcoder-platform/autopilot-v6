@@ -288,15 +288,13 @@ export class First2FinishService {
 
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
-    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
-    const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+    // AI Screening gate: open seeded/new AI Screening phase when configured, or
+    // defer until the current AI Screening phase completes.
+    const aiScreeningDeferred = await this.handleAiScreeningGate(
+      challenge,
+      submissionId,
     );
-    if (aiScreeningPending) {
-      this.logger.debug(
-        `Awaiting AI Screening completion for challenge ${challenge.id} before processing iterative review.`,
-        { submissionId: submissionId ?? null },
-      );
+    if (aiScreeningDeferred) {
       return;
     }
 
@@ -649,15 +647,17 @@ export class First2FinishService {
       return;
     }
 
-    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
-    const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
-    );
-    if (aiScreeningPending) {
-      this.logger.debug(
-        `Awaiting AI Screening completion for challenge ${challenge.id} before preparing next iterative review.`,
-      );
-      return;
+    // If AI Screening is configured, the next iteration is triggered by a new
+    // submission event (which opens the next AI Screening phase).  Do not
+    // attempt to queue a follow-up iterative review here.
+    if (this.hasAiScreeningConfigured(challenge)) {
+      const latestAiPhase = this.getLatestAiScreeningPhase(challenge);
+      if (latestAiPhase) {
+        this.logger.debug(
+          `AI Screening is configured for challenge ${challengeId}; next iterative review will be triggered by a new submission.`,
+        );
+        return;
+      }
     }
 
     if (latestIterativePhase.isOpen) {
@@ -1004,6 +1004,180 @@ export class First2FinishService {
     }
 
     return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI Screening gate
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles the AI Screening phase gate for a First2Finish challenge.
+   *
+   * Returns `true` (caller should defer Iterative Review) when:
+   *  - AI Screening is currently open and in-progress.
+   *  - The seeded AI Screening phase was just opened.
+   *  - A new AI Screening phase was created to start the next iteration.
+   *
+   * Returns `false` when AI Screening has already completed (proceed to
+   * Iterative Review) or when AI Screening is not configured on this
+   * challenge.
+   */
+  private async handleAiScreeningGate(
+    challenge: IChallenge,
+    submissionId?: string,
+  ): Promise<boolean> {
+    if (!this.hasAiScreeningConfigured(challenge)) {
+      return false;
+    }
+
+    const latestAiPhase = this.getLatestAiScreeningPhase(challenge);
+    if (!latestAiPhase) {
+      // No AI Screening phase in the challenge timeline.
+      return false;
+    }
+
+    // Phase is currently open — wait for it to complete.
+    if (latestAiPhase.isOpen) {
+      this.logger.debug(
+        `Awaiting AI Screening completion for challenge ${challenge.id} before processing iterative review.`,
+        { submissionId: submissionId ?? null },
+      );
+      return true;
+    }
+
+    // Phase started but not yet ended (unusual, e.g. stuck state) — defer.
+    if (!latestAiPhase.actualEndDate) {
+      if (this.canReuseSeedAiScreeningPhase(latestAiPhase)) {
+        // Seeded phase (never started) — open it now.
+        const opened = await this.reopenSeedAiScreeningPhase(
+          challenge,
+          latestAiPhase,
+        );
+        if (opened) {
+          this.logger.log(
+            `Opened seeded AI Screening phase ${latestAiPhase.id} for challenge ${challenge.id}.`,
+          );
+          return true;
+        }
+        // Failed to open seeded phase — fall through and defer anyway.
+      }
+      this.logger.debug(
+        `AI Screening phase ${latestAiPhase.id} for challenge ${challenge.id} has not yet completed; deferring iterative review.`,
+        { submissionId: submissionId ?? null },
+      );
+      return true;
+    }
+
+    // Phase has completed.  Check whether we need a new AI Screening iteration
+    // (both AI Screening and the latest Iterative Review have finished).
+    const latestIterativePhase = this.getLatestIterativePhase(challenge);
+    if (latestIterativePhase?.actualEndDate) {
+      this.logger.log(
+        `Starting new AI Screening iteration for challenge ${challenge.id} after failed iterative review.`,
+      );
+      const newAiPhase = await this.createNextAiScreeningPhase(
+        challenge,
+        latestAiPhase,
+      );
+      if (newAiPhase) {
+        this.logger.log(
+          `Created and opened new AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}.`,
+        );
+        return true;
+      }
+      // Failed to create — fall through and attempt Iterative Review directly.
+    }
+
+    // AI Screening has completed and no new iteration is required.
+    return false;
+  }
+
+  private hasAiScreeningConfigured(challenge: IChallenge): boolean {
+    return (challenge.reviewers ?? []).some((reviewer) =>
+      Boolean(reviewer.aiWorkflowId),
+    );
+  }
+
+  private getLatestAiScreeningPhase(challenge: IChallenge): IPhase | null {
+    const phases = (challenge.phases ?? []).filter(
+      (p) => p.name === AI_SCREENING_PHASE_NAME,
+    );
+    if (!phases.length) {
+      return null;
+    }
+    const sorted = [...phases].sort(
+      (a, b) => this.getPhaseStartTime(a) - this.getPhaseStartTime(b),
+    );
+    return sorted.at(-1) ?? null;
+  }
+
+  private canReuseSeedAiScreeningPhase(phase: IPhase): boolean {
+    return !phase.isOpen && !phase.actualStartDate && !phase.actualEndDate;
+  }
+
+  private async reopenSeedAiScreeningPhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'START',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+
+      const refreshed = await this.challengeApiService.getPhaseDetails(
+        challenge.id,
+        phase.id,
+      );
+
+      if (!refreshed?.isOpen) {
+        this.logger.warn(
+          `Failed to reopen seeded AI Screening phase ${phase.id} for challenge ${challenge.id}.`,
+        );
+        return null;
+      }
+
+      return refreshed;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to reopen seeded AI Screening phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
+  }
+
+  private async createNextAiScreeningPhase(
+    challenge: IChallenge,
+    predecessor: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      const durationSeconds = Math.max(
+        Math.round(this.iterativeReviewDurationMs / 1000),
+        predecessor.duration || 1,
+      );
+      return await this.challengeApiService.createAiScreeningPhase(
+        challenge.id,
+        predecessor.id,
+        predecessor.phaseId,
+        predecessor.name,
+        predecessor.description,
+        durationSeconds,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to create next AI Screening phase after ${predecessor.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
   }
 
   private isDuplicateReviewPairError(error: unknown): boolean {

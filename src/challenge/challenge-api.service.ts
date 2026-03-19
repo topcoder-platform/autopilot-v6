@@ -1524,6 +1524,25 @@ export class ChallengeApiService {
     );
   }
 
+  async createAiScreeningPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    phaseTypeId: string,
+    phaseName: string,
+    phaseDescription: string | null,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    return this.createContinuationPhase(
+      'challenge.createAiScreeningPhase',
+      challengeId,
+      predecessorPhaseId,
+      phaseTypeId,
+      phaseName,
+      phaseDescription,
+      durationSeconds,
+    );
+  }
+
   async createApprovalPhase(
     challengeId: string,
     predecessorPhaseId: string,
