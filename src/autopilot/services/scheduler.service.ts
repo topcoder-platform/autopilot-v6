@@ -1066,6 +1066,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           this.aiScreeningCloseRetryAttempts.delete(
             this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId),
           );
+
+          try {
+            await this.first2FinishService.handleSubmissionByChallengeId(
+              data.challengeId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to resume First2Finish processing for challenge ${data.challengeId} after closing AI Screening phase ${data.phaseId}: ${err.message}`,
+              err.stack,
+            );
+          }
         }
 
         if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
@@ -2372,7 +2384,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           : 'unknown';
 
       const reasonMessage =
-        reason ?? `${pendingDescription} in-progress AI workflow run(s) detected`;
+        reason ??
+        `${pendingDescription} in-progress AI workflow run(s) detected`;
 
       this.logger.warn(
         `[AI SCREENING LATE] Deferred closing AI screening phase ${data.phaseId} for challenge ${data.challengeId}; ${reasonMessage}. Retrying in ${Math.round(delay / 60000)} minute(s).`,
