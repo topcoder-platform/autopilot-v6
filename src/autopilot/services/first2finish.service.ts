@@ -952,6 +952,39 @@ export class First2FinishService {
         );
       }
 
+      // Initial iteration path: timeline already has seed AI Screening -> seed Iterative Review
+      if (this.canReuseSeedIterativePhase(predecessor)) {
+        const seedAiScreeningPhase = this.resolvePhaseByIdentifier(
+          challenge,
+          predecessor.predecessor,
+        );
+
+        if (
+          seedAiScreeningPhase &&
+          seedAiScreeningPhase.name === AI_SCREENING_PHASE_NAME
+        ) {
+          if (this.canReuseSeedAiScreeningPhase(seedAiScreeningPhase)) {
+            await this.reopenSeedAiScreeningPhase(
+              challenge,
+              seedAiScreeningPhase,
+            );
+            return null;
+          }
+
+          if (
+            seedAiScreeningPhase.isOpen ||
+            !seedAiScreeningPhase.actualEndDate
+          ) {
+            this.logger.debug(
+              `Awaiting AI Screening phase ${seedAiScreeningPhase.id} closure for challenge ${challenge.id} before reopening seeded iterative review phase ${predecessor.id}.`,
+            );
+            return null;
+          }
+
+          return await this.reopenSeedIterativePhase(challenge, predecessor);
+        }
+      }
+
       let aiScreeningPhase = this.findAiScreeningSuccessor(
         challenge,
         predecessor,
@@ -1011,6 +1044,21 @@ export class First2FinishService {
       );
       return null;
     }
+  }
+
+  private resolvePhaseByIdentifier(
+    challenge: IChallenge,
+    identifier?: string | null,
+  ): IPhase | null {
+    if (!identifier) {
+      return null;
+    }
+
+    return (
+      challenge.phases?.find(
+        (phase) => phase.id === identifier || phase.phaseId === identifier,
+      ) ?? null
+    );
   }
 
   private findAiScreeningSuccessor(
