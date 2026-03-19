@@ -647,15 +647,16 @@ export class First2FinishService {
       return;
     }
 
+    // If AI Screening is configured, the next iteration is triggered by a new
+    // submission event (which opens the next AI Screening phase).  Do not
+    // attempt to queue a follow-up iterative review here.
     if (this.hasAiScreeningConfigured(challenge)) {
       const latestAiPhase = this.getLatestAiScreeningPhase(challenge);
-      if (latestAiPhase && this.canReuseSeedAiScreeningPhase(latestAiPhase)) {
-        await this.reopenSeedAiScreeningPhase(challenge, latestAiPhase);
-      } else if (
-        latestAiPhase?.actualEndDate &&
-        latestIterativePhase.actualEndDate
-      ) {
-        await this.createNextAiScreeningPhase(challenge, latestAiPhase);
+      if (latestAiPhase) {
+        this.logger.debug(
+          `AI Screening is configured for challenge ${challengeId}; next iterative review will be triggered by a new submission.`,
+        );
+        return;
       }
     }
 
@@ -1012,9 +1013,10 @@ export class First2FinishService {
   /**
    * Handles the AI Screening phase gate for a First2Finish challenge.
    *
-  * Returns `true` (caller should defer Iterative Review) when:
+   * Returns `true` (caller should defer Iterative Review) when:
    *  - AI Screening is currently open and in-progress.
    *  - The seeded AI Screening phase was just opened.
+   *  - A new AI Screening phase was created to start the next iteration.
    *
    * Returns `false` when AI Screening has already completed (proceed to
    * Iterative Review) or when AI Screening is not configured on this
@@ -1066,10 +1068,17 @@ export class First2FinishService {
       return true;
     }
 
-    // Phase has completed.  Check whether we need a new AI Screening iteration
-    // (both AI Screening and the latest Iterative Review have finished).
+    // Phase has completed. Check whether we need a new AI Screening iteration.
+    // Only do this when the latest Iterative Review also finished *after* this
+    // AI Screening phase, which indicates the full iteration completed.
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
-    if (latestIterativePhase?.actualEndDate) {
+    if (
+      latestIterativePhase?.actualEndDate &&
+      this.isIterativePhaseCompletedAfterAiPhase(
+        latestIterativePhase,
+        latestAiPhase,
+      )
+    ) {
       this.logger.log(
         `Starting new AI Screening iteration for challenge ${challenge.id} after failed iterative review.`,
       );
@@ -1078,10 +1087,22 @@ export class First2FinishService {
         latestAiPhase,
       );
       if (newAiPhase) {
-        this.logger.log(
-          `Created and opened new AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}; continuing iterative review setup in the same cycle.`,
+        const pairedIterativePhase = await this.createPairedIterativePhase(
+          challenge,
+          newAiPhase,
+          latestIterativePhase,
         );
-        return false;
+
+        if (!pairedIterativePhase) {
+          this.logger.warn(
+            `Created AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}, but failed to create paired Iterative Review phase.`,
+          );
+        }
+
+        this.logger.log(
+          `Created and opened new AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}.`,
+        );
+        return true;
       }
       // Failed to create — fall through and attempt Iterative Review directly.
     }
@@ -1172,6 +1193,53 @@ export class First2FinishService {
       const err = error as Error;
       this.logger.error(
         `Failed to create next AI Screening phase after ${predecessor.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
+  }
+
+  private isIterativePhaseCompletedAfterAiPhase(
+    iterativePhase: IPhase,
+    aiPhase: IPhase,
+  ): boolean {
+    if (!iterativePhase.actualEndDate || !aiPhase.actualEndDate) {
+      return false;
+    }
+
+    const iterativeEndedAt = new Date(iterativePhase.actualEndDate).getTime();
+    const aiEndedAt = new Date(aiPhase.actualEndDate).getTime();
+
+    if (!Number.isFinite(iterativeEndedAt) || !Number.isFinite(aiEndedAt)) {
+      return false;
+    }
+
+    return iterativeEndedAt >= aiEndedAt;
+  }
+
+  private async createPairedIterativePhase(
+    challenge: IChallenge,
+    aiPhase: IPhase,
+    iterativeTemplate: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      const durationSeconds = Math.max(
+        Math.round(this.iterativeReviewDurationMs / 1000),
+        iterativeTemplate.duration || 1,
+      );
+
+      return await this.challengeApiService.createIterativeReviewPhase(
+        challenge.id,
+        aiPhase.id,
+        iterativeTemplate.phaseId,
+        iterativeTemplate.name,
+        iterativeTemplate.description,
+        durationSeconds,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to create paired Iterative Review phase after AI Screening phase ${aiPhase.id} on challenge ${challenge.id}: ${err.message}`,
         err.stack,
       );
       return null;

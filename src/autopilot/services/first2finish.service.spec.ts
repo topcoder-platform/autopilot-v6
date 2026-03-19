@@ -15,6 +15,7 @@ import type {
 } from '../../challenge/interfaces/challenge.interface';
 import type { ChallengeCompletionService } from './challenge-completion.service';
 import {
+  AI_SCREENING_PHASE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
   REGISTRATION_PHASE_NAME,
   SUBMISSION_PHASE_NAME,
@@ -115,6 +116,7 @@ describe('First2FinishService', () => {
     challengeApiService = {
       getChallengeById: jest.fn(),
       createIterativeReviewPhase: jest.fn(),
+      createAiScreeningPhase: jest.fn(),
       getPhaseDetails: jest.fn(),
     } as unknown as jest.Mocked<ChallengeApiService>;
 
@@ -421,6 +423,114 @@ describe('First2FinishService', () => {
         challengeId: challenge.id,
         phaseId: nextPhase.id,
       }),
+    );
+  });
+
+  it('does not create another ai screening phase when latest iterative review ended before latest ai screening', async () => {
+    const iterativePhase = buildIterativePhase({
+      id: 'iterative-phase-1',
+      scheduledStartDate: '2026-01-01T00:00:00.000Z',
+      actualStartDate: '2026-01-01T00:00:00.000Z',
+      actualEndDate: '2026-01-02T00:00:00.000Z',
+      isOpen: false,
+    });
+
+    const latestAiPhase = buildIterativePhase({
+      id: 'ai-phase-2',
+      phaseId: 'ai-template',
+      name: AI_SCREENING_PHASE_NAME,
+      scheduledStartDate: '2026-01-03T00:00:00.000Z',
+      actualStartDate: '2026-01-03T00:00:00.000Z',
+      actualEndDate: '2026-01-04T00:00:00.000Z',
+      isOpen: false,
+    });
+
+    const challenge = buildChallenge({
+      phases: [iterativePhase, latestAiPhase],
+      reviewers: [buildReviewer({ aiWorkflowId: 'workflow-1' })],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    resourcesService.getReviewerResources.mockResolvedValue([]);
+
+    await service.handleSubmissionByChallengeId(challenge.id);
+
+    expect(challengeApiService.createAiScreeningPhase).not.toHaveBeenCalled();
+    expect(challengeApiService.createIterativeReviewPhase).not.toHaveBeenCalled();
+  });
+
+  it('creates a paired iterative review phase when creating a new ai screening iteration', async () => {
+    const latestIterativePhase = buildIterativePhase({
+      id: 'iterative-phase-2',
+      phaseId: 'iterative-template',
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      description: 'Iterative review',
+      scheduledStartDate: '2026-02-02T00:00:00.000Z',
+      actualStartDate: '2026-02-02T00:00:00.000Z',
+      actualEndDate: '2026-02-04T00:00:00.000Z',
+      isOpen: false,
+      duration: 7200,
+    });
+
+    const latestAiPhase = buildIterativePhase({
+      id: 'ai-phase-2',
+      phaseId: 'ai-template',
+      name: AI_SCREENING_PHASE_NAME,
+      description: 'AI screening',
+      scheduledStartDate: '2026-02-01T00:00:00.000Z',
+      actualStartDate: '2026-02-01T00:00:00.000Z',
+      actualEndDate: '2026-02-03T00:00:00.000Z',
+      isOpen: false,
+      duration: 3600,
+    });
+
+    const newAiPhase = buildIterativePhase({
+      id: 'ai-phase-3',
+      phaseId: 'ai-template',
+      name: AI_SCREENING_PHASE_NAME,
+      description: 'AI screening',
+      actualEndDate: null,
+      isOpen: true,
+      predecessor: latestAiPhase.id,
+      duration: 3600,
+    });
+
+    const newIterativePhase = buildIterativePhase({
+      id: 'iterative-phase-3',
+      predecessor: newAiPhase.id,
+      actualEndDate: null,
+      isOpen: true,
+    });
+
+    const challenge = buildChallenge({
+      phases: [latestAiPhase, latestIterativePhase],
+      reviewers: [buildReviewer({ aiWorkflowId: 'workflow-1' })],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    challengeApiService.createAiScreeningPhase.mockResolvedValue(newAiPhase);
+    challengeApiService.createIterativeReviewPhase.mockResolvedValue(
+      newIterativePhase,
+    );
+
+    await service.handleSubmissionByChallengeId(challenge.id);
+
+    expect(challengeApiService.createAiScreeningPhase).toHaveBeenCalledWith(
+      challenge.id,
+      latestAiPhase.id,
+      latestAiPhase.phaseId,
+      latestAiPhase.name,
+      latestAiPhase.description,
+      expect.any(Number),
+    );
+
+    expect(challengeApiService.createIterativeReviewPhase).toHaveBeenCalledWith(
+      challenge.id,
+      newAiPhase.id,
+      latestIterativePhase.phaseId,
+      latestIterativePhase.name,
+      latestIterativePhase.description,
+      expect.any(Number),
     );
   });
 
