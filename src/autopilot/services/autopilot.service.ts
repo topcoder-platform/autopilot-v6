@@ -757,20 +757,21 @@ export class AutopilotService {
         return;
       }
 
-      const aiScreeningPhase = challenge.phases.find(
-        (p) => p.name === AI_SCREENING_PHASE_NAME,
+      const latestAiScreeningPhase = this.getLatestPhase(
+        challenge.phases,
+        (phase) => phase.name === AI_SCREENING_PHASE_NAME,
       );
 
-      if (!aiScreeningPhase) {
+      if (!latestAiScreeningPhase) {
         this.logger.debug(
           `No AI Screening phase found for challenge ${challengeId}; ignoring AI workflow completion`,
         );
         return;
       }
 
-      if (!aiScreeningPhase.isOpen) {
+      if (!latestAiScreeningPhase.isOpen) {
         this.logger.debug(
-          `AI Screening phase ${aiScreeningPhase.id} already closed for challenge ${challengeId}; ignoring AI workflow completion event`,
+          `AI Screening phase ${latestAiScreeningPhase.id} already closed for challenge ${challengeId}; ignoring AI workflow completion event`,
         );
         return;
       }
@@ -800,20 +801,20 @@ export class AutopilotService {
 
       if (inProgressAiWorkflows > 0) {
         this.logger.debug(
-          `AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
+          `AI Screening phase ${latestAiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
         );
         return;
       }
 
       this.logger.log(
-        `All AI workflows completed for phase ${aiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
+        `All AI workflows completed for phase ${latestAiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
       );
 
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,
         challengeId: challenge.id,
-        phaseId: aiScreeningPhase.id,
-        phaseTypeName: aiScreeningPhase.name,
+        phaseId: latestAiScreeningPhase.id,
+        phaseTypeName: latestAiScreeningPhase.name,
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,

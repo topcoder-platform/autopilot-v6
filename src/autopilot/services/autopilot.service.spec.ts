@@ -11,6 +11,7 @@ import type {
 import {
   POST_MORTEM_PHASE_NAME,
   POST_MORTEM_PHASE_ALTERNATE_NAME,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import type { PhaseScheduleManager } from './phase-schedule-manager.service';
 import type { ResourceEventHandler } from './resource-event-handler.service';
@@ -119,6 +120,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getReviewById: jest.fn(),
       getActiveSubmissionCount: jest.fn(),
       getCompletedReviewCountForPhase: jest.fn(),
+      getInProgressAiWorkflowRunCount: jest.fn(),
       getScorecardPassingScore: jest.fn(),
       getPendingReviewCount: jest.fn(),
       createPendingReview: jest.fn(),
@@ -965,6 +967,124 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
           challengeId: 'challenge-1',
           phaseId: 'phase-1',
           phaseTypeName: POST_MORTEM_PHASE_ALTERNATE_NAME,
+          state: 'END',
+        }),
+      );
+    });
+  });
+
+  describe('handleAiWorkflowCompleted', () => {
+    const buildAiScreeningPhase = (
+      id: string,
+      overrides: Partial<IPhase> = {},
+    ): IPhase => ({
+      id,
+      phaseId: `template-${id}`,
+      name: AI_SCREENING_PHASE_NAME,
+      description: 'AI Screening',
+      isOpen: true,
+      duration: 3600,
+      scheduledStartDate: new Date().toISOString(),
+      scheduledEndDate: new Date(Date.now() + 3600 * 1000).toISOString(),
+      actualStartDate: new Date().toISOString(),
+      actualEndDate: null,
+      predecessor: null,
+      constraints: [],
+      ...overrides,
+    });
+
+    const buildChallenge = (phases: IPhase[]): IChallenge => ({
+      id: 'challenge-ai',
+      name: 'AI Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 101,
+      typeId: 'type-ai',
+      trackId: 'track-ai',
+      timelineTemplateId: 'timeline-ai',
+      currentPhaseNames: phases.filter((phase) => phase.isOpen).map((phase) => phase.name),
+      tags: [],
+      groups: [],
+      submissionStartDate: new Date().toISOString(),
+      submissionEndDate: new Date().toISOString(),
+      registrationStartDate: new Date().toISOString(),
+      registrationEndDate: new Date().toISOString(),
+      startDate: new Date().toISOString(),
+      endDate: null,
+      legacyId: null,
+      status: 'ACTIVE',
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: {},
+      phases,
+      reviewers: [
+        {
+          id: 'reviewer-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: phases[0]?.phaseId ?? 'template-ai-screening',
+          fixedAmount: 0,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          shouldOpenOpportunity: false,
+          aiWorkflowId: 'workflow-1',
+        },
+      ],
+      winners: [],
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      track: 'DEVELOP',
+      type: 'Standard',
+      legacy: {},
+      task: {},
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      overview: {},
+      numOfSubmissions: 0,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 0,
+    });
+
+    it('closes the latest AI Screening phase when earlier iterations already exist', async () => {
+      const olderPhase = buildAiScreeningPhase('phase-ai-1', {
+        isOpen: false,
+        scheduledStartDate: '2026-03-19T08:00:00.000Z',
+        scheduledEndDate: '2026-03-19T09:00:00.000Z',
+        actualStartDate: '2026-03-19T08:00:00.000Z',
+        actualEndDate: '2026-03-19T09:00:00.000Z',
+      });
+      const latestPhase = buildAiScreeningPhase('phase-ai-2', {
+        scheduledStartDate: '2026-03-19T10:00:00.000Z',
+        scheduledEndDate: '2026-03-19T11:00:00.000Z',
+        actualStartDate: '2026-03-19T10:00:00.000Z',
+      });
+
+      challengeApiService.getChallengeById.mockResolvedValueOnce(
+        buildChallenge([olderPhase, latestPhase]),
+      );
+      reviewService.getInProgressAiWorkflowRunCount.mockResolvedValueOnce(0);
+
+      await autopilotService.handleAiWorkflowCompleted({
+        challengeId: 'challenge-ai',
+        submissionId: 'submission-ai',
+        aiWorkflowRunId: 'run-1',
+        aiWorkflowId: 'workflow-1',
+        status: 'COMPLETED',
+        score: 95,
+        completedAt: '2026-03-19T10:30:00.000Z',
+      });
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-ai',
+          phaseId: 'phase-ai-2',
+          phaseTypeName: AI_SCREENING_PHASE_NAME,
           state: 'END',
         }),
       );
