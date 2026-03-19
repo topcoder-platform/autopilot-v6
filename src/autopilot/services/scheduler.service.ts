@@ -738,6 +738,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               return;
             }
           }
+
+          const pendingEscalationRequests =
+            await this.reviewService.getPendingAiDecisionsEscalationsCount(
+              data.challengeId,
+            );
+
+          if (pendingEscalationRequests > 0) {
+            await this.deferReviewPhaseClosure(
+              data,
+              pendingEscalationRequests,
+              `${pendingEscalationRequests} pending escalation request(s) detected`,
+            );
+            return;
+          }
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -1116,6 +1130,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           this.aiScreeningCloseRetryAttempts.delete(
             this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId),
           );
+
+          try {
+            await this.first2FinishService.handleSubmissionByChallengeId(
+              data.challengeId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to resume First2Finish processing for challenge ${data.challengeId} after closing AI Screening phase ${data.phaseId}: ${err.message}`,
+              err.stack,
+            );
+          }
         }
 
         if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {

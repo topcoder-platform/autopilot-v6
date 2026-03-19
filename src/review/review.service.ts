@@ -100,6 +100,8 @@ export class ReviewService {
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
   private static readonly AI_REVIEW_CONFIG_TABLE = Prisma.sql`"aiReviewConfig"`;
   private static readonly AI_REVIEW_DECISION_TABLE = Prisma.sql`"aiReviewDecision"`;
+  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE =
+    Prisma.sql`"aiReviewDecisionEscalation"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -1536,6 +1538,78 @@ export class ReviewService {
     }
   }
 
+  async deleteStalePendingSubmissionReviews(
+    phaseId: string,
+    challengeId: string,
+    allowedSubmissionIds: string[],
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+
+    if (!trimmedPhaseId || !challengeId) {
+      return 0;
+    }
+
+    const normalizedSubmissionIds = Array.from(
+      new Set(
+        (allowedSubmissionIds ?? [])
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter((id) => id.length > 0),
+      ),
+    );
+
+    const allowedCondition = normalizedSubmissionIds.length
+      ? Prisma.sql`AND "submissionId" NOT IN (
+          ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
+        )`
+      : Prisma.sql``;
+
+    const query = Prisma.sql`
+      DELETE FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND "submissionId" IS NOT NULL
+        AND "submissionId" IN (
+          SELECT "id"
+          FROM ${ReviewService.SUBMISSION_TABLE}
+          WHERE "challengeId" = ${challengeId}
+        )
+        ${allowedCondition}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
+    `;
+
+    try {
+      const deleted = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
+          deletedCount: deleted,
+        },
+      });
+
+      return deleted;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async reassignPendingReviewsToResource(
     phaseId: string,
     resourceId: string,
@@ -2245,6 +2319,55 @@ export class ReviewService {
           error: err.message,
         },
       });
+      throw err;
+    }
+  }
+
+  async getPendingAiDecisionsEscalationsCount(
+    challengeId: string,
+  ): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_REVIEW_DECISION_ESCALATION_TABLE} aides
+      INNER JOIN ${ReviewService.AI_REVIEW_DECISION_TABLE} aid
+        ON aid."id" = aides."aiReviewDecisionId"
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = aid."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND aides."status" = 'PENDING_APPROVAL'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction(
+        'review.getPendingAiDecisionsEscalationsCount',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            pendingAiDecisionsEscalations: count,
+          },
+        },
+      );
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'review.getPendingAiDecisionsEscalationsCount',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            error: err.message,
+          },
+        },
+      );
       throw err;
     }
   }
