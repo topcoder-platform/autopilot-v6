@@ -647,16 +647,15 @@ export class First2FinishService {
       return;
     }
 
-    // If AI Screening is configured, the next iteration is triggered by a new
-    // submission event (which opens the next AI Screening phase).  Do not
-    // attempt to queue a follow-up iterative review here.
     if (this.hasAiScreeningConfigured(challenge)) {
       const latestAiPhase = this.getLatestAiScreeningPhase(challenge);
-      if (latestAiPhase) {
-        this.logger.debug(
-          `AI Screening is configured for challenge ${challengeId}; next iterative review will be triggered by a new submission.`,
-        );
-        return;
+      if (latestAiPhase && this.canReuseSeedAiScreeningPhase(latestAiPhase)) {
+        await this.reopenSeedAiScreeningPhase(challenge, latestAiPhase);
+      } else if (
+        latestAiPhase?.actualEndDate &&
+        latestIterativePhase.actualEndDate
+      ) {
+        await this.createNextAiScreeningPhase(challenge, latestAiPhase);
       }
     }
 
@@ -1013,10 +1012,9 @@ export class First2FinishService {
   /**
    * Handles the AI Screening phase gate for a First2Finish challenge.
    *
-   * Returns `true` (caller should defer Iterative Review) when:
+  * Returns `true` (caller should defer Iterative Review) when:
    *  - AI Screening is currently open and in-progress.
    *  - The seeded AI Screening phase was just opened.
-   *  - A new AI Screening phase was created to start the next iteration.
    *
    * Returns `false` when AI Screening has already completed (proceed to
    * Iterative Review) or when AI Screening is not configured on this
@@ -1081,9 +1079,9 @@ export class First2FinishService {
       );
       if (newAiPhase) {
         this.logger.log(
-          `Created and opened new AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}.`,
+          `Created and opened new AI Screening phase ${newAiPhase.id} for challenge ${challenge.id}; continuing iterative review setup in the same cycle.`,
         );
-        return true;
+        return false;
       }
       // Failed to create — fall through and attempt Iterative Review directly.
     }
