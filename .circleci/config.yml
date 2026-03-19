@@ -67,6 +67,7 @@ workflows:
               - develop
               - reviews
               - PM-3926_ai-screening-phase
+              - PM-3926_ai-screening-phase_f2f
             
     # Production builds are exectuted only on tagged commits to the
     # master branch.

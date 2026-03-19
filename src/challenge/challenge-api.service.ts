@@ -14,6 +14,7 @@ import {
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
+  AI_SCREENING_PHASE_NAME,
   POST_MORTEM_PHASE_NAMES,
   isPostMortemPhaseName,
 } from '../autopilot/constants/review.constants';
@@ -1539,6 +1540,32 @@ export class ChallengeApiService {
       phaseTypeId,
       phaseName,
       phaseDescription,
+      durationSeconds,
+    );
+  }
+
+  async createAiScreeningPhase(
+    challengeId: string,
+    predecessorPhaseId: string,
+    durationSeconds: number,
+  ): Promise<IPhase> {
+    const aiScreeningPhaseType = await this.prisma.phase.findFirst({
+      where: { name: AI_SCREENING_PHASE_NAME },
+    });
+
+    if (!aiScreeningPhaseType) {
+      throw new NotFoundException(
+        `Phase type "${AI_SCREENING_PHASE_NAME}" is not configured in the system.`,
+      );
+    }
+
+    return this.createContinuationPhase(
+      'challenge.createAiScreeningPhase',
+      challengeId,
+      predecessorPhaseId,
+      aiScreeningPhaseType.id,
+      aiScreeningPhaseType.name,
+      aiScreeningPhaseType.description ?? null,
       durationSeconds,
     );
   }

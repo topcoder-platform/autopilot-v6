@@ -17,14 +17,11 @@ import {
   AI_SCREENING_PHASE_NAME,
   PHASE_ROLE_MAP,
   REGISTRATION_PHASE_NAME,
-  SUBMISSION_PHASE_NAME,
-  TOPGEAR_SUBMISSION_PHASE_NAME,
   isSubmissionPhaseName,
 } from '../constants/review.constants';
 import {
   describeChallengeType,
   isFirst2FinishChallenge as isSupportedChallengeType,
-  isTopgearTaskChallenge,
 } from '../constants/challenge.constants';
 import { isActiveStatus } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
@@ -288,9 +285,11 @@ export class First2FinishService {
 
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
-    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
+    // If an AI Screening phase is actively running, wait for it to finish
     const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+      (p) =>
+        p.name === AI_SCREENING_PHASE_NAME &&
+        (p.isOpen || (!!p.actualStartDate && !p.actualEndDate)),
     );
     if (aiScreeningPending) {
       this.logger.debug(
@@ -421,19 +420,10 @@ export class First2FinishService {
         }
       }
 
-      if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
-        activePhase = await this.reopenSeedIterativePhase(
-          challenge,
-          latestIterativePhase,
-        );
-      }
-
-      if (!activePhase) {
-        activePhase = await this.createNextIterativePhase(
-          challenge,
-          latestIterativePhase,
-        );
-      }
+      activePhase = await this.createNextIterativePhase(
+        challenge,
+        latestIterativePhase,
+      );
 
       if (!activePhase) {
         return;
@@ -649,9 +639,11 @@ export class First2FinishService {
       return;
     }
 
-    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
+    // If an AI Screening phase is actively running, wait for it to finish
     const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+      (p) =>
+        p.name === AI_SCREENING_PHASE_NAME &&
+        (p.isOpen || (!!p.actualStartDate && !p.actualEndDate)),
     );
     if (aiScreeningPending) {
       this.logger.debug(
@@ -721,19 +713,10 @@ export class First2FinishService {
 
     let nextPhase: IPhase | null = null;
 
-    if (this.canReuseSeedIterativePhase(latestIterativePhase)) {
-      nextPhase = await this.reopenSeedIterativePhase(
-        challenge,
-        latestIterativePhase,
-      );
-    }
-
-    if (!nextPhase) {
-      nextPhase = await this.createNextIterativePhase(
-        challenge,
-        latestIterativePhase,
-      );
-    }
+    nextPhase = await this.createNextIterativePhase(
+      challenge,
+      latestIterativePhase,
+    );
 
     if (!nextPhase) {
       return;
@@ -819,6 +802,15 @@ export class First2FinishService {
     return !phase.isOpen && !phase.actualStartDate && !phase.actualEndDate;
   }
 
+  private canReuseSeedAiScreeningPhase(phase: IPhase): boolean {
+    return (
+      phase.name === AI_SCREENING_PHASE_NAME &&
+      !phase.isOpen &&
+      !phase.actualStartDate &&
+      !phase.actualEndDate
+    );
+  }
+
   private async reopenSeedIterativePhase(
     challenge: IChallenge,
     phase: IPhase,
@@ -861,6 +853,48 @@ export class First2FinishService {
     }
   }
 
+  private async reopenSeedAiScreeningPhase(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<IPhase | null> {
+    try {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: phase.id,
+        phaseTypeName: phase.name,
+        state: 'START',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+
+      const refreshed = await this.challengeApiService.getPhaseDetails(
+        challenge.id,
+        phase.id,
+      );
+
+      if (!refreshed?.isOpen) {
+        this.logger.warn(
+          `Failed to reopen seeded AI Screening phase ${phase.id} for challenge ${challenge.id}; proceeding to create a new phase.`,
+        );
+        return null;
+      }
+
+      this.logger.log(
+        `Reopened seeded AI Screening phase ${phase.id} for challenge ${challenge.id}.`,
+      );
+
+      return refreshed;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to reopen seeded AI Screening phase ${phase.id} on challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return null;
+    }
+  }
+
   private getPhaseStartTime(phase: IPhase): number {
     const reference = phase.actualStartDate ?? phase.scheduledStartDate;
     return new Date(reference).getTime();
@@ -894,6 +928,68 @@ export class First2FinishService {
     predecessor: IPhase,
   ): Promise<IPhase | null> {
     try {
+      const aiScreeningConfigured = (challenge.phases ?? []).some(
+        (phase) => phase.name === AI_SCREENING_PHASE_NAME,
+      );
+
+      if (!aiScreeningConfigured) {
+        if (this.canReuseSeedIterativePhase(predecessor)) {
+          return await this.reopenSeedIterativePhase(challenge, predecessor);
+        }
+
+        const durationSeconds = Math.max(
+          Math.round(this.iterativeReviewDurationMs / 1000),
+          predecessor.duration || 1,
+        );
+
+        return await this.challengeApiService.createIterativeReviewPhase(
+          challenge.id,
+          predecessor.id,
+          predecessor.phaseId,
+          predecessor.name,
+          predecessor.description,
+          durationSeconds,
+        );
+      }
+
+      let aiScreeningPhase = this.findAiScreeningSuccessor(
+        challenge,
+        predecessor,
+      );
+
+      if (
+        aiScreeningPhase &&
+        this.canReuseSeedAiScreeningPhase(aiScreeningPhase)
+      ) {
+        await this.reopenSeedAiScreeningPhase(challenge, aiScreeningPhase);
+        return null;
+      }
+
+      if (!aiScreeningPhase) {
+        const aiScreeningDurationSeconds =
+          this.resolveAiScreeningDurationSeconds(challenge);
+
+        aiScreeningPhase =
+          await this.challengeApiService.createAiScreeningPhase(
+            challenge.id,
+            predecessor.id,
+            aiScreeningDurationSeconds,
+          );
+
+        this.logger.debug(
+          `Started AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id}; awaiting completion before opening next iterative review phase.`,
+        );
+
+        return null;
+      }
+
+      if (aiScreeningPhase.isOpen || !aiScreeningPhase.actualEndDate) {
+        this.logger.debug(
+          `Awaiting AI Screening phase ${aiScreeningPhase.id} closure for challenge ${challenge.id} before creating next iterative review phase.`,
+        );
+        return null;
+      }
+
       const durationSeconds = Math.max(
         Math.round(this.iterativeReviewDurationMs / 1000),
         predecessor.duration || 1,
@@ -901,7 +997,7 @@ export class First2FinishService {
 
       return await this.challengeApiService.createIterativeReviewPhase(
         challenge.id,
-        predecessor.id,
+        aiScreeningPhase.id,
         predecessor.phaseId,
         predecessor.name,
         predecessor.description,
@@ -915,6 +1011,31 @@ export class First2FinishService {
       );
       return null;
     }
+  }
+
+  private findAiScreeningSuccessor(
+    challenge: IChallenge,
+    predecessor: IPhase,
+  ): IPhase | null {
+    const aiScreeningPhases = (challenge.phases ?? [])
+      .filter(
+        (phase) =>
+          phase.name === AI_SCREENING_PHASE_NAME &&
+          (phase.predecessor === predecessor.id ||
+            phase.predecessor === predecessor.phaseId),
+      )
+      .sort((a, b) => this.getPhaseStartTime(a) - this.getPhaseStartTime(b));
+
+    return aiScreeningPhases.at(-1) ?? null;
+  }
+
+  private resolveAiScreeningDurationSeconds(challenge: IChallenge): number {
+    const latestAiScreeningPhase = (challenge.phases ?? [])
+      .filter((phase) => phase.name === AI_SCREENING_PHASE_NAME)
+      .sort((a, b) => this.getPhaseStartTime(a) - this.getPhaseStartTime(b))
+      .at(-1);
+
+    return Math.max(latestAiScreeningPhase?.duration || 1, 1);
   }
 
   private async scheduleIterativeReviewClosure(
