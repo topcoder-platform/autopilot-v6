@@ -1401,9 +1401,25 @@ export class ChallengeApiService {
     phaseName: string,
     phaseDescription: string | null,
     durationSeconds: number,
+    options?: {
+      scheduledStartDate?: Date;
+      openImmediately?: boolean;
+    },
   ): Promise<IPhase> {
+    const openImmediately = options?.openImmediately ?? true;
     const now = new Date();
-    const scheduledEnd = new Date(now.getTime() + durationSeconds * 1000);
+    const requestedStart = options?.scheduledStartDate;
+    const normalizedStart =
+      requestedStart && Number.isFinite(requestedStart.getTime())
+        ? requestedStart
+        : now;
+    const scheduledStart =
+      !openImmediately && normalizedStart.getTime() < now.getTime()
+        ? now
+        : normalizedStart;
+    const scheduledEnd = new Date(
+      scheduledStart.getTime() + Math.max(durationSeconds, 1) * 1000,
+    );
 
     try {
       const { newPhaseId } = await this.prisma.$transaction(async (tx) => {
@@ -1436,25 +1452,27 @@ export class ChallengeApiService {
             description: phaseDescription,
             predecessor: predecessorPhase.id,
             duration: Math.max(durationSeconds, 1),
-            scheduledStartDate: now,
+            scheduledStartDate: scheduledStart,
             scheduledEndDate: scheduledEnd,
-            actualStartDate: now,
+            actualStartDate: openImmediately ? scheduledStart : null,
             actualEndDate: null,
-            isOpen: true,
+            isOpen: openImmediately,
             createdBy: 'Autopilot',
             updatedBy: 'Autopilot',
           },
         });
 
-        const phaseNames = new Set(challenge.currentPhaseNames ?? []);
-        phaseNames.add(phaseName);
+        if (openImmediately) {
+          const phaseNames = new Set(challenge.currentPhaseNames ?? []);
+          phaseNames.add(phaseName);
 
-        await tx.challenge.update({
-          where: { id: challengeId },
-          data: {
-            currentPhaseNames: Array.from(phaseNames),
-          },
-        });
+          await tx.challenge.update({
+            where: { id: challengeId },
+            data: {
+              currentPhaseNames: Array.from(phaseNames),
+            },
+          });
+        }
 
         return { newPhaseId: created.id };
       });
@@ -1512,6 +1530,10 @@ export class ChallengeApiService {
     phaseName: string,
     phaseDescription: string | null,
     durationSeconds: number,
+    options?: {
+      scheduledStartDate?: Date;
+      openImmediately?: boolean;
+    },
   ): Promise<IPhase> {
     return this.createContinuationPhase(
       'challenge.createIterativeReviewPhase',
@@ -1521,6 +1543,7 @@ export class ChallengeApiService {
       phaseName,
       phaseDescription,
       durationSeconds,
+      options,
     );
   }
 
