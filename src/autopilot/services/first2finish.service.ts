@@ -1021,6 +1021,12 @@ export class First2FinishService {
    * Returns `false` when AI Screening has already completed (proceed to
    * Iterative Review) or when AI Screening is not configured on this
    * challenge.
+   *
+   * A new AI Screening iteration (and paired Iterative Review phase) is only
+   * started when this run is tied to a submission (`submissionId` set). The
+   * scheduler resumes processing without a submission after AI Screening
+   * closes; that path must not treat the paired iterative phase as “cycle
+   * complete” and spawn another AI+IR pair.
    */
   private async handleAiScreeningGate(
     challenge: IChallenge,
@@ -1070,9 +1076,13 @@ export class First2FinishService {
 
     // Phase has completed. Check whether we need a new AI Screening iteration.
     // Only do this when the latest Iterative Review also finished *after* this
-    // AI Screening phase, which indicates the full iteration completed.
+    // AI Screening phase, which indicates the full iteration completed — and
+    // only on a submission-driven invocation (see JSDoc).
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
+    const submissionDriven =
+      typeof submissionId === 'string' && submissionId.trim().length > 0;
     if (
+      submissionDriven &&
       latestIterativePhase?.actualEndDate &&
       this.isIterativePhaseCompletedAfterAiPhase(
         latestIterativePhase,
