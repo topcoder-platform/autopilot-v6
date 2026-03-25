@@ -52,6 +52,9 @@ type ReviewServiceMock = {
     ReviewService['getMarathonMatchReviewReadiness']
   >;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
+  getPendingAiDecisionsEscalationsCount: MockedMethod<
+    ReviewService['getPendingAiDecisionsEscalationsCount']
+  >;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
   getActiveContestSubmissionIds: MockedMethod<
     ReviewService['getActiveContestSubmissionIds']
@@ -195,6 +198,10 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getMarathonMatchReviewReadiness']>(),
       getPendingAppealCount:
         createMockMethod<ReviewService['getPendingAppealCount']>(),
+      getPendingAiDecisionsEscalationsCount:
+        createMockMethod<
+          ReviewService['getPendingAiDecisionsEscalationsCount']
+        >(),
       getTotalAppealCount:
         createMockMethod<ReviewService['getTotalAppealCount']>(),
       getActiveContestSubmissionIds:
@@ -210,6 +217,7 @@ describe('SchedulerService (review phase deferral)', () => {
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(0);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
     reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
       expectedSubmissionCount: 0,
@@ -294,6 +302,38 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(
       new Date(rescheduledPayload.date as string).getTime(),
     ).toBeGreaterThan(Date.now());
+  });
+
+  it('defers closing review phases when pending escalation requests exist', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(3);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+      payload.phaseId,
+      payload.challengeId,
+    );
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
   it('defers closing review phases when no reviewers are defined', async () => {
@@ -596,6 +636,11 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,

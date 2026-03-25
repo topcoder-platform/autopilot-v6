@@ -16,6 +16,7 @@ import {
   isPostMortemPhaseName,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
@@ -482,6 +483,18 @@ export class PhaseReviewService {
         new Set(filteredSubmissions.map((submission) => submission.id)),
       );
     }
+
+    if (
+      submissionIds.length &&
+      this.challengeHasAiScreeningPhase(challenge) &&
+      (isReviewPhase || phase.name.toLowerCase().includes('screening'))
+    ) {
+      submissionIds = await this.excludeAiFailedReviewSubmissions(
+        challengeId,
+        submissionIds,
+      );
+    }
+
     if (
       submissionIds.length &&
       (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
@@ -492,10 +505,24 @@ export class PhaseReviewService {
       );
     }
 
-    if (submissionIds.length && isReviewPhase) {
-      submissionIds = await this.excludeAiFailedReviewSubmissions(
-        challengeId,
-        submissionIds,
+    try {
+      const deletedStaleReviews =
+        await this.reviewService.deleteStalePendingSubmissionReviews(
+          phase.id,
+          challengeId,
+          submissionIds,
+        );
+
+      if (deletedStaleReviews > 0) {
+        this.logger.log(
+          `Deleted ${deletedStaleReviews} stale pending review assignment(s) for challenge ${challengeId}, phase ${phase.id}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to delete stale pending reviews for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+        err.stack,
       );
     }
 
@@ -584,6 +611,12 @@ export class PhaseReviewService {
       source: PhaseReviewService.name,
       details,
     });
+  }
+
+  private challengeHasAiScreeningPhase(challenge: IChallenge): boolean {
+    return (challenge.phases ?? []).some(
+      (phase) => phase.name === AI_SCREENING_PHASE_NAME,
+    );
   }
 
   private async excludeFailedScreeningSubmissions(
