@@ -56,6 +56,11 @@ Open the `.env` file and configure the variables for your environment. It is cru
   # -------------------------------------
   CHALLENGE_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
 
+  # -------------------------------------
+  # Review Database Configuration
+  # -------------------------------------
+  REVIEW_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
+
    # -------------------------------------
    # Auth0 Configuration
    # -------------------------------------
@@ -153,6 +158,16 @@ npm run start:dev
 # Lint
 $ npm run lint
 
+```
+
+- **Backfill review challenge results**:
+
+```bash
+# Preview derived rows without writing them
+pnpm backfill:challenge-results --dry-run --limit 10
+
+# Backfill specific completed challenges
+pnpm backfill:challenge-results --challengeId <challenge-id>[,<challenge-id>]
 ```
 
 ## API Endpoints

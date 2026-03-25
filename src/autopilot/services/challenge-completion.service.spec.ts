@@ -41,6 +41,9 @@ describe('ChallengeCompletionService', () => {
     generateReviewSummaries: jest.MockedFunction<
       ReviewService['generateReviewSummaries']
     >;
+    syncChallengeResultsForChallenge: jest.MockedFunction<
+      ReviewService['syncChallengeResultsForChallenge']
+    >;
     getScorecardIdByName: jest.MockedFunction<
       ReviewService['getScorecardIdByName']
     >;
@@ -327,6 +330,11 @@ describe('ChallengeCompletionService', () => {
 
     reviewService = {
       generateReviewSummaries: jest.fn().mockResolvedValue(summaries),
+      syncChallengeResultsForChallenge: jest.fn().mockResolvedValue({
+        rowsBuilt: 0,
+        rowsUpserted: 0,
+        staleRowsDeleted: 0,
+      }),
       getScorecardIdByName: jest.fn().mockResolvedValue(null),
       createPendingReview: jest.fn().mockResolvedValue(true),
       getTopCheckpointReviewScores: jest.fn().mockResolvedValue([]),
@@ -425,6 +433,16 @@ describe('ChallengeCompletionService', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ratedChallenge: true,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+        ],
+      }),
+    );
     expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(1);
     expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
       'user101',
@@ -462,6 +480,17 @@ describe('ChallengeCompletionService', () => {
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
+    );
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ratedChallenge: false,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+          expect.objectContaining({ userId: 102, placement: 2 }),
+        ],
+      }),
     );
     const produceCall = kafkaService.produce.mock.calls[0];
     expect(produceCall[0]).toBe(KAFKA_TOPICS.CHALLENGE_UPDATED);
@@ -705,6 +734,16 @@ describe('ChallengeCompletionService', () => {
     });
     await Promise.resolve();
 
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ratedChallenge: true,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+        ],
+      }),
+    );
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );

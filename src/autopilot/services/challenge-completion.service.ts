@@ -19,6 +19,10 @@ import { AutopilotOperator } from '../interfaces/autopilot.interface';
 import { MarathonMatchApiService } from '../../marathon-match/marathon-match-api.service';
 import { MemberApiService } from '../../member-api/member-api.service';
 import { isMarathonMatchChallenge } from '../constants/challenge.constants';
+import {
+  challengeAllowsUnlimitedSubmissions,
+  isRatedChallenge,
+} from '../utils/challenge-metadata.utils';
 
 /**
  * Completes challenges, derives winners, and coordinates downstream finance and
@@ -43,75 +47,6 @@ export class ChallengeCompletionService {
     private readonly kafkaService: KafkaService,
     private readonly marathonMatchApiService: MarathonMatchApiService,
   ) {}
-
-  /**
-   * Determines whether a completed challenge should trigger member rerating.
-   * @param challenge Completed challenge snapshot from the Challenge API.
-   * @returns `true` only when challenge metadata explicitly marks the challenge as rated.
-   * @throws Never. Missing or conflicting metadata defaults to unrated behavior.
-   *
-   * Precedence:
-   * `unrated=true` always disables rerates. Otherwise `rated` wins over `isRated`,
-   * `unrated=false` is treated as rated when no stronger flag is present, and
-   * missing metadata defaults to unrated so autopilot does not send speculative rerates.
-   */
-  private isRatedChallenge(challenge: IChallenge): boolean {
-    const metadata = (challenge.metadata ?? {}) as Record<string, unknown>;
-    const unrated = this.parseMetadataBoolean(metadata['unrated']);
-    if (unrated === true) {
-      return false;
-    }
-
-    const rated = this.parseMetadataBoolean(metadata['rated']);
-    if (rated !== null) {
-      return rated;
-    }
-
-    const isRated = this.parseMetadataBoolean(metadata['isRated']);
-    if (isRated !== null) {
-      return isRated;
-    }
-
-    if (unrated === false) {
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Parses loosely-typed metadata flags into booleans.
-   * @param value Metadata value to normalize.
-   * @returns Parsed boolean or `null` when the value is not a recognizable boolean.
-   * @throws Never.
-   */
-  private parseMetadataBoolean(value: unknown): boolean | null {
-    if (typeof value === 'boolean') {
-      return value;
-    }
-
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (['true', 'yes', '1'].includes(normalized)) {
-        return true;
-      }
-      if (['false', 'no', '0'].includes(normalized)) {
-        return false;
-      }
-      return null;
-    }
-
-    if (typeof value === 'number') {
-      if (value === 1) {
-        return true;
-      }
-      if (value === 0) {
-        return false;
-      }
-    }
-
-    return null;
-  }
 
   /**
    * Resolves the member-api rerate track/type payload from the challenge names.
@@ -232,7 +167,7 @@ export class ChallengeCompletionService {
         challengeSnapshot ??
         (await this.challengeApiService.getChallengeById(challengeId));
 
-      if (!this.isRatedChallenge(challenge)) {
+      if (!isRatedChallenge(challenge)) {
         return;
       }
 
@@ -256,6 +191,71 @@ export class ChallengeCompletionService {
         err.stack,
       );
     }
+  }
+
+  /**
+   * Synchronize review-api `challengeResult` rows for one completed challenge.
+   * @param challengeId Completed challenge identifier.
+   * @param challenge Challenge snapshot supplying metadata and timing context.
+   * @param placementWinners Placement winners used to preserve prize placements in the result rows.
+   * @returns Promise that resolves after the sync attempt finishes.
+   * @throws Never. Failures are logged and swallowed so challenge completion remains idempotent.
+   */
+  private async syncChallengeResults(
+    challengeId: string,
+    challenge: IChallenge,
+    placementWinners: IChallengeWinner[],
+  ): Promise<void> {
+    try {
+      const createdAt = this.resolveChallengeResultCreatedAt(challenge);
+      await this.reviewService.syncChallengeResultsForChallenge(challengeId, {
+        placementWinners: placementWinners.map((winner) => ({
+          userId: winner.userId,
+          placement: winner.placement,
+        })),
+        allowUnlimitedSubmissions: challengeAllowsUnlimitedSubmissions(
+          challenge,
+          (message) => this.logger.warn(message),
+        ),
+        ratedChallenge: isRatedChallenge(challenge),
+        actor: 'autopilot',
+        createdAt,
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to sync challenge results for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  /**
+   * Resolve the canonical creation timestamp for persisted `challengeResult` rows.
+   * @param challenge Challenge snapshot whose lifecycle timestamps should be inspected.
+   * @returns Best-effort completion timestamp, falling back to the current time.
+   * @throws Never.
+   */
+  private resolveChallengeResultCreatedAt(challenge: IChallenge): Date {
+    const candidateValues = [
+      challenge.endDate,
+      challenge.updated,
+      challenge.created,
+    ];
+
+    for (const candidateValue of candidateValues) {
+      if (!candidateValue) {
+        continue;
+      }
+
+      const parsed = new Date(candidateValue);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+
+    return new Date();
   }
 
   private async ensureCancelledPostMortem(challengeId: string): Promise<void> {
@@ -609,6 +609,16 @@ export class ChallengeCompletionService {
         void this.financeApiService.generateChallengePayments(challengeId);
       }
       if (normalizedStatus === ChallengeStatusEnum.COMPLETED) {
+        const placementWinners = (challenge.winners ?? []).filter(
+          (winner) =>
+            winner.type === undefined ||
+            winner.type === PrizeSetTypeEnum.PLACEMENT,
+        );
+        void this.syncChallengeResults(
+          challengeId,
+          challenge,
+          placementWinners,
+        );
         void this.triggerStatsRefreshForWinners(
           challengeId,
           challenge.winners ?? [],
@@ -736,6 +746,7 @@ export class ChallengeCompletionService {
     const winners = [...placementWinners, ...passedReviewWinners];
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
+    await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
     // Trigger member stats refresh and rerating for winning members.
@@ -761,11 +772,22 @@ export class ChallengeCompletionService {
     context?: { reason?: string },
   ): Promise<void> {
     await this.challengeApiService.completeChallenge(challengeId, winners);
+    const challenge =
+      await this.challengeApiService.getChallengeById(challengeId);
+    const placementWinners = winners.filter(
+      (winner) =>
+        winner.type === undefined || winner.type === PrizeSetTypeEnum.PLACEMENT,
+    );
+    await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
     // Trigger member stats refresh and rerating for winning members.
-    void this.triggerStatsRefreshForWinners(challengeId, winners);
-    await this.publishChallengeCompletionUpdate(challengeId, winners);
+    void this.triggerStatsRefreshForWinners(challengeId, winners, challenge);
+    await this.publishChallengeCompletionUpdate(
+      challengeId,
+      winners,
+      challenge,
+    );
     const suffix = context?.reason ? ` (${context.reason})` : '';
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s)${suffix}.`,

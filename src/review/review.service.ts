@@ -3,6 +3,13 @@ import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { ReviewPrismaService } from './review-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
+import {
+  buildChallengeResultRecords,
+  isValidChallengeResultStatus,
+  type ChallengeResultCandidate,
+  type ChallengeResultPlacementWinner,
+  type ChallengeResultRecord,
+} from './challenge-result.utils';
 
 interface SubmissionRecord {
   id: string;
@@ -64,6 +71,22 @@ interface ReviewAggregationRow {
   scorecardType: string | null;
 }
 
+interface ChallengeResultAggregationRow {
+  submissionId: string;
+  memberId: string | null;
+  submittedDate: Date | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  status: string | null;
+  isLatest: boolean;
+  initialScore: number | string | null;
+  finalScore: number | string | null;
+  scorecardId: string | null;
+  minimumPassingScore: number | string | null;
+  reviewTypeName: string | null;
+  scorecardType: string | null;
+}
+
 interface ReviewSummationSummaryRecord {
   submissionId: string;
   legacySubmissionId: string | null;
@@ -108,6 +131,7 @@ export class ReviewService {
   private static readonly REVIEW_ITEM_COMMENT_TABLE = Prisma.sql`"reviewItemComment"`;
   private static readonly REVIEW_ITEM_TABLE = Prisma.sql`"reviewItem"`;
   private static readonly AI_WORKFLOW_RUN_TABLE = Prisma.sql`"aiWorkflowRun"`;
+  private static readonly CHALLENGE_RESULT_TABLE = Prisma.sql`"challengeResult"`;
   private static readonly FINAL_REVIEW_TYPE_NAMES = new Set<string>([
     'REVIEW',
     'REGULAR REVIEW',
@@ -2058,6 +2082,403 @@ export class ReviewService {
     await this.replaceReviewSummations(challengeId, summaries);
 
     return summaries;
+  }
+
+  /**
+   * Load contest submissions plus aggregated review data so completion can
+   * derive one canonical `challengeResult` row per member.
+   * @param challengeId Challenge whose contest submissions should be aggregated.
+   * @returns Per-submission candidates including latest flags and review scores.
+   * @throws Error when the review DB query fails.
+   */
+  private async getChallengeResultCandidates(
+    challengeId: string,
+  ): Promise<ChallengeResultCandidate[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const rows = await this.prisma.$queryRaw<ChallengeResultAggregationRow[]>(
+      Prisma.sql`
+        WITH ranked_submissions AS (
+          SELECT
+            s."id",
+            s."memberId",
+            s."submittedDate",
+            s."createdAt",
+            s."updatedAt",
+            (s."status")::text AS "status",
+            CASE
+              WHEN ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(s."memberId", s."id")
+                ORDER BY
+                  s."submittedDate" DESC NULLS LAST,
+                  s."createdAt" DESC NULLS LAST,
+                  s."updatedAt" DESC NULLS LAST,
+                  s."id" DESC
+              ) = 1 THEN TRUE
+              ELSE FALSE
+            END AS "isLatest"
+          FROM ${ReviewService.SUBMISSION_TABLE} s
+          WHERE s."challengeId" = ${challengeId}
+            AND (
+              s."type" IS NULL
+              OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+            )
+        )
+        SELECT
+          rs."id" AS "submissionId",
+          rs."memberId" AS "memberId",
+          rs."submittedDate" AS "submittedDate",
+          rs."createdAt" AS "createdAt",
+          rs."updatedAt" AS "updatedAt",
+          rs."status" AS "status",
+          rs."isLatest" AS "isLatest",
+          r."initialScore" AS "initialScore",
+          r."finalScore" AS "finalScore",
+          r."scorecardId" AS "scorecardId",
+          sc."minimumPassingScore" AS "minimumPassingScore",
+          COALESCE(rt."name", r."typeId") AS "reviewTypeName",
+          sc."type" AS "scorecardType"
+        FROM ranked_submissions rs
+        LEFT JOIN ${ReviewService.REVIEW_TABLE} r
+          ON r."submissionId" = rs."id"
+          AND UPPER(COALESCE((r."status")::text, 'COMPLETED')) = 'COMPLETED'
+          AND r."committed" = true
+        LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+          ON sc."id" = r."scorecardId"
+        LEFT JOIN ${ReviewService.REVIEW_TYPE_TABLE} rt
+          ON rt."id" = r."typeId"
+      `,
+    );
+
+    if (!rows.length) {
+      return [];
+    }
+
+    interface ChallengeResultAccumulator {
+      submissionId: string;
+      memberId: string | null;
+      submittedDate: Date | null;
+      createdAt: Date | null;
+      updatedAt: Date | null;
+      status: string | null;
+      isLatest: boolean;
+      primaryInitialSum: number;
+      primaryFinalSum: number;
+      primaryCount: number;
+      primaryPassingScore: number | null;
+      fallbackInitialSum: number;
+      fallbackFinalSum: number;
+      fallbackCount: number;
+      fallbackPassingScore: number | null;
+    }
+
+    const candidatesBySubmission = new Map<
+      string,
+      ChallengeResultAccumulator
+    >();
+
+    for (const row of rows) {
+      const submissionId = row.submissionId;
+      if (!submissionId) {
+        continue;
+      }
+
+      let accumulator = candidatesBySubmission.get(submissionId);
+      if (!accumulator) {
+        accumulator = {
+          submissionId,
+          memberId: row.memberId ?? null,
+          submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+          createdAt: row.createdAt ? new Date(row.createdAt) : null,
+          updatedAt: row.updatedAt ? new Date(row.updatedAt) : null,
+          status: row.status ?? null,
+          isLatest: Boolean(row.isLatest),
+          primaryInitialSum: 0,
+          primaryFinalSum: 0,
+          primaryCount: 0,
+          primaryPassingScore: null,
+          fallbackInitialSum: 0,
+          fallbackFinalSum: 0,
+          fallbackCount: 0,
+          fallbackPassingScore: null,
+        };
+        candidatesBySubmission.set(submissionId, accumulator);
+      }
+
+      const normalizedInitialScore = Number(
+        row.initialScore ?? row.finalScore ?? Number.NaN,
+      );
+      const normalizedFinalScore = Number(
+        row.finalScore ?? row.initialScore ?? Number.NaN,
+      );
+      const hasScore =
+        Number.isFinite(normalizedInitialScore) &&
+        Number.isFinite(normalizedFinalScore);
+
+      const reviewTypeName = row.reviewTypeName ?? null;
+      const scorecardType = row.scorecardType ?? null;
+
+      if (hasScore && ReviewService.isFinalReviewType(reviewTypeName)) {
+        accumulator.primaryInitialSum += normalizedInitialScore;
+        accumulator.primaryFinalSum += normalizedFinalScore;
+        accumulator.primaryCount += 1;
+        if (accumulator.primaryPassingScore === null) {
+          accumulator.primaryPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      } else if (
+        hasScore &&
+        ReviewService.isReviewScorecardType(scorecardType) &&
+        !ReviewService.isScreeningReviewType(reviewTypeName)
+      ) {
+        accumulator.fallbackInitialSum += normalizedInitialScore;
+        accumulator.fallbackFinalSum += normalizedFinalScore;
+        accumulator.fallbackCount += 1;
+        if (accumulator.fallbackPassingScore === null) {
+          accumulator.fallbackPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      }
+    }
+
+    const candidates: ChallengeResultCandidate[] = [];
+
+    for (const accumulator of candidatesBySubmission.values()) {
+      let initialSum = accumulator.primaryInitialSum;
+      let finalSum = accumulator.primaryFinalSum;
+      let count = accumulator.primaryCount;
+      let passingScore = accumulator.primaryPassingScore;
+
+      if (count === 0 && accumulator.fallbackCount > 0) {
+        initialSum = accumulator.fallbackInitialSum;
+        finalSum = accumulator.fallbackFinalSum;
+        count = accumulator.fallbackCount;
+        passingScore = accumulator.fallbackPassingScore;
+      }
+
+      const resolvedPassingScore =
+        passingScore ?? this.resolvePassingScore(null);
+      const initialScore = count > 0 ? initialSum / count : 0;
+      const finalScore = count > 0 ? finalSum / count : 0;
+
+      candidates.push({
+        submissionId: accumulator.submissionId,
+        memberId: accumulator.memberId,
+        submittedDate: accumulator.submittedDate,
+        createdAt: accumulator.createdAt,
+        updatedAt: accumulator.updatedAt,
+        status: accumulator.status,
+        isLatest: accumulator.isLatest,
+        initialScore,
+        finalScore,
+        passingScore: resolvedPassingScore,
+        passedReview: count > 0 ? finalScore >= resolvedPassingScore : false,
+        validSubmission: isValidChallengeResultStatus(accumulator.status),
+      });
+    }
+
+    return candidates;
+  }
+
+  /**
+   * Build canonical review-api `challengeResult` rows for one completed
+   * challenge without persisting them.
+   * @param challengeId Challenge whose result rows should be built.
+   * @param options Placement, rating, and audit context for the rows.
+   * @returns Canonical `challengeResult` rows keyed one-per-member.
+   * @throws Error when review data cannot be loaded.
+   */
+  async buildChallengeResultRecordsForChallenge(
+    challengeId: string,
+    options: {
+      placementWinners: ChallengeResultPlacementWinner[];
+      allowUnlimitedSubmissions: boolean;
+      ratedChallenge: boolean;
+      actor: string;
+      createdAt?: Date;
+      updatedAt?: Date;
+    },
+  ): Promise<ChallengeResultRecord[]> {
+    const candidates = await this.getChallengeResultCandidates(challengeId);
+    const createdAt = options.createdAt ?? new Date();
+    const updatedAt = options.updatedAt ?? createdAt;
+
+    return buildChallengeResultRecords({
+      challengeId,
+      candidates,
+      placementWinners: options.placementWinners,
+      allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      ratedChallenge: options.ratedChallenge,
+      actor: options.actor,
+      createdAt,
+      updatedAt,
+    });
+  }
+
+  /**
+   * Upsert canonical review-api `challengeResult` rows for one challenge and
+   * delete stale rows that no longer map to a participant outcome.
+   * @param challengeId Challenge whose rows should be synchronized.
+   * @param options Placement, rating, and audit context for the rows.
+   * @returns Summary of how many rows were built, upserted, and removed.
+   * @throws Error when building or persisting rows fails.
+   */
+  async syncChallengeResultsForChallenge(
+    challengeId: string,
+    options: {
+      placementWinners: ChallengeResultPlacementWinner[];
+      allowUnlimitedSubmissions: boolean;
+      ratedChallenge: boolean;
+      actor: string;
+      createdAt?: Date;
+      updatedAt?: Date;
+    },
+  ): Promise<{
+    rowsBuilt: number;
+    rowsUpserted: number;
+    staleRowsDeleted: number;
+  }> {
+    if (!challengeId) {
+      return {
+        rowsBuilt: 0,
+        rowsUpserted: 0,
+        staleRowsDeleted: 0,
+      };
+    }
+
+    try {
+      const rows = await this.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        options,
+      );
+
+      if (!rows.length) {
+        void this.dbLogger.logAction('review.syncChallengeResults', {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            rowsBuilt: 0,
+            rowsUpserted: 0,
+            staleRowsDeleted: 0,
+          },
+        });
+        return {
+          rowsBuilt: 0,
+          rowsUpserted: 0,
+          staleRowsDeleted: 0,
+        };
+      }
+
+      const uniqueUserIds = Array.from(
+        new Set(rows.map((row) => row.userId).filter(Boolean)),
+      );
+
+      const staleRowsDeleted = await this.prisma.$transaction(async (tx) => {
+        let deletedCount = 0;
+
+        if (uniqueUserIds.length > 0) {
+          deletedCount = await tx.$executeRaw(
+            Prisma.sql`
+              DELETE FROM ${ReviewService.CHALLENGE_RESULT_TABLE}
+              WHERE "challengeId" = ${challengeId}
+                AND "userId" NOT IN (
+                  ${Prisma.join(uniqueUserIds.map((userId) => Prisma.sql`${userId}`))}
+                )
+            `,
+          );
+        }
+
+        for (const row of rows) {
+          await tx.$executeRaw(
+            Prisma.sql`
+              INSERT INTO ${ReviewService.CHALLENGE_RESULT_TABLE} (
+                "challengeId",
+                "userId",
+                "submissionId",
+                "initialScore",
+                "finalScore",
+                "placement",
+                "rated",
+                "passedReview",
+                "validSubmission",
+                "ratingOrder",
+                "createdAt",
+                "createdBy",
+                "updatedAt",
+                "updatedBy"
+              )
+              VALUES (
+                ${row.challengeId},
+                ${row.userId},
+                ${row.submissionId},
+                ${row.initialScore},
+                ${row.finalScore},
+                ${row.placement},
+                ${row.rated},
+                ${row.passedReview},
+                ${row.validSubmission},
+                ${row.ratingOrder},
+                ${row.createdAt},
+                ${row.createdBy},
+                ${row.updatedAt},
+                ${row.updatedBy}
+              )
+              ON CONFLICT ("challengeId", "userId") DO UPDATE
+              SET
+                "submissionId" = EXCLUDED."submissionId",
+                "initialScore" = EXCLUDED."initialScore",
+                "finalScore" = EXCLUDED."finalScore",
+                "placement" = EXCLUDED."placement",
+                "rated" = EXCLUDED."rated",
+                "passedReview" = EXCLUDED."passedReview",
+                "validSubmission" = EXCLUDED."validSubmission",
+                "ratingOrder" = EXCLUDED."ratingOrder",
+                "updatedAt" = EXCLUDED."updatedAt",
+                "updatedBy" = EXCLUDED."updatedBy"
+            `,
+          );
+        }
+
+        return Number(deletedCount);
+      });
+
+      void this.dbLogger.logAction('review.syncChallengeResults', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          rowsBuilt: rows.length,
+          rowsUpserted: rows.length,
+          staleRowsDeleted,
+          allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+          ratedChallenge: options.ratedChallenge,
+        },
+      });
+
+      return {
+        rowsBuilt: rows.length,
+        rowsUpserted: rows.length,
+        staleRowsDeleted,
+      };
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.syncChallengeResults', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+          allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+          ratedChallenge: options.ratedChallenge,
+        },
+      });
+      throw err;
+    }
   }
 
   private composeKey(resourceId: string, submissionId: string): string {

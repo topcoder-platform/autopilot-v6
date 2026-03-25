@@ -12,7 +12,7 @@ describe('ReviewService', () => {
   let service: ReviewService;
 
   beforeEach(() => {
-    const executeRawMock = jest.fn().mockResolvedValue(undefined);
+    const executeRawMock = jest.fn().mockResolvedValue(0);
     prismaMock = {
       $queryRaw: jest.fn(),
       $executeRaw: executeRawMock,
@@ -22,9 +22,9 @@ describe('ReviewService', () => {
           async (
             callback: (tx: {
               $executeRaw: typeof executeRawMock;
-            }) => Promise<void>,
+            }) => Promise<unknown>,
           ) => {
-            await callback({ $executeRaw: executeRawMock });
+            return callback({ $executeRaw: executeRawMock });
           },
         ),
     };
@@ -123,6 +123,185 @@ describe('ReviewService', () => {
           details: expect.objectContaining({
             dataSource: 'reviewSummaries',
             winnersCount: 1,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('buildChallengeResultRecordsForChallenge', () => {
+    it('prefers the latest submission when submissions are limited', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'older-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 99,
+          finalScore: 99,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'latest-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 88,
+          finalScore: 88,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'latest-submission',
+          initialScore: 88,
+          finalScore: 88,
+          placement: 1,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+
+    it('prefers the strongest passing submission when submissions are unlimited', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'best-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 95,
+          finalScore: 97,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'latest-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 80,
+          finalScore: 82,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'best-submission',
+          initialScore: 95,
+          finalScore: 97,
+          placement: 1,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+  });
+
+  describe('syncChallengeResultsForChallenge', () => {
+    it('upserts built rows and deletes stale challenge rows', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'submission-1',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 90,
+          finalScore: 91,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+      prismaMock.$executeRaw.mockResolvedValueOnce(2).mockResolvedValueOnce(1);
+
+      const result = await service.syncChallengeResultsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(result).toEqual({
+        rowsBuilt: 1,
+        rowsUpserted: 1,
+        staleRowsDeleted: 2,
+      });
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(2);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.syncChallengeResults',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            rowsBuilt: 1,
+            rowsUpserted: 1,
+            staleRowsDeleted: 2,
           }),
         }),
       );
@@ -582,10 +761,12 @@ describe('ReviewService', () => {
       legacySubmissionId: 'legacy-1',
       memberId: '123456',
       submittedDate: '2024-10-21T10:00:00.000Z',
-      aggregateScore: '95',
+      finalScore: '95',
       scorecardId: 'scorecard-1',
       scorecardLegacyId: 'legacy-scorecard',
       minimumPassingScore: '80',
+      reviewTypeName: 'Final Review',
+      scorecardType: 'REVIEW',
       ...overrides,
     });
 
