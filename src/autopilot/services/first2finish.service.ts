@@ -329,10 +329,9 @@ export class First2FinishService {
         return;
       } else if (!aiScreeningPhase.isOpen) {
         this.logger.debug(
-          `Skipping AI Screening restart for challenge ${challenge.id}; phase ${aiScreeningPhase.id} closed too recently.`,
+          `Skipping AI Screening restart for challenge ${challenge.id}; phase ${aiScreeningPhase.id} closed too recently, proceeding with iterative processing.`,
           { submissionId: submissionId ?? null },
         );
-        return;
       } else {
         this.logger.debug(
           `Awaiting AI Screening completion for challenge ${challenge.id} before processing iterative review.`,
