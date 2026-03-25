@@ -285,12 +285,25 @@ export class First2FinishService {
 
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
-    // If an AI Screening phase exists and hasn't completed yet, start or wait for it
+    // If an AI Screening phase exists, start or wait for it — unless this submission
+    // already has a completed AI review decision, in which case screening can be skipped.
     const aiScreeningPhase = (challenge.phases ?? []).find(
       (p) => p.name === AI_SCREENING_PHASE_NAME,
     );
     if (aiScreeningPhase) {
-      if (!aiScreeningPhase.isOpen) {
+      const hasDecision =
+        submissionId != null
+          ? await this.reviewService.hasAiDecisionForSubmission(
+              challenge.id,
+              submissionId,
+            )
+          : false;
+
+      if (hasDecision) {
+        this.logger.debug(
+          `Submission ${submissionId} already has an AI review decision for challenge ${challenge.id}; skipping AI Screening gate.`,
+        );
+      } else if (!aiScreeningPhase.isOpen) {
         this.logger.debug(
           `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id} on submission arrival.`,
           { submissionId: submissionId ?? null },
@@ -312,13 +325,14 @@ export class First2FinishService {
             err.stack,
           );
         }
+        return;
       } else {
         this.logger.debug(
           `Awaiting AI Screening completion for challenge ${challenge.id} before processing iterative review.`,
           { submissionId: submissionId ?? null },
         );
+        return;
       }
-      return;
     }
 
     if (!latestIterativePhase) {
@@ -670,40 +684,6 @@ export class First2FinishService {
       return;
     }
 
-    // If an AI Screening phase exists, (re)start it for the next submission or wait for it
-    const aiScreeningPhase = (challenge.phases ?? []).find(
-      (p) => p.name === AI_SCREENING_PHASE_NAME,
-    );
-    if (aiScreeningPhase) {
-      if (!aiScreeningPhase.isOpen) {
-        this.logger.debug(
-          `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id} before preparing next iterative review.`,
-        );
-        try {
-          await this.schedulerService.advancePhase({
-            projectId: challenge.projectId,
-            challengeId: challenge.id,
-            phaseId: aiScreeningPhase.id,
-            phaseTypeName: aiScreeningPhase.name,
-            state: 'START',
-            operator: AutopilotOperator.SYSTEM,
-            projectStatus: challenge.status,
-          });
-        } catch (error) {
-          const err = error as Error;
-          this.logger.error(
-            `Failed to start AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id}: ${err.message}`,
-            err.stack,
-          );
-        }
-      } else {
-        this.logger.debug(
-          `Awaiting AI Screening completion for challenge ${challenge.id} before preparing next iterative review.`,
-        );
-      }
-      return;
-    }
-
     if (latestIterativePhase.isOpen) {
       this.logger.debug(
         `Iterative review phase ${latestIterativePhase.id} already open for challenge ${challengeId}; awaiting additional submissions.`,
@@ -749,6 +729,51 @@ export class First2FinishService {
         `No pending submissions available for next iterative review on challenge ${challengeId}; will wait for new submissions.`,
       );
       return;
+    }
+
+    // If an AI Screening phase exists and the next submission doesn't already have
+    // a completed AI review decision, (re)start screening and wait for it to finish.
+    const aiScreeningPhase = (challenge.phases ?? []).find(
+      (p) => p.name === AI_SCREENING_PHASE_NAME,
+    );
+    if (aiScreeningPhase) {
+      const hasDecision = await this.reviewService.hasAiDecisionForSubmission(
+        challengeId,
+        preferredSubmissionId,
+      );
+
+      if (hasDecision) {
+        this.logger.debug(
+          `Submission ${preferredSubmissionId} already has an AI review decision for challenge ${challengeId}; skipping AI Screening gate.`,
+        );
+      } else if (!aiScreeningPhase.isOpen) {
+        this.logger.debug(
+          `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} before next iterative review (submission ${preferredSubmissionId}).`,
+        );
+        try {
+          await this.schedulerService.advancePhase({
+            projectId: challenge.projectId,
+            challengeId: challenge.id,
+            phaseId: aiScreeningPhase.id,
+            phaseTypeName: aiScreeningPhase.name,
+            state: 'START',
+            operator: AutopilotOperator.SYSTEM,
+            projectStatus: challenge.status,
+          });
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to start AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId}: ${err.message}`,
+            err.stack,
+          );
+        }
+        return;
+      } else {
+        this.logger.debug(
+          `Awaiting AI Screening completion for challenge ${challengeId} before next iterative review (submission ${preferredSubmissionId}).`,
+        );
+        return;
+      }
     }
 
     const scorecardId = this.pickIterativeScorecard(

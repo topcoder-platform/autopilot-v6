@@ -864,6 +864,33 @@ export class ReviewService {
     }
   }
 
+  async hasAiDecisionForSubmission(
+    challengeId: string,
+    submissionId: string,
+  ): Promise<boolean> {
+    if (!challengeId || !submissionId) {
+      return false;
+    }
+
+    const query = Prisma.sql`
+      SELECT 1
+      FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+      INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+        ON c."id" = d."configId"
+      WHERE c."challengeId" = ${challengeId}
+        AND d."submissionId" = ${submissionId}
+        AND UPPER((d."status")::text) != 'PENDING'
+      LIMIT 1
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<unknown[]>(query);
+      return rows.length > 0;
+    } catch (error) {
+      return false;
+    }
+  }
+
   async getAiFailedDecisionSubmissionIds(
     challengeId: string,
     submissionIds: string[],
