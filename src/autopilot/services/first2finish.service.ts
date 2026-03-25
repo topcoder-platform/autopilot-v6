@@ -30,6 +30,7 @@ import { ChallengeCompletionService } from './challenge-completion.service';
 @Injectable()
 export class First2FinishService {
   private readonly logger = new Logger(First2FinishService.name);
+  private readonly aiScreeningRestartCooldownMs = 30_000;
   private readonly iterativeRoles: string[];
   private readonly iterativeReviewDurationMs: number;
   private readonly iterativeAssignmentRetryMs: number;
@@ -303,7 +304,7 @@ export class First2FinishService {
         this.logger.debug(
           `Submission ${submissionId} already has an AI review decision for challenge ${challenge.id}; skipping AI Screening gate.`,
         );
-      } else if (!aiScreeningPhase.isOpen) {
+      } else if (this.shouldRestartAiScreeningPhase(aiScreeningPhase)) {
         this.logger.debug(
           `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id} on submission arrival.`,
           { submissionId: submissionId ?? null },
@@ -325,6 +326,12 @@ export class First2FinishService {
             err.stack,
           );
         }
+        return;
+      } else if (!aiScreeningPhase.isOpen) {
+        this.logger.debug(
+          `Skipping AI Screening restart for challenge ${challenge.id}; phase ${aiScreeningPhase.id} closed too recently.`,
+          { submissionId: submissionId ?? null },
+        );
         return;
       } else {
         this.logger.debug(
@@ -746,7 +753,7 @@ export class First2FinishService {
         this.logger.debug(
           `Submission ${preferredSubmissionId} already has an AI review decision for challenge ${challengeId}; skipping AI Screening gate.`,
         );
-      } else if (!aiScreeningPhase.isOpen) {
+      } else if (this.shouldRestartAiScreeningPhase(aiScreeningPhase)) {
         this.logger.debug(
           `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} before next iterative review (submission ${preferredSubmissionId}).`,
         );
@@ -767,6 +774,11 @@ export class First2FinishService {
             err.stack,
           );
         }
+        return;
+      } else if (!aiScreeningPhase.isOpen) {
+        this.logger.debug(
+          `Skipping AI Screening restart for challenge ${challengeId}; phase ${aiScreeningPhase.id} closed too recently for submission ${preferredSubmissionId}.`,
+        );
         return;
       } else {
         this.logger.debug(
@@ -933,6 +945,24 @@ export class First2FinishService {
   private getPhaseStartTime(phase: IPhase): number {
     const reference = phase.actualStartDate ?? phase.scheduledStartDate;
     return new Date(reference).getTime();
+  }
+
+  private shouldRestartAiScreeningPhase(phase: IPhase): boolean {
+    if (phase.isOpen) {
+      return false;
+    }
+
+    if (!phase.actualEndDate) {
+      return true;
+    }
+
+    const closedAt = new Date(phase.actualEndDate).getTime();
+
+    if (!Number.isFinite(closedAt)) {
+      return true;
+    }
+
+    return Date.now() - closedAt > this.aiScreeningRestartCooldownMs;
   }
 
   private selectNextIterativeSubmission(
