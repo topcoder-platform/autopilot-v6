@@ -287,10 +287,10 @@ export class First2FinishService {
 
     // If an AI Screening phase exists and hasn't completed yet, start or wait for it
     const aiScreeningPhase = (challenge.phases ?? []).find(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+      (p) => p.name === AI_SCREENING_PHASE_NAME,
     );
     if (aiScreeningPhase) {
-      if (!aiScreeningPhase.isOpen && !aiScreeningPhase.actualStartDate) {
+      if (!aiScreeningPhase.isOpen) {
         this.logger.debug(
           `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id} on submission arrival.`,
           { submissionId: submissionId ?? null },
@@ -670,14 +670,37 @@ export class First2FinishService {
       return;
     }
 
-    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
-    const aiScreeningPending = (challenge.phases ?? []).some(
-      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+    // If an AI Screening phase exists, (re)start it for the next submission or wait for it
+    const aiScreeningPhase = (challenge.phases ?? []).find(
+      (p) => p.name === AI_SCREENING_PHASE_NAME,
     );
-    if (aiScreeningPending) {
-      this.logger.debug(
-        `Awaiting AI Screening completion for challenge ${challenge.id} before preparing next iterative review.`,
-      );
+    if (aiScreeningPhase) {
+      if (!aiScreeningPhase.isOpen) {
+        this.logger.debug(
+          `Starting AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id} before preparing next iterative review.`,
+        );
+        try {
+          await this.schedulerService.advancePhase({
+            projectId: challenge.projectId,
+            challengeId: challenge.id,
+            phaseId: aiScreeningPhase.id,
+            phaseTypeName: aiScreeningPhase.name,
+            state: 'START',
+            operator: AutopilotOperator.SYSTEM,
+            projectStatus: challenge.status,
+          });
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `Failed to start AI Screening phase ${aiScreeningPhase.id} for challenge ${challenge.id}: ${err.message}`,
+            err.stack,
+          );
+        }
+      } else {
+        this.logger.debug(
+          `Awaiting AI Screening completion for challenge ${challenge.id} before preparing next iterative review.`,
+        );
+      }
       return;
     }
 
