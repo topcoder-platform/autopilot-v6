@@ -48,7 +48,13 @@ type ChallengeApiServiceMock = {
 
 type ReviewServiceMock = {
   getPendingReviewCount: MockedMethod<ReviewService['getPendingReviewCount']>;
+  getMarathonMatchReviewReadiness: MockedMethod<
+    ReviewService['getMarathonMatchReviewReadiness']
+  >;
   getPendingAppealCount: MockedMethod<ReviewService['getPendingAppealCount']>;
+  getPendingAiDecisionsEscalationsCount: MockedMethod<
+    ReviewService['getPendingAiDecisionsEscalationsCount']
+  >;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
   getActiveContestSubmissionIds: MockedMethod<
     ReviewService['getActiveContestSubmissionIds']
@@ -61,6 +67,9 @@ type ReviewServiceMock = {
   >;
   getCompletedReviewCountForPhase: MockedMethod<
     ReviewService['getCompletedReviewCountForPhase']
+  >;
+  getInProgressAiWorkflowRunCount: MockedMethod<
+    ReviewService['getInProgressAiWorkflowRunCount']
   >;
 };
 
@@ -185,8 +194,14 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService = {
       getPendingReviewCount:
         createMockMethod<ReviewService['getPendingReviewCount']>(),
+      getMarathonMatchReviewReadiness:
+        createMockMethod<ReviewService['getMarathonMatchReviewReadiness']>(),
       getPendingAppealCount:
         createMockMethod<ReviewService['getPendingAppealCount']>(),
+      getPendingAiDecisionsEscalationsCount:
+        createMockMethod<
+          ReviewService['getPendingAiDecisionsEscalationsCount']
+        >(),
       getTotalAppealCount:
         createMockMethod<ReviewService['getTotalAppealCount']>(),
       getActiveContestSubmissionIds:
@@ -197,14 +212,23 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getPassedScreeningSubmissionIds']>(),
       getCompletedReviewCountForPhase:
         createMockMethod<ReviewService['getCompletedReviewCountForPhase']>(),
+      getInProgressAiWorkflowRunCount:
+        createMockMethod<ReviewService['getInProgressAiWorkflowRunCount']>(),
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(0);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 0,
+      reviewedSubmissionCount: 0,
+      completedSubmissionCount: 0,
+    });
     reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(0);
 
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
@@ -280,6 +304,38 @@ describe('SchedulerService (review phase deferral)', () => {
     ).toBeGreaterThan(Date.now());
   });
 
+  it('defers closing review phases when pending escalation requests exist', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getPendingAiDecisionsEscalationsCount.mockResolvedValue(3);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+      payload.phaseId,
+      payload.challengeId,
+    );
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('defers closing review phases when no reviewers are defined', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({
@@ -326,6 +382,82 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers closing Marathon Match review phases when latest submissions are missing review records', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 1,
+      completedSubmissionCount: 1,
+    });
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers closing Marathon Match review phases when latest submissions are not fully completed', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 2,
+      completedSubmissionCount: 1,
+    });
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -504,6 +636,11 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
+    expect(
+      reviewService.getPendingAiDecisionsEscalationsCount,
+    ).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,
@@ -511,6 +648,421 @@ describe('SchedulerService (review phase deferral)', () => {
     );
   });
 
+  it('closes Marathon Match review phases only after review records exist and all latest submissions are completed', async () => {
+    const payload = createPayload();
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      type: 'marathon match',
+      phases: [phaseDetails],
+      reviewers: [],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+      expectedSubmissionCount: 2,
+      reviewedSubmissionCount: 2,
+      completedSubmissionCount: 2,
+    });
+    reviewService.getPendingReviewCount.mockResolvedValue(0);
+
+    const advancePhaseResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: payload.phaseId,
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+    );
+    expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+      payload.phaseId,
+      payload.challengeId,
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('defers closing AI Screening when AI workflows are in progress', async () => {
+    const payload = createPayload({
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [phaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-screening-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(3);
+
+    const scheduleSpy = jest
+      .spyOn(scheduler, 'schedulePhaseTransition')
+      .mockResolvedValue('rescheduled');
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(reviewService.getInProgressAiWorkflowRunCount).toHaveBeenCalledWith(
+      payload.challengeId,
+      ['workflow-ai-1'],
+    );
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes AI Screening when no AI workflows are in progress', async () => {
+    const payload = createPayload({
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [phaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-screening-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(0);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'closed ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    });
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.getInProgressAiWorkflowRunCount).toHaveBeenCalledWith(
+      payload.challengeId,
+      ['workflow-ai-1'],
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('auto-closes AI Screening phase immediately when no AI workflows are in progress on open', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [closedPhaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-screening-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(0);
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    const closeResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'closed ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: false,
+          actualEndDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase
+      .mockResolvedValueOnce(openResponse)
+      .mockResolvedValueOnce(closeResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenNthCalledWith(
+      1,
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(reviewService.getInProgressAiWorkflowRunCount).toHaveBeenCalledWith(
+      payload.challengeId,
+      ['workflow-ai-1'],
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenNthCalledWith(
+      2,
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('keeps AI Screening phase open when AI workflows are in progress on open', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [closedPhaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-screening-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(3);
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValueOnce(openResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenCalledTimes(1);
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(reviewService.getInProgressAiWorkflowRunCount).toHaveBeenCalledWith(
+      payload.challengeId,
+      ['workflow-ai-1'],
+    );
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
+
+  it('continues opening AI Screening phase when workflow check fails', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    challengeApiService.getChallengeById.mockRejectedValue(
+      new Error('Failed to fetch challenge'),
+    );
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValueOnce(openResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenCalledTimes(1);
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'close',
+    );
+  });
   it('refreshes submissions when iterative review closes', async () => {
     const payload = createPayload({
       phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,

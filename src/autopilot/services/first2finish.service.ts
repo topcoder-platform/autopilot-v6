@@ -14,16 +14,14 @@ import {
 } from '../interfaces/autopilot.interface';
 import {
   ITERATIVE_REVIEW_PHASE_NAME,
+  AI_SCREENING_PHASE_NAME,
   PHASE_ROLE_MAP,
   REGISTRATION_PHASE_NAME,
-  SUBMISSION_PHASE_NAME,
-  TOPGEAR_SUBMISSION_PHASE_NAME,
   isSubmissionPhaseName,
 } from '../constants/review.constants';
 import {
   describeChallengeType,
   isFirst2FinishChallenge as isSupportedChallengeType,
-  isTopgearTaskChallenge,
 } from '../constants/challenge.constants';
 import { isActiveStatus } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
@@ -286,6 +284,18 @@ export class First2FinishService {
     }
 
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
+
+    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
+    const aiScreeningPending = (challenge.phases ?? []).some(
+      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+    );
+    if (aiScreeningPending) {
+      this.logger.debug(
+        `Awaiting AI Screening completion for challenge ${challenge.id} before processing iterative review.`,
+        { submissionId: submissionId ?? null },
+      );
+      return;
+    }
 
     if (!latestIterativePhase) {
       this.logger.warn(
@@ -586,7 +596,7 @@ export class First2FinishService {
       }
 
       try {
-        const created = await this.reviewService.createPendingReview(
+        const { created } = await this.reviewService.createPendingReview(
           submissionId,
           resourceId,
           phase.id,
@@ -633,6 +643,17 @@ export class First2FinishService {
     const latestIterativePhase = this.getLatestIterativePhase(challenge);
 
     if (!latestIterativePhase) {
+      return;
+    }
+
+    // If an AI Screening phase exists and hasn't completed yet, wait for it to finish
+    const aiScreeningPending = (challenge.phases ?? []).some(
+      (p) => p.name === AI_SCREENING_PHASE_NAME && !p.actualEndDate,
+    );
+    if (aiScreeningPending) {
+      this.logger.debug(
+        `Awaiting AI Screening completion for challenge ${challenge.id} before preparing next iterative review.`,
+      );
       return;
     }
 

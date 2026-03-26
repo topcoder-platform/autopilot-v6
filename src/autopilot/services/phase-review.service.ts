@@ -16,16 +16,22 @@ import {
   isPostMortemPhaseName,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   ITERATIVE_REVIEW_PHASE_NAME,
+  AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getMemberReviewerConfigs,
   getReviewerConfigsForPhase,
   selectScorecardId,
 } from '../utils/reviewer.utils';
-import { isTopgearTaskChallenge } from '../constants/challenge.constants';
+import {
+  isMarathonMatchChallenge,
+  isTopgearTaskChallenge,
+} from '../constants/challenge.constants';
 import { ChallengeCompletionService } from './challenge-completion.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
+import { MarathonMatchReviewService } from '../../marathon-match/marathon-match-review.service';
+import { challengeAllowsUnlimitedSubmissions } from '../utils/challenge-metadata.utils';
 
 @Injectable()
 export class PhaseReviewService {
@@ -36,6 +42,7 @@ export class PhaseReviewService {
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly configService: ConfigService,
+    private readonly marathonMatchReviewService: MarathonMatchReviewService,
     private readonly challengeCompletionService: ChallengeCompletionService,
     private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly dbLogger: AutopilotDbLoggerService,
@@ -65,14 +72,24 @@ export class PhaseReviewService {
       return;
     }
 
-    const allowUnlimitedSubmissions =
-      this.challengeAllowsUnlimitedSubmissions(challenge);
+    const allowUnlimitedSubmissions = challengeAllowsUnlimitedSubmissions(
+      challenge,
+      (message) => this.logger.warn(message),
+    );
 
     const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
     const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
     const isApprovalPhase = APPROVAL_PHASE_NAMES.has(phase.name);
 
     if (!isReviewPhase && !isScreeningPhase && !isApprovalPhase) {
+      return;
+    }
+
+    if (isMarathonMatchChallenge(challenge.type) && isReviewPhase) {
+      await this.marathonMatchReviewService.handleReviewPhaseOpened(
+        challenge,
+        phase,
+      );
       return;
     }
 
@@ -102,7 +119,7 @@ export class PhaseReviewService {
             scorecardId = await this.reviewService.getScorecardIdByName(
               'Topgear Task Post Mortem',
             );
-          } catch (_) {
+          } catch {
             // Logged inside review service; continue with null
           }
         }
@@ -118,7 +135,7 @@ export class PhaseReviewService {
             scorecardId = await this.reviewService.getScorecardIdByName(
               'Topcoder Post Mortem',
             );
-          } catch (_) {
+          } catch {
             // Logged inside review service; continue with null
           }
         }
@@ -164,7 +181,7 @@ export class PhaseReviewService {
       let createdCount = 0;
       for (const resource of reviewerResources) {
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             null,
             resource.id,
             phase.id,
@@ -466,6 +483,18 @@ export class PhaseReviewService {
         new Set(filteredSubmissions.map((submission) => submission.id)),
       );
     }
+
+    if (
+      submissionIds.length &&
+      this.challengeHasAiScreeningPhase(challenge) &&
+      (isReviewPhase || phase.name.toLowerCase().includes('screening'))
+    ) {
+      submissionIds = await this.excludeAiFailedReviewSubmissions(
+        challengeId,
+        submissionIds,
+      );
+    }
+
     if (
       submissionIds.length &&
       (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
@@ -473,6 +502,27 @@ export class PhaseReviewService {
       submissionIds = await this.excludeFailedScreeningSubmissions(
         challenge,
         submissionIds,
+      );
+    }
+
+    try {
+      const deletedStaleReviews =
+        await this.reviewService.deleteStalePendingSubmissionReviews(
+          phase.id,
+          challengeId,
+          submissionIds,
+        );
+
+      if (deletedStaleReviews > 0) {
+        this.logger.log(
+          `Deleted ${deletedStaleReviews} stale pending review assignment(s) for challenge ${challengeId}, phase ${phase.id}.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to delete stale pending reviews for challenge ${challengeId}, phase ${phase.id}: ${err.message}`,
+        err.stack,
       );
     }
 
@@ -504,7 +554,7 @@ export class PhaseReviewService {
         }
 
         try {
-          const created = await this.reviewService.createPendingReview(
+          const { created } = await this.reviewService.createPendingReview(
             submissionId,
             resource.id,
             phase.id,
@@ -563,6 +613,12 @@ export class PhaseReviewService {
     });
   }
 
+  private challengeHasAiScreeningPhase(challenge: IChallenge): boolean {
+    return (challenge.phases ?? []).some(
+      (phase) => phase.name === AI_SCREENING_PHASE_NAME,
+    );
+  }
+
   private async excludeFailedScreeningSubmissions(
     challenge: IChallenge,
     submissionIds: string[],
@@ -601,6 +657,55 @@ export class PhaseReviewService {
       const err = error as Error;
       this.logger.error(
         `Failed to filter screened submissions for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return submissionIds;
+    }
+  }
+
+  private async excludeAiFailedReviewSubmissions(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<string[]> {
+    if (!submissionIds.length) {
+      return submissionIds;
+    }
+
+    try {
+      const aiFailedIds =
+        await this.reviewService.getAiFailedDecisionSubmissionIds(
+          challengeId,
+          submissionIds,
+        );
+
+      if (!aiFailedIds.size) {
+        return submissionIds;
+      }
+
+      const lockedSubmissionIds = submissionIds.filter((id) =>
+        aiFailedIds.has(id),
+      );
+
+      if (!lockedSubmissionIds.length) {
+        return submissionIds;
+      }
+
+      await this.reviewService.markSubmissionsAsAiFailedReview(
+        challengeId,
+        lockedSubmissionIds,
+      );
+
+      const filtered = submissionIds.filter((id) => !aiFailedIds.has(id));
+
+      this.logger.log(
+        `Excluded ${lockedSubmissionIds.length} submission(s) for challenge ${challengeId} due to failed AI review decisions.`,
+      );
+
+      return filtered;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to filter AI review decision submissions for challenge ${challengeId}: ${err.message}`,
         err.stack,
       );
       return submissionIds;
@@ -694,168 +799,5 @@ export class PhaseReviewService {
     }
 
     return selected;
-  }
-
-  private challengeAllowsUnlimitedSubmissions(challenge: IChallenge): boolean {
-    const metadata = challenge.metadata ?? {};
-    const rawValue = metadata['submissionLimit'];
-
-    if (rawValue == null) {
-      return false;
-    }
-
-    const warnUnrecognized = (value: unknown) =>
-      this.warnUnrecognizedSubmissionLimit(challenge, value);
-
-    let parsed: unknown = rawValue;
-
-    if (typeof rawValue === 'string') {
-      const trimmed = rawValue.trim();
-      if (!trimmed) {
-        warnUnrecognized(rawValue);
-        return false;
-      }
-
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        const numericValue = Number(trimmed);
-        if (Number.isFinite(numericValue) && numericValue > 0) {
-          return false;
-        }
-        const normalized = trimmed.toLowerCase();
-        if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
-          return true;
-        }
-        warnUnrecognized(trimmed);
-        return false;
-      }
-    }
-
-    if (typeof parsed === 'number') {
-      return !(Number.isFinite(parsed) && parsed > 0);
-    }
-
-    if (typeof parsed === 'string') {
-      const numericValue = Number(parsed);
-      if (Number.isFinite(numericValue) && numericValue > 0) {
-        return false;
-      }
-      const normalized = parsed.trim().toLowerCase();
-      if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
-        return true;
-      }
-      warnUnrecognized(parsed);
-      return false;
-    }
-
-    if (parsed && typeof parsed === 'object') {
-      const record = parsed as Record<string, unknown>;
-
-      const unlimited = this.parseBooleanFlag(record.unlimited);
-      if (unlimited === true) {
-        return true;
-      }
-
-      const candidates = [
-        record.count,
-        record.max,
-        record.maximum,
-        record.limitCount,
-        record.value,
-      ];
-
-      for (const candidate of candidates) {
-        if (candidate === undefined || candidate === null) {
-          continue;
-        }
-        const numericValue = Number(candidate);
-        if (Number.isFinite(numericValue) && numericValue > 0) {
-          return false;
-        }
-      }
-
-      const limitFlag = this.parseBooleanFlag(record.limit);
-      if (limitFlag === true) {
-        return false;
-      }
-      if (limitFlag === false) {
-        return true;
-      }
-
-      warnUnrecognized(record);
-      return false;
-    }
-
-    warnUnrecognized(parsed);
-    return false;
-  }
-
-  private warnUnrecognizedSubmissionLimit(
-    challenge: IChallenge,
-    value: unknown,
-  ): void {
-    const valueDescription = this.describeSubmissionLimitValue(value);
-    this.logger.warn(
-      `Unrecognized submissionLimit metadata value ${valueDescription} for challenge ${challenge.id}; defaulting to limited submissions.`,
-    );
-  }
-
-  private describeSubmissionLimitValue(value: unknown): string {
-    if (value === undefined) {
-      return 'undefined';
-    }
-    if (value === null) {
-      return 'null';
-    }
-    if (typeof value === 'string') {
-      return value.trim().length ? `"${value}"` : '(empty string)';
-    }
-    if (typeof value === 'number') {
-      if (Number.isNaN(value)) {
-        return 'NaN';
-      }
-      return value.toString();
-    }
-    if (typeof value === 'boolean') {
-      return value ? 'true' : 'false';
-    }
-    if (typeof value === 'object') {
-      try {
-        return JSON.stringify(value);
-      } catch {
-        return Object.prototype.toString.call(value);
-      }
-    }
-    return String(value);
-  }
-
-  private parseBooleanFlag(value: unknown): boolean | null {
-    if (typeof value === 'boolean') {
-      return value;
-    }
-
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (['true', 'yes', '1'].includes(normalized)) {
-        return true;
-      }
-      if (['false', 'no', '0'].includes(normalized)) {
-        return false;
-      }
-      return null;
-    }
-
-    if (typeof value === 'number') {
-      if (value === 1) {
-        return true;
-      }
-      if (value === 0) {
-        return false;
-      }
-      return null;
-    }
-
-    return null;
   }
 }

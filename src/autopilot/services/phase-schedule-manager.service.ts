@@ -16,6 +16,7 @@ import {
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
 import {
+  AI_SCREENING_PHASE_NAME,
   APPROVAL_PHASE_NAMES,
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
@@ -1338,6 +1339,46 @@ export class PhaseScheduleManager {
       }
     }
 
+    if (this.isAiScreeningPhaseName(updatedPhase.name)) {
+      try {
+        const challenge =
+          await this.challengeApiService.getChallengeById(challengeId);
+        const aiWorkflowIds = this.getAiWorkflowIdsForChallenge(challenge);
+
+        const inProgressAiWorkflows =
+          await this.reviewService.getInProgressAiWorkflowRunCount(
+            challengeId,
+            aiWorkflowIds,
+          );
+
+        if (inProgressAiWorkflows === 0) {
+          this.logger.log(
+            `[AI SCREENING] No pending AI workflow runs for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
+          );
+
+          const closePayload: PhaseTransitionPayload = {
+            projectId,
+            challengeId,
+            phaseId: updatedPhase.id,
+            phaseTypeName: updatedPhase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+            projectStatus,
+            date: new Date().toISOString(),
+          };
+
+          await this.schedulerService.advancePhase(closePayload);
+          return true;
+        }
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
     const nextPhaseData: PhaseTransitionPayload = {
       projectId,
       challengeId,
@@ -1377,5 +1418,19 @@ export class PhaseScheduleManager {
     }
 
     return this.appealsPhaseNames.has(normalized);
+  }
+
+  private isAiScreeningPhaseName(phaseName?: string | null): boolean {
+    return phaseName?.trim() === AI_SCREENING_PHASE_NAME;
+  }
+
+  private getAiWorkflowIdsForChallenge(challenge: IChallenge): string[] {
+    return Array.from(
+      new Set(
+        (challenge.reviewers ?? [])
+          .map((reviewer) => reviewer.aiWorkflowId)
+          .filter((workflowId): workflowId is string => Boolean(workflowId)),
+      ),
+    );
   }
 }

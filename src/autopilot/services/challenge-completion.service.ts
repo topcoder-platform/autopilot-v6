@@ -16,20 +16,247 @@ import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
 import { KafkaService } from '../../kafka/kafka.service';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
+import { MarathonMatchApiService } from '../../marathon-match/marathon-match-api.service';
+import { MemberApiService } from '../../member-api/member-api.service';
+import { isMarathonMatchChallenge } from '../constants/challenge.constants';
+import {
+  challengeAllowsUnlimitedSubmissions,
+  isRatedChallenge,
+} from '../utils/challenge-metadata.utils';
 
+/**
+ * Completes challenges, derives winners, and coordinates downstream finance and
+ * member statistics side effects through outbound service integrations.
+ */
 @Injectable()
 export class ChallengeCompletionService {
   private readonly logger = new Logger(ChallengeCompletionService.name);
+  private readonly rerateSupportedPairs = new Set([
+    'DEVELOP::Challenge',
+    'DATA_SCIENCE::MARATHON_MATCH',
+  ]);
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
     private readonly reviewService: ReviewService,
     private readonly resourcesService: ResourcesService,
     private readonly financeApiService: FinanceApiService,
+    private readonly memberApiService: MemberApiService,
     private readonly reviewSummationApiService: ReviewSummationApiService,
     private readonly configService: ConfigService,
     private readonly kafkaService: KafkaService,
+    private readonly marathonMatchApiService: MarathonMatchApiService,
   ) {}
+
+  /**
+   * Resolves the member-api rerate track/type payload from the challenge names.
+   * @param challenge Completed challenge snapshot from the Challenge API.
+   * @returns Contract-compliant rerate identifiers, or `null` when the challenge is unsupported.
+   * @throws Never. Unsupported or unrecognized values are logged and skipped.
+   */
+  private getSupportedReratePayload(
+    challenge: IChallenge,
+  ): { trackId: string; typeId: string } | null {
+    const trackId = this.normalizeMemberStatsTrackId(challenge.track);
+    const typeId = this.normalizeMemberStatsTypeId(challenge.type);
+
+    if (!trackId || !typeId) {
+      this.logger.warn(
+        `Skipping member stats rerate for challenge ${challenge.id} because track or type could not be normalized from challenge names.`,
+      );
+      return null;
+    }
+
+    const pairKey = `${trackId}::${typeId}`;
+    if (!this.rerateSupportedPairs.has(pairKey)) {
+      this.logger.warn(
+        `Skipping member stats rerate for challenge ${challenge.id} because rerates for ${trackId} / ${typeId} are not supported by member-api.`,
+      );
+      return null;
+    }
+
+    return { trackId, typeId };
+  }
+
+  /**
+   * Maps challenge track names to the enum names accepted by member-api rerates.
+   * @param track Challenge track name from challenge-api.
+   * @returns Supported member-api track enum name, or `null` when no mapping exists.
+   * @throws Never.
+   */
+  private normalizeMemberStatsTrackId(track?: string): string | null {
+    const normalized = track?.trim().toUpperCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes('DATA') && normalized.includes('SCIENCE')) {
+      return 'DATA_SCIENCE';
+    }
+
+    if (normalized.includes('DEVELOP') || normalized === 'DEV') {
+      return 'DEVELOP';
+    }
+
+    return null;
+  }
+
+  /**
+   * Maps challenge type names to the enum names accepted by member-api rerates.
+   * @param type Challenge type name from challenge-api.
+   * @returns Supported member-api type enum name, or `null` when no mapping exists.
+   * @throws Never.
+   */
+  private normalizeMemberStatsTypeId(type?: string): string | null {
+    const normalized = type
+      ?.trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized === 'CHALLENGE') {
+      return 'Challenge';
+    }
+
+    if (normalized === 'MARATHON_MATCH') {
+      return 'MARATHON_MATCH';
+    }
+
+    return null;
+  }
+
+  /**
+   * Schedules member stats refresh and rerate calls for the unique winner handles on a completed challenge.
+   * @param challengeId Completed challenge identifier.
+   * @param winners Winner records used to derive distinct member handles.
+   * @param challengeSnapshot Optional challenge snapshot reused to avoid an extra lookup.
+   * @returns Promise that resolves after the outbound calls have been scheduled.
+   * @throws Never. Errors are logged and swallowed so completion remains idempotent.
+   *
+   * Usage:
+   * Invoked by the completion paths after finance has been triggered so member-api
+   * can refresh winner stats asynchronously without blocking challenge completion.
+   * Rerates are only sent for explicitly rated challenges whose normalized track/type
+   * names match the member-api contract.
+   */
+  private async triggerStatsRefreshForWinners(
+    challengeId: string,
+    winners: IChallengeWinner[],
+    challengeSnapshot?: IChallenge,
+  ): Promise<void> {
+    try {
+      const handles = Array.from(
+        new Set(
+          winners
+            .map((winner) => winner.handle?.trim())
+            .filter((handle): handle is string => Boolean(handle)),
+        ),
+      );
+
+      if (!handles.length) {
+        return;
+      }
+
+      for (const handle of handles) {
+        void this.memberApiService.refreshMemberStats(handle, challengeId);
+      }
+
+      const challenge =
+        challengeSnapshot ??
+        (await this.challengeApiService.getChallengeById(challengeId));
+
+      if (!isRatedChallenge(challenge)) {
+        return;
+      }
+
+      const reratePayload = this.getSupportedReratePayload(challenge);
+      if (!reratePayload) {
+        return;
+      }
+
+      for (const handle of handles) {
+        void this.memberApiService.rerateMemberStats(
+          handle,
+          challengeId,
+          reratePayload.trackId,
+          reratePayload.typeId,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to trigger member stats refresh for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  /**
+   * Synchronize review-api `challengeResult` rows for one completed challenge.
+   * @param challengeId Completed challenge identifier.
+   * @param challenge Challenge snapshot supplying metadata and timing context.
+   * @param placementWinners Placement winners used to preserve prize placements in the result rows.
+   * @returns Promise that resolves after the sync attempt finishes.
+   * @throws Never. Failures are logged and swallowed so challenge completion remains idempotent.
+   */
+  private async syncChallengeResults(
+    challengeId: string,
+    challenge: IChallenge,
+    placementWinners: IChallengeWinner[],
+  ): Promise<void> {
+    try {
+      const createdAt = this.resolveChallengeResultCreatedAt(challenge);
+      await this.reviewService.syncChallengeResultsForChallenge(challengeId, {
+        placementWinners: placementWinners.map((winner) => ({
+          userId: winner.userId,
+          placement: winner.placement,
+        })),
+        allowUnlimitedSubmissions: challengeAllowsUnlimitedSubmissions(
+          challenge,
+          (message) => this.logger.warn(message),
+        ),
+        ratedChallenge: isRatedChallenge(challenge),
+        actor: 'autopilot',
+        createdAt,
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to sync challenge results for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  /**
+   * Resolve the canonical creation timestamp for persisted `challengeResult` rows.
+   * @param challenge Challenge snapshot whose lifecycle timestamps should be inspected.
+   * @returns Best-effort completion timestamp, falling back to the current time.
+   * @throws Never.
+   */
+  private resolveChallengeResultCreatedAt(challenge: IChallenge): Date {
+    const candidateValues = [
+      challenge.endDate,
+      challenge.updated,
+      challenge.created,
+    ];
+
+    for (const candidateValue of candidateValues) {
+      if (!candidateValue) {
+        continue;
+      }
+
+      const parsed = new Date(candidateValue);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+
+    return new Date();
+  }
 
   private async ensureCancelledPostMortem(challengeId: string): Promise<void> {
     try {
@@ -105,7 +332,7 @@ export class ChallengeCompletionService {
         let createdCount = 0;
         for (const resource of postMortemResources) {
           try {
-            const created = await this.reviewService.createPendingReview(
+            const { created } = await this.reviewService.createPendingReview(
               null,
               resource.id,
               postMortem.id,
@@ -381,6 +608,23 @@ export class ChallengeCompletionService {
         );
         void this.financeApiService.generateChallengePayments(challengeId);
       }
+      if (normalizedStatus === ChallengeStatusEnum.COMPLETED) {
+        const placementWinners = (challenge.winners ?? []).filter(
+          (winner) =>
+            winner.type === undefined ||
+            winner.type === PrizeSetTypeEnum.PLACEMENT,
+        );
+        void this.syncChallengeResults(
+          challengeId,
+          challenge,
+          placementWinners,
+        );
+        void this.triggerStatsRefreshForWinners(
+          challengeId,
+          challenge.winners ?? [],
+          challenge,
+        );
+      }
       this.logger.log(
         `Challenge ${challengeId} is not ACTIVE (status: ${challenge.status}); skipping finalization attempt.`,
       );
@@ -388,6 +632,16 @@ export class ChallengeCompletionService {
     }
 
     await this.reviewSummationApiService.finalizeSummations(challengeId);
+
+    if (isMarathonMatchChallenge(challenge.type)) {
+      const marathonMatchConfig =
+        await this.marathonMatchApiService.getConfig(challengeId);
+      if (marathonMatchConfig?.relativeScoringEnabled) {
+        this.logger.debug(
+          `Challenge ${challengeId} is a Marathon Match with relative scoring enabled; using persisted aggregate scores from review summations.`,
+        );
+      }
+    }
 
     const summaries =
       await this.reviewService.generateReviewSummaries(challengeId);
@@ -492,8 +746,15 @@ export class ChallengeCompletionService {
     const winners = [...placementWinners, ...passedReviewWinners];
 
     await this.challengeApiService.completeChallenge(challengeId, winners);
+    await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
+    // Trigger member stats refresh and rerating for winning members.
+    void this.triggerStatsRefreshForWinners(
+      challengeId,
+      placementWinners,
+      challenge,
+    );
     await this.publishChallengeCompletionUpdate(
       challengeId,
       placementWinners,
@@ -511,9 +772,22 @@ export class ChallengeCompletionService {
     context?: { reason?: string },
   ): Promise<void> {
     await this.challengeApiService.completeChallenge(challengeId, winners);
+    const challenge =
+      await this.challengeApiService.getChallengeById(challengeId);
+    const placementWinners = winners.filter(
+      (winner) =>
+        winner.type === undefined || winner.type === PrizeSetTypeEnum.PLACEMENT,
+    );
+    await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    await this.publishChallengeCompletionUpdate(challengeId, winners);
+    // Trigger member stats refresh and rerating for winning members.
+    void this.triggerStatsRefreshForWinners(challengeId, winners, challenge);
+    await this.publishChallengeCompletionUpdate(
+      challengeId,
+      winners,
+      challenge,
+    );
     const suffix = context?.reason ? ` (${context.reason})` : '';
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${winners.length} winner(s)${suffix}.`,

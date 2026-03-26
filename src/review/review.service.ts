@@ -3,9 +3,20 @@ import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { ReviewPrismaService } from './review-prisma.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
+import {
+  buildChallengeResultRecords,
+  isValidChallengeResultStatus,
+  type ChallengeResultCandidate,
+  type ChallengeResultPlacementWinner,
+  type ChallengeResultRecord,
+} from './challenge-result.utils';
 
 interface SubmissionRecord {
   id: string;
+}
+
+interface AiFailedDecisionRecord {
+  submissionId: string;
 }
 
 export interface ActiveContestSubmission {
@@ -21,6 +32,12 @@ interface ReviewRecord {
 
 interface PendingCountRecord {
   count: number | string;
+}
+
+interface MarathonMatchReviewReadinessRecord {
+  expectedSubmissionCount: number | string;
+  reviewedSubmissionCount: number | string;
+  completedSubmissionCount: number | string;
 }
 
 interface ReviewDetailRecord {
@@ -54,6 +71,22 @@ interface ReviewAggregationRow {
   scorecardType: string | null;
 }
 
+interface ChallengeResultAggregationRow {
+  submissionId: string;
+  memberId: string | null;
+  submittedDate: Date | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  status: string | null;
+  isLatest: boolean;
+  initialScore: number | string | null;
+  finalScore: number | string | null;
+  scorecardId: string | null;
+  minimumPassingScore: number | string | null;
+  reviewTypeName: string | null;
+  scorecardType: string | null;
+}
+
 interface ReviewSummationSummaryRecord {
   submissionId: string;
   legacySubmissionId: string | null;
@@ -78,10 +111,20 @@ export interface SubmissionSummary {
   isPassing: boolean;
 }
 
+export interface MarathonMatchReviewReadiness {
+  expectedSubmissionCount: number;
+  reviewedSubmissionCount: number;
+  completedSubmissionCount: number;
+}
+
 @Injectable()
 export class ReviewService {
   private static readonly REVIEW_TABLE = Prisma.sql`"review"`;
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
+  private static readonly AI_REVIEW_CONFIG_TABLE = Prisma.sql`"aiReviewConfig"`;
+  private static readonly AI_REVIEW_DECISION_TABLE = Prisma.sql`"aiReviewDecision"`;
+  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE =
+    Prisma.sql`"aiReviewDecisionEscalation"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -89,6 +132,8 @@ export class ReviewService {
   private static readonly APPEAL_RESPONSE_TABLE = Prisma.sql`"appealResponse"`;
   private static readonly REVIEW_ITEM_COMMENT_TABLE = Prisma.sql`"reviewItemComment"`;
   private static readonly REVIEW_ITEM_TABLE = Prisma.sql`"reviewItem"`;
+  private static readonly AI_WORKFLOW_RUN_TABLE = Prisma.sql`"aiWorkflowRun"`;
+  private static readonly CHALLENGE_RESULT_TABLE = Prisma.sql`"challengeResult"`;
   private static readonly FINAL_REVIEW_TYPE_NAMES = new Set<string>([
     'REVIEW',
     'REGULAR REVIEW',
@@ -819,6 +864,144 @@ export class ReviewService {
     }
   }
 
+  async getAiFailedDecisionSubmissionIds(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<Set<string>> {
+    const uniqueSubmissionIds = Array.from(
+      new Set(
+        submissionIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueSubmissionIds.length) {
+      return new Set();
+    }
+
+    const submissionList = Prisma.join(
+      uniqueSubmissionIds.map((id) => Prisma.sql`${id}`),
+    );
+
+    const query = Prisma.sql`
+      WITH ranked_decisions AS (
+        SELECT
+          d."submissionId" AS "submissionId",
+          UPPER((d."status")::text) AS "decisionStatus",
+          ROW_NUMBER() OVER (
+            PARTITION BY d."submissionId"
+            ORDER BY
+              c."version" DESC,
+              COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+              d."id" DESC
+          ) AS "decisionRank"
+        FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+        INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+          ON c."id" = d."configId"
+        WHERE c."challengeId" = ${challengeId}
+          AND d."submissionId" IN (${submissionList})
+      )
+      SELECT "submissionId"
+      FROM ranked_decisions
+      WHERE "decisionRank" = 1
+        AND "decisionStatus" IN ('FAILED', 'ERROR')
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<AiFailedDecisionRecord[]>(query);
+      const failedIds = new Set(
+        rows.map((record) => record.submissionId).filter(Boolean),
+      );
+
+      void this.dbLogger.logAction('review.getAiFailedDecisionSubmissionIds', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          evaluatedSubmissionCount: uniqueSubmissionIds.length,
+          aiFailedSubmissionCount: failedIds.size,
+        },
+      });
+
+      return failedIds;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getAiFailedDecisionSubmissionIds', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          evaluatedSubmissionCount: uniqueSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async markSubmissionsAsAiFailedReview(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<number> {
+    const uniqueSubmissionIds = Array.from(
+      new Set(
+        submissionIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!challengeId || !uniqueSubmissionIds.length) {
+      return 0;
+    }
+
+    const submissionList = Prisma.join(
+      uniqueSubmissionIds.map((id) => Prisma.sql`${id}`),
+    );
+
+    const query = Prisma.sql`
+      UPDATE ${ReviewService.SUBMISSION_TABLE}
+      SET
+        "status" = 'AI_FAILED_REVIEW',
+        "updatedAt" = NOW()
+      WHERE "challengeId" = ${challengeId}
+        AND "id" IN (${submissionList})
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) = 'ACTIVE'
+        )
+    `;
+
+    try {
+      const updated = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.markSubmissionsAsAiFailedReview', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          submissionCount: uniqueSubmissionIds.length,
+          updatedCount: updated,
+        },
+      });
+
+      return updated;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.markSubmissionsAsAiFailedReview', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          submissionCount: uniqueSubmissionIds.length,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getPassedScreeningSubmissionIds(
     challengeId: string,
     screeningScorecardIds: string[],
@@ -1041,13 +1224,121 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Summarizes Marathon Match review readiness for the latest active contest
+   * submissions in one review phase.
+   * @param challengeId Challenge containing the latest contest submissions.
+   * @param phaseId Review phase that should contain one completed system review
+   * for each latest submission.
+   * @returns Counts for expected latest submissions, latest submissions with any
+   * review record in the phase, and latest submissions with at least one
+   * completed review in the phase.
+   * @throws Error when the readiness query fails.
+   */
+  async getMarathonMatchReviewReadiness(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<MarathonMatchReviewReadiness> {
+    if (!challengeId || !phaseId) {
+      return {
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+      };
+    }
+
+    const query = Prisma.sql`
+      WITH latest_submissions AS (
+        SELECT latest."id"
+        FROM (
+          SELECT
+            s."id",
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) AS row_num
+          FROM ${ReviewService.SUBMISSION_TABLE} s
+          WHERE s."challengeId" = ${challengeId}
+            AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+            AND (
+              s."type" IS NULL
+              OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+            )
+        ) latest
+        WHERE latest.row_num = 1
+      ),
+      submission_review_status AS (
+        SELECT
+          ls."id" AS "submissionId",
+          COUNT(r."id")::int AS "reviewCount",
+          COUNT(*) FILTER (
+            WHERE UPPER(COALESCE((r."status")::text, 'PENDING')) = 'COMPLETED'
+          )::int AS "completedReviewCount"
+        FROM latest_submissions ls
+        LEFT JOIN ${ReviewService.REVIEW_TABLE} r
+          ON r."submissionId" = ls."id"
+         AND r."phaseId" = ${phaseId}
+        GROUP BY ls."id"
+      )
+      SELECT
+        COUNT(*)::int AS "expectedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE "reviewCount" > 0
+        )::int AS "reviewedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE "completedReviewCount" > 0
+        )::int AS "completedSubmissionCount"
+      FROM submission_review_status
+    `;
+
+    try {
+      const [record] =
+        await this.prisma.$queryRaw<MarathonMatchReviewReadinessRecord[]>(
+          query,
+        );
+      const readiness = {
+        expectedSubmissionCount: Number(record?.expectedSubmissionCount ?? 0),
+        reviewedSubmissionCount: Number(record?.reviewedSubmissionCount ?? 0),
+        completedSubmissionCount: Number(record?.completedSubmissionCount ?? 0),
+      };
+
+      void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          ...readiness,
+        },
+      });
+
+      return readiness;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async createPendingReview(
     submissionId: string | null,
     resourceId: string,
     phaseId: string,
     scorecardId: string,
     challengeId: string,
-  ): Promise<boolean> {
+  ): Promise<{ created: boolean; reviewId: string | null }> {
     const insert = Prisma.sql`
       INSERT INTO ${ReviewService.REVIEW_TABLE} (
         "resourceId",
@@ -1145,7 +1436,7 @@ export class ReviewService {
         },
       });
 
-      return created;
+      return { created, reviewId };
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('review.createPendingReview', {
@@ -1264,6 +1555,78 @@ export class ReviewService {
         details: {
           phaseId,
           resourceId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async deleteStalePendingSubmissionReviews(
+    phaseId: string,
+    challengeId: string,
+    allowedSubmissionIds: string[],
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+
+    if (!trimmedPhaseId || !challengeId) {
+      return 0;
+    }
+
+    const normalizedSubmissionIds = Array.from(
+      new Set(
+        (allowedSubmissionIds ?? [])
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter((id) => id.length > 0),
+      ),
+    );
+
+    const allowedCondition = normalizedSubmissionIds.length
+      ? Prisma.sql`AND "submissionId" NOT IN (
+          ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
+        )`
+      : Prisma.sql``;
+
+    const query = Prisma.sql`
+      DELETE FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND "submissionId" IS NOT NULL
+        AND "submissionId" IN (
+          SELECT "id"
+          FROM ${ReviewService.SUBMISSION_TABLE}
+          WHERE "challengeId" = ${challengeId}
+        )
+        ${allowedCondition}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+        )
+    `;
+
+    try {
+      const deleted = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
+          deletedCount: deleted,
+        },
+      });
+
+      return deleted;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          allowedSubmissionCount: normalizedSubmissionIds.length,
           error: err.message,
         },
       });
@@ -1795,6 +2158,403 @@ export class ReviewService {
     return summaries;
   }
 
+  /**
+   * Load contest submissions plus aggregated review data so completion can
+   * derive one canonical `challengeResult` row per member.
+   * @param challengeId Challenge whose contest submissions should be aggregated.
+   * @returns Per-submission candidates including latest flags and review scores.
+   * @throws Error when the review DB query fails.
+   */
+  private async getChallengeResultCandidates(
+    challengeId: string,
+  ): Promise<ChallengeResultCandidate[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const rows = await this.prisma.$queryRaw<ChallengeResultAggregationRow[]>(
+      Prisma.sql`
+        WITH ranked_submissions AS (
+          SELECT
+            s."id",
+            s."memberId",
+            s."submittedDate",
+            s."createdAt",
+            s."updatedAt",
+            (s."status")::text AS "status",
+            CASE
+              WHEN ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(s."memberId", s."id")
+                ORDER BY
+                  s."submittedDate" DESC NULLS LAST,
+                  s."createdAt" DESC NULLS LAST,
+                  s."updatedAt" DESC NULLS LAST,
+                  s."id" DESC
+              ) = 1 THEN TRUE
+              ELSE FALSE
+            END AS "isLatest"
+          FROM ${ReviewService.SUBMISSION_TABLE} s
+          WHERE s."challengeId" = ${challengeId}
+            AND (
+              s."type" IS NULL
+              OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+            )
+        )
+        SELECT
+          rs."id" AS "submissionId",
+          rs."memberId" AS "memberId",
+          rs."submittedDate" AS "submittedDate",
+          rs."createdAt" AS "createdAt",
+          rs."updatedAt" AS "updatedAt",
+          rs."status" AS "status",
+          rs."isLatest" AS "isLatest",
+          r."initialScore" AS "initialScore",
+          r."finalScore" AS "finalScore",
+          r."scorecardId" AS "scorecardId",
+          sc."minimumPassingScore" AS "minimumPassingScore",
+          COALESCE(rt."name", r."typeId") AS "reviewTypeName",
+          sc."type" AS "scorecardType"
+        FROM ranked_submissions rs
+        LEFT JOIN ${ReviewService.REVIEW_TABLE} r
+          ON r."submissionId" = rs."id"
+          AND UPPER(COALESCE((r."status")::text, 'COMPLETED')) = 'COMPLETED'
+          AND r."committed" = true
+        LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+          ON sc."id" = r."scorecardId"
+        LEFT JOIN ${ReviewService.REVIEW_TYPE_TABLE} rt
+          ON rt."id" = r."typeId"
+      `,
+    );
+
+    if (!rows.length) {
+      return [];
+    }
+
+    interface ChallengeResultAccumulator {
+      submissionId: string;
+      memberId: string | null;
+      submittedDate: Date | null;
+      createdAt: Date | null;
+      updatedAt: Date | null;
+      status: string | null;
+      isLatest: boolean;
+      primaryInitialSum: number;
+      primaryFinalSum: number;
+      primaryCount: number;
+      primaryPassingScore: number | null;
+      fallbackInitialSum: number;
+      fallbackFinalSum: number;
+      fallbackCount: number;
+      fallbackPassingScore: number | null;
+    }
+
+    const candidatesBySubmission = new Map<
+      string,
+      ChallengeResultAccumulator
+    >();
+
+    for (const row of rows) {
+      const submissionId = row.submissionId;
+      if (!submissionId) {
+        continue;
+      }
+
+      let accumulator = candidatesBySubmission.get(submissionId);
+      if (!accumulator) {
+        accumulator = {
+          submissionId,
+          memberId: row.memberId ?? null,
+          submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+          createdAt: row.createdAt ? new Date(row.createdAt) : null,
+          updatedAt: row.updatedAt ? new Date(row.updatedAt) : null,
+          status: row.status ?? null,
+          isLatest: Boolean(row.isLatest),
+          primaryInitialSum: 0,
+          primaryFinalSum: 0,
+          primaryCount: 0,
+          primaryPassingScore: null,
+          fallbackInitialSum: 0,
+          fallbackFinalSum: 0,
+          fallbackCount: 0,
+          fallbackPassingScore: null,
+        };
+        candidatesBySubmission.set(submissionId, accumulator);
+      }
+
+      const normalizedInitialScore = Number(
+        row.initialScore ?? row.finalScore ?? Number.NaN,
+      );
+      const normalizedFinalScore = Number(
+        row.finalScore ?? row.initialScore ?? Number.NaN,
+      );
+      const hasScore =
+        Number.isFinite(normalizedInitialScore) &&
+        Number.isFinite(normalizedFinalScore);
+
+      const reviewTypeName = row.reviewTypeName ?? null;
+      const scorecardType = row.scorecardType ?? null;
+
+      if (hasScore && ReviewService.isFinalReviewType(reviewTypeName)) {
+        accumulator.primaryInitialSum += normalizedInitialScore;
+        accumulator.primaryFinalSum += normalizedFinalScore;
+        accumulator.primaryCount += 1;
+        if (accumulator.primaryPassingScore === null) {
+          accumulator.primaryPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      } else if (
+        hasScore &&
+        ReviewService.isReviewScorecardType(scorecardType) &&
+        !ReviewService.isScreeningReviewType(reviewTypeName)
+      ) {
+        accumulator.fallbackInitialSum += normalizedInitialScore;
+        accumulator.fallbackFinalSum += normalizedFinalScore;
+        accumulator.fallbackCount += 1;
+        if (accumulator.fallbackPassingScore === null) {
+          accumulator.fallbackPassingScore = this.resolvePassingScore(
+            row.minimumPassingScore,
+          );
+        }
+      }
+    }
+
+    const candidates: ChallengeResultCandidate[] = [];
+
+    for (const accumulator of candidatesBySubmission.values()) {
+      let initialSum = accumulator.primaryInitialSum;
+      let finalSum = accumulator.primaryFinalSum;
+      let count = accumulator.primaryCount;
+      let passingScore = accumulator.primaryPassingScore;
+
+      if (count === 0 && accumulator.fallbackCount > 0) {
+        initialSum = accumulator.fallbackInitialSum;
+        finalSum = accumulator.fallbackFinalSum;
+        count = accumulator.fallbackCount;
+        passingScore = accumulator.fallbackPassingScore;
+      }
+
+      const resolvedPassingScore =
+        passingScore ?? this.resolvePassingScore(null);
+      const initialScore = count > 0 ? initialSum / count : 0;
+      const finalScore = count > 0 ? finalSum / count : 0;
+
+      candidates.push({
+        submissionId: accumulator.submissionId,
+        memberId: accumulator.memberId,
+        submittedDate: accumulator.submittedDate,
+        createdAt: accumulator.createdAt,
+        updatedAt: accumulator.updatedAt,
+        status: accumulator.status,
+        isLatest: accumulator.isLatest,
+        initialScore,
+        finalScore,
+        passingScore: resolvedPassingScore,
+        passedReview: count > 0 ? finalScore >= resolvedPassingScore : false,
+        validSubmission: isValidChallengeResultStatus(accumulator.status),
+      });
+    }
+
+    return candidates;
+  }
+
+  /**
+   * Build canonical review-api `challengeResult` rows for one completed
+   * challenge without persisting them.
+   * @param challengeId Challenge whose result rows should be built.
+   * @param options Placement, rating, and audit context for the rows.
+   * @returns Canonical `challengeResult` rows keyed one-per-member.
+   * @throws Error when review data cannot be loaded.
+   */
+  async buildChallengeResultRecordsForChallenge(
+    challengeId: string,
+    options: {
+      placementWinners: ChallengeResultPlacementWinner[];
+      allowUnlimitedSubmissions: boolean;
+      ratedChallenge: boolean;
+      actor: string;
+      createdAt?: Date;
+      updatedAt?: Date;
+    },
+  ): Promise<ChallengeResultRecord[]> {
+    const candidates = await this.getChallengeResultCandidates(challengeId);
+    const createdAt = options.createdAt ?? new Date();
+    const updatedAt = options.updatedAt ?? createdAt;
+
+    return buildChallengeResultRecords({
+      challengeId,
+      candidates,
+      placementWinners: options.placementWinners,
+      allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      ratedChallenge: options.ratedChallenge,
+      actor: options.actor,
+      createdAt,
+      updatedAt,
+    });
+  }
+
+  /**
+   * Upsert canonical review-api `challengeResult` rows for one challenge and
+   * delete stale rows that no longer map to a participant outcome.
+   * @param challengeId Challenge whose rows should be synchronized.
+   * @param options Placement, rating, and audit context for the rows.
+   * @returns Summary of how many rows were built, upserted, and removed.
+   * @throws Error when building or persisting rows fails.
+   */
+  async syncChallengeResultsForChallenge(
+    challengeId: string,
+    options: {
+      placementWinners: ChallengeResultPlacementWinner[];
+      allowUnlimitedSubmissions: boolean;
+      ratedChallenge: boolean;
+      actor: string;
+      createdAt?: Date;
+      updatedAt?: Date;
+    },
+  ): Promise<{
+    rowsBuilt: number;
+    rowsUpserted: number;
+    staleRowsDeleted: number;
+  }> {
+    if (!challengeId) {
+      return {
+        rowsBuilt: 0,
+        rowsUpserted: 0,
+        staleRowsDeleted: 0,
+      };
+    }
+
+    try {
+      const rows = await this.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        options,
+      );
+
+      if (!rows.length) {
+        void this.dbLogger.logAction('review.syncChallengeResults', {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            rowsBuilt: 0,
+            rowsUpserted: 0,
+            staleRowsDeleted: 0,
+          },
+        });
+        return {
+          rowsBuilt: 0,
+          rowsUpserted: 0,
+          staleRowsDeleted: 0,
+        };
+      }
+
+      const uniqueUserIds = Array.from(
+        new Set(rows.map((row) => row.userId).filter(Boolean)),
+      );
+
+      const staleRowsDeleted = await this.prisma.$transaction(async (tx) => {
+        let deletedCount = 0;
+
+        if (uniqueUserIds.length > 0) {
+          deletedCount = await tx.$executeRaw(
+            Prisma.sql`
+              DELETE FROM ${ReviewService.CHALLENGE_RESULT_TABLE}
+              WHERE "challengeId" = ${challengeId}
+                AND "userId" NOT IN (
+                  ${Prisma.join(uniqueUserIds.map((userId) => Prisma.sql`${userId}`))}
+                )
+            `,
+          );
+        }
+
+        for (const row of rows) {
+          await tx.$executeRaw(
+            Prisma.sql`
+              INSERT INTO ${ReviewService.CHALLENGE_RESULT_TABLE} (
+                "challengeId",
+                "userId",
+                "submissionId",
+                "initialScore",
+                "finalScore",
+                "placement",
+                "rated",
+                "passedReview",
+                "validSubmission",
+                "ratingOrder",
+                "createdAt",
+                "createdBy",
+                "updatedAt",
+                "updatedBy"
+              )
+              VALUES (
+                ${row.challengeId},
+                ${row.userId},
+                ${row.submissionId},
+                ${row.initialScore},
+                ${row.finalScore},
+                ${row.placement},
+                ${row.rated},
+                ${row.passedReview},
+                ${row.validSubmission},
+                ${row.ratingOrder},
+                ${row.createdAt},
+                ${row.createdBy},
+                ${row.updatedAt},
+                ${row.updatedBy}
+              )
+              ON CONFLICT ("challengeId", "userId") DO UPDATE
+              SET
+                "submissionId" = EXCLUDED."submissionId",
+                "initialScore" = EXCLUDED."initialScore",
+                "finalScore" = EXCLUDED."finalScore",
+                "placement" = EXCLUDED."placement",
+                "rated" = EXCLUDED."rated",
+                "passedReview" = EXCLUDED."passedReview",
+                "validSubmission" = EXCLUDED."validSubmission",
+                "ratingOrder" = EXCLUDED."ratingOrder",
+                "updatedAt" = EXCLUDED."updatedAt",
+                "updatedBy" = EXCLUDED."updatedBy"
+            `,
+          );
+        }
+
+        return Number(deletedCount);
+      });
+
+      void this.dbLogger.logAction('review.syncChallengeResults', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          rowsBuilt: rows.length,
+          rowsUpserted: rows.length,
+          staleRowsDeleted,
+          allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+          ratedChallenge: options.ratedChallenge,
+        },
+      });
+
+      return {
+        rowsBuilt: rows.length,
+        rowsUpserted: rows.length,
+        staleRowsDeleted,
+      };
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.syncChallengeResults', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+          allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+          ratedChallenge: options.ratedChallenge,
+        },
+      });
+      throw err;
+    }
+  }
+
   private composeKey(resourceId: string, submissionId: string): string {
     return `${resourceId}:${submissionId}`;
   }
@@ -1977,6 +2737,114 @@ export class ReviewService {
         status: 'ERROR',
         source: ReviewService.name,
         details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  async getPendingAiDecisionsEscalationsCount(
+    challengeId: string,
+  ): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_REVIEW_DECISION_ESCALATION_TABLE} aides
+      INNER JOIN ${ReviewService.AI_REVIEW_DECISION_TABLE} aid
+        ON aid."id" = aides."aiReviewDecisionId"
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = aid."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND aides."status" = 'PENDING_APPROVAL'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction(
+        'review.getPendingAiDecisionsEscalationsCount',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            pendingAiDecisionsEscalations: count,
+          },
+        },
+      );
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction(
+        'review.getPendingAiDecisionsEscalationsCount',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            error: err.message,
+          },
+        },
+      );
+      throw err;
+    }
+  }
+
+  async getInProgressAiWorkflowRunCount(
+    challengeId: string,
+    aiWorkflowIds: string[],
+  ): Promise<number> {
+    const normalizedWorkflowIds = Array.from(
+      new Set(
+        (aiWorkflowIds ?? [])
+          .map((workflowId) => workflowId?.trim())
+          .filter((workflowId): workflowId is string => Boolean(workflowId)),
+      ),
+    );
+
+    if (!challengeId || normalizedWorkflowIds.length === 0) {
+      return 0;
+    }
+
+    const inProgressStatuses = ['INIT', 'QUEUED', 'DISPATCHED', 'IN_PROGRESS'];
+
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_WORKFLOW_RUN_TABLE} awr
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = awr."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND awr."workflowId" IN (${Prisma.join(normalizedWorkflowIds)})
+        AND UPPER((awr."status")::text) IN (${Prisma.join(inProgressStatuses)})
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          workflowCount: normalizedWorkflowIds.length,
+          inProgressCount: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getInProgressAiWorkflowRunCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          workflowCount: normalizedWorkflowIds.length,
           error: err.message,
         },
       });

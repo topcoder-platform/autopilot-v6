@@ -19,6 +19,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:flows": "tsx scripts/run-autopilot-flows.ts",
+    "backfill:challenge-results": "tsx scripts/backfill-challenge-results.ts",
     "prisma:generate": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma",
     "postinstall": "prisma generate --schema prisma/challenge.schema.prisma && prisma generate --schema prisma/autopilot.schema.prisma && patch-package",
     "prisma:pushautopilot": "prisma db push --schema prisma/autopilot.schema.prisma",

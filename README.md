@@ -56,6 +56,11 @@ Open the `.env` file and configure the variables for your environment. It is cru
   # -------------------------------------
   CHALLENGE_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
 
+  # -------------------------------------
+  # Review Database Configuration
+  # -------------------------------------
+  REVIEW_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
+
    # -------------------------------------
    # Auth0 Configuration
    # -------------------------------------
@@ -65,6 +70,19 @@ Open the `.env` file and configure the variables for your environment. It is cru
    AUTH0_DOMAIN=<your-auth0-domain> # <-- IMPORTANT: REPLACE THIS
    AUTH0_AUDIENCE=<your-auth0-audience> # <-- IMPORTANT: REPLACE THIS
    AUTH0_PROXY_SEREVR_URL=
+
+   # -------------------------------------
+   # Marathon Match Review Integration
+   # -------------------------------------
+   MARATHON_MATCH_API_URL=https://api.topcoder-dev.com
+   MARATHON_MATCH_API_TIMEOUT_MS=15000
+   MARATHON_MATCH_SYSTEM_RESOURCE_ID=<fixed-system-reviewer-resource-id>
+
+   # -------------------------------------
+   # Member API Integration
+   # -------------------------------------
+   MEMBER_API_URL=http://member-api:3000
+   MEMBER_API_TIMEOUT_MS=15000
 
    # -------------------------------------
    # Sync Service Configuration
@@ -140,6 +158,16 @@ npm run start:dev
 # Lint
 $ npm run lint
 
+```
+
+- **Backfill review challenge results**:
+
+```bash
+# Preview derived rows without writing them
+pnpm backfill:challenge-results --dry-run --limit 10
+
+# Backfill specific completed challenges
+pnpm backfill:challenge-results --challengeId <challenge-id>[,<challenge-id>]
 ```
 
 ## API Endpoints
@@ -257,6 +285,13 @@ The autopilot service uses a flexible logging strategy that adapts to different 
 - `LOG_LEVEL`: Controls log verbosity (`error`, `warn`, `info`, `debug`, `verbose`)
 - `LOG_DIR`: Directory for log files (default: `logs`)
 - `ENABLE_FILE_LOGGING`: Boolean flag to control file logging in production
+
+### Member API Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MEMBER_API_URL` | No | _(disabled)_ | Base URL of member-api-v6, e.g. `http://member-api:3000` |
+| `MEMBER_API_TIMEOUT_MS` | No | `15000` | HTTP timeout for member-api calls |
 
 ### ECS Deployment Notes
 When deploying to ECS, ensure:

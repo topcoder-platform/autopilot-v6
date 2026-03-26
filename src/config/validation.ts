@@ -68,6 +68,12 @@ export const validationSchema = Joi.object({
     .integer()
     .positive()
     .default(15000),
+  MARATHON_MATCH_API_URL: Joi.string().uri().optional(),
+  MARATHON_MATCH_API_TIMEOUT_MS: Joi.number()
+    .integer()
+    .positive()
+    .default(15000),
+  MARATHON_MATCH_SYSTEM_RESOURCE_ID: Joi.string().optional().allow(null, ''),
   POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   TOPGEAR_POST_MORTEM_SCORECARD_ID: Joi.string().optional().allow(null, ''),
   POST_MORTEM_DURATION_HOURS: Joi.number().integer().positive().default(72),
@@ -127,6 +133,8 @@ export const validationSchema = Joi.object({
   // Finance API (optional but recommended)
   FINANCE_API_URL: Joi.string().uri().optional(),
   FINANCE_API_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
+  MEMBER_API_URL: Joi.string().uri().optional(),
+  MEMBER_API_TIMEOUT_MS: Joi.number().integer().positive().default(15000),
 
   // Sync Service Configuration
   // Default sync cadence set to every 3 minutes

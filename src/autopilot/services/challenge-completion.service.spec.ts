@@ -7,6 +7,7 @@ import type {
 } from '../../review/review.service';
 import type { ResourcesService } from '../../resources/resources.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
+import type { MemberApiService } from '../../member-api/member-api.service';
 import type { KafkaService } from '../../kafka/kafka.service';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
@@ -16,6 +17,7 @@ import type {
 } from '../../challenge/interfaces/challenge.interface';
 import type { ConfigService } from '@nestjs/config';
 import type { ReviewSummationApiService } from './review-summation-api.service';
+import type { MarathonMatchApiService } from '../../marathon-match/marathon-match-api.service';
 
 describe('ChallengeCompletionService', () => {
   let challengeApiService: {
@@ -38,6 +40,9 @@ describe('ChallengeCompletionService', () => {
   let reviewService: {
     generateReviewSummaries: jest.MockedFunction<
       ReviewService['generateReviewSummaries']
+    >;
+    syncChallengeResultsForChallenge: jest.MockedFunction<
+      ReviewService['syncChallengeResultsForChallenge']
     >;
     getScorecardIdByName: jest.MockedFunction<
       ReviewService['getScorecardIdByName']
@@ -65,6 +70,14 @@ describe('ChallengeCompletionService', () => {
       FinanceApiService['generateChallengePayments']
     >;
   };
+  let memberApiService: {
+    refreshMemberStats: jest.MockedFunction<
+      MemberApiService['refreshMemberStats']
+    >;
+    rerateMemberStats: jest.MockedFunction<
+      MemberApiService['rerateMemberStats']
+    >;
+  };
   let kafkaService: {
     produce: jest.MockedFunction<KafkaService['produce']>;
   };
@@ -72,6 +85,12 @@ describe('ChallengeCompletionService', () => {
     get: jest.MockedFunction<ConfigService['get']>;
   };
   let reviewSummationApiService: jest.Mocked<ReviewSummationApiService>;
+  let finalizeSummationsMock: jest.MockedFunction<
+    ReviewSummationApiService['finalizeSummations']
+  >;
+  let marathonMatchApiService: {
+    getConfig: jest.MockedFunction<MarathonMatchApiService['getConfig']>;
+  };
   let service: ChallengeCompletionService;
 
   const baseTimestamp = '2024-01-01T00:00:00.000Z';
@@ -108,8 +127,8 @@ describe('ChallengeCompletionService', () => {
     terms: [],
     skills: [],
     attachments: [],
-    track: 'track',
-    type: 'type',
+    track: 'Development',
+    type: 'Challenge',
     legacy: {},
     task: { isTask: false, isAssigned: false, memberId: null },
     created: baseTimestamp,
@@ -311,6 +330,11 @@ describe('ChallengeCompletionService', () => {
 
     reviewService = {
       generateReviewSummaries: jest.fn().mockResolvedValue(summaries),
+      syncChallengeResultsForChallenge: jest.fn().mockResolvedValue({
+        rowsBuilt: 0,
+        rowsUpserted: 0,
+        staleRowsDeleted: 0,
+      }),
       getScorecardIdByName: jest.fn().mockResolvedValue(null),
       createPendingReview: jest.fn().mockResolvedValue(true),
       getTopCheckpointReviewScores: jest.fn().mockResolvedValue([]),
@@ -336,6 +360,18 @@ describe('ChallengeCompletionService', () => {
       >;
     };
 
+    memberApiService = {
+      refreshMemberStats: jest.fn().mockResolvedValue(true),
+      rerateMemberStats: jest.fn().mockResolvedValue(true),
+    } as unknown as {
+      refreshMemberStats: jest.MockedFunction<
+        MemberApiService['refreshMemberStats']
+      >;
+      rerateMemberStats: jest.MockedFunction<
+        MemberApiService['rerateMemberStats']
+      >;
+    };
+
     kafkaService = {
       produce: jest.fn().mockResolvedValue(undefined),
     };
@@ -344,24 +380,38 @@ describe('ChallengeCompletionService', () => {
       get: jest.fn().mockReturnValue(null),
     };
 
+    finalizeSummationsMock = jest
+      .fn()
+      .mockResolvedValue(true) as jest.MockedFunction<
+      ReviewSummationApiService['finalizeSummations']
+    >;
     reviewSummationApiService = {
-      finalizeSummations: jest.fn().mockResolvedValue(true),
+      finalizeSummations: finalizeSummationsMock,
     } as unknown as jest.Mocked<ReviewSummationApiService>;
+
+    marathonMatchApiService = {
+      getConfig: jest.fn().mockResolvedValue(null),
+    };
 
     service = new ChallengeCompletionService(
       challengeApiService as unknown as ChallengeApiService,
       reviewService as unknown as ReviewService,
       resourcesService as unknown as ResourcesService,
       financeApiService as unknown as FinanceApiService,
+      memberApiService as unknown as MemberApiService,
       reviewSummationApiService as unknown as ReviewSummationApiService,
       configService as unknown as ConfigService,
       kafkaService as unknown as KafkaService,
+      marathonMatchApiService as unknown as MarathonMatchApiService,
     );
   });
 
-  it('triggers finance payments when challenge is already COMPLETED', async () => {
+  it('replays finance and member stats when challenge is already COMPLETED', async () => {
     const challenge = buildChallenge({
       status: ChallengeStatusEnum.COMPLETED,
+      trackId: '11111111-1111-1111-1111-111111111111',
+      typeId: '22222222-2222-2222-2222-222222222222',
+      metadata: { rated: 'true' },
       winners: [
         {
           userId: 101,
@@ -378,10 +428,32 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).not.toHaveBeenCalled();
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(0);
     expect(challengeApiService.completeChallenge).not.toHaveBeenCalled();
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
+    );
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ratedChallenge: true,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+        ],
+      }),
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(1);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+    );
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(1);
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+      'DEVELOP',
+      'Challenge',
     );
   });
 
@@ -403,32 +475,46 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(1);
+    expect(finalizeSummationsMock.mock.calls[0]).toEqual([challenge.id]);
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
-    expect(kafkaService.produce).toHaveBeenCalledWith(
-      KAFKA_TOPICS.CHALLENGE_UPDATED,
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
       expect.objectContaining({
-        topic: KAFKA_TOPICS.CHALLENGE_UPDATED,
-        payload: expect.objectContaining({
-          id: challenge.id,
-          status: ChallengeStatusEnum.COMPLETED,
-          winners: expect.arrayContaining([
-            expect.objectContaining({ userId: 101, placement: 1 }),
-            expect.objectContaining({ userId: 102, placement: 2 }),
-          ]),
-        }),
+        ratedChallenge: false,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+          expect.objectContaining({ userId: 102, placement: 2 }),
+        ],
       }),
     );
+    const produceCall = kafkaService.produce.mock.calls[0];
+    expect(produceCall[0]).toBe(KAFKA_TOPICS.CHALLENGE_UPDATED);
+    const producedMessage = produceCall[1] as {
+      topic: string;
+      payload: {
+        id: string;
+        status: ChallengeStatusEnum;
+        winners: Array<{ userId: number; placement: number }>;
+      };
+    };
+    expect(producedMessage.topic).toBe(KAFKA_TOPICS.CHALLENGE_UPDATED);
+    expect(producedMessage.payload.id).toBe(challenge.id);
+    expect(producedMessage.payload.status).toBe(ChallengeStatusEnum.COMPLETED);
+    expect(producedMessage.payload.winners).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: 101, placement: 1 }),
+        expect.objectContaining({ userId: 102, placement: 2 }),
+      ]),
+    );
 
-    const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
+    const completeChallengeCall =
+      challengeApiService.completeChallenge.mock.calls[0];
+    const winners = completeChallengeCall[1];
     expect(winners).toHaveLength(3);
     expect(winners[0]).toMatchObject({
       userId: 101,
@@ -454,6 +540,9 @@ describe('ChallengeCompletionService', () => {
     const challenge = buildChallenge({
       prizeSets: [buildPlacementPrizeSet(3)],
       numOfSubmissions: 3,
+      trackId: '33333333-3333-3333-3333-333333333333',
+      typeId: '44444444-4444-4444-4444-444444444444',
+      metadata: { rated: 'true' },
     });
 
     const duplicateSummaries: SubmissionSummary[] = [
@@ -500,14 +589,12 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(1);
+    expect(finalizeSummationsMock.mock.calls[0]).toEqual([challenge.id]);
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
-    const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
+    const completeChallengeCall =
+      challengeApiService.completeChallenge.mock.calls[0];
+    const winners = completeChallengeCall[1];
 
     expect(winners).toHaveLength(3);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 101, 102]);
@@ -520,12 +607,35 @@ describe('ChallengeCompletionService', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user102',
+      challenge.id,
+    );
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+      'DEVELOP',
+      'Challenge',
+    );
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
+      'user102',
+      challenge.id,
+      'DEVELOP',
+      'Challenge',
+    );
   });
 
-  it('falls back to all passing submissions when no placement prizes exist', async () => {
+  it('skips rerate when metadata marks the challenge as unrated', async () => {
     const challenge = buildChallenge({
-      prizeSets: [],
+      prizeSets: [buildPlacementPrizeSet(2)],
       numOfSubmissions: 3,
+      metadata: { unrated: true } as unknown as IChallenge['metadata'],
     });
 
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
@@ -533,18 +643,48 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
+  });
+
+  it('skips rerate when rating metadata is absent', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildPlacementPrizeSet(2)],
+      numOfSubmissions: 3,
+      metadata: {},
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
+  });
+
+  it('falls back to all passing submissions when no placement prizes exist', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [],
+      numOfSubmissions: 3,
+      metadata: { isRated: 'true' },
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(1);
+    expect(finalizeSummationsMock.mock.calls[0]).toEqual([challenge.id]);
     expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       challenge.id,
     );
 
-    const [, winners] = challengeApiService.completeChallenge.mock.calls[0];
+    const completeChallengeCall =
+      challengeApiService.completeChallenge.mock.calls[0];
+    const winners = completeChallengeCall[1];
     expect(winners).toHaveLength(summaries.length);
     expect(winners.map((winner) => winner.userId)).toEqual([101, 102, 103]);
     expect(winners.map((winner) => winner.type)).toEqual([
@@ -552,6 +692,115 @@ describe('ChallengeCompletionService', () => {
       PrizeSetTypeEnum.PLACEMENT,
       PrizeSetTypeEnum.PLACEMENT,
     ]);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(3);
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(3);
+  });
+
+  it('triggers member stats refresh and rerate after explicit winner completion', async () => {
+    const challenge = buildChallenge({
+      status: ChallengeStatusEnum.ACTIVE,
+      numOfSubmissions: 2,
+      track: 'Data Science',
+      type: 'Marathon Match',
+      trackId: '55555555-5555-5555-5555-555555555555',
+      typeId: '66666666-6666-6666-6666-666666666666',
+      metadata: { rated: 'true' },
+    });
+    const winners = [
+      {
+        userId: 101,
+        handle: 'user101',
+        placement: 1,
+        type: PrizeSetTypeEnum.PLACEMENT,
+      },
+      {
+        userId: 101,
+        handle: 'user101',
+        placement: 2,
+        type: PrizeSetTypeEnum.PASSED_REVIEW,
+      },
+      {
+        userId: 102,
+        handle: 'user102',
+        placement: 3,
+        type: PrizeSetTypeEnum.PASSED_REVIEW,
+      },
+    ];
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    await service.completeChallengeWithWinners(challenge.id, winners, {
+      reason: 'manual completion',
+    });
+    await Promise.resolve();
+
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ratedChallenge: true,
+        allowUnlimitedSubmissions: false,
+        placementWinners: [
+          expect.objectContaining({ userId: 101, placement: 1 }),
+        ],
+      }),
+    );
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user102',
+      challenge.id,
+    );
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+      'DATA_SCIENCE',
+      'MARATHON_MATCH',
+    );
+    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
+      'user102',
+      challenge.id,
+      'DATA_SCIENCE',
+      'MARATHON_MATCH',
+    );
+  });
+
+  it('skips rerate for normalized track and type pairs not supported by member-api', async () => {
+    const challenge = buildChallenge({
+      status: ChallengeStatusEnum.ACTIVE,
+      numOfSubmissions: 2,
+      track: 'Data Science',
+      type: 'Challenge',
+      metadata: { rated: 'true' },
+    });
+
+    const winners = [
+      {
+        userId: 101,
+        handle: 'user101',
+        placement: 1,
+        type: PrizeSetTypeEnum.PLACEMENT,
+      },
+    ];
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    await service.completeChallengeWithWinners(challenge.id, winners, {
+      reason: 'manual completion',
+    });
+    await Promise.resolve();
+
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user101',
+      challenge.id,
+    );
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
   it('creates post-mortem reviews for reviewers and copilots when zero submissions trigger cancellation', async () => {
@@ -654,12 +903,8 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(1);
+    expect(finalizeSummationsMock.mock.calls[0]).toEqual([challenge.id]);
     expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
       challenge.id,
       ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
@@ -752,12 +997,8 @@ describe('ChallengeCompletionService', () => {
     const result = await service.finalizeChallenge(challenge.id);
 
     expect(result).toBe(true);
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(reviewSummationApiService.finalizeSummations).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(finalizeSummationsMock.mock.calls).toHaveLength(1);
+    expect(finalizeSummationsMock.mock.calls[0]).toEqual([challenge.id]);
     expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
       challenge.id,
       ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,

@@ -12,7 +12,7 @@ describe('ReviewService', () => {
   let service: ReviewService;
 
   beforeEach(() => {
-    const executeRawMock = jest.fn().mockResolvedValue(undefined);
+    const executeRawMock = jest.fn().mockResolvedValue(0);
     prismaMock = {
       $queryRaw: jest.fn(),
       $executeRaw: executeRawMock,
@@ -22,9 +22,9 @@ describe('ReviewService', () => {
           async (
             callback: (tx: {
               $executeRaw: typeof executeRawMock;
-            }) => Promise<void>,
+            }) => Promise<unknown>,
           ) => {
-            await callback({ $executeRaw: executeRawMock });
+            return callback({ $executeRaw: executeRawMock });
           },
         ),
     };
@@ -123,6 +123,185 @@ describe('ReviewService', () => {
           details: expect.objectContaining({
             dataSource: 'reviewSummaries',
             winnersCount: 1,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('buildChallengeResultRecordsForChallenge', () => {
+    it('prefers the latest submission when submissions are limited', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'older-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 99,
+          finalScore: 99,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'latest-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 88,
+          finalScore: 88,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'latest-submission',
+          initialScore: 88,
+          finalScore: 88,
+          placement: 1,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+
+    it('prefers the strongest passing submission when submissions are unlimited', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'best-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 95,
+          finalScore: 97,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'latest-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 80,
+          finalScore: 82,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'best-submission',
+          initialScore: 95,
+          finalScore: 97,
+          placement: 1,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+  });
+
+  describe('syncChallengeResultsForChallenge', () => {
+    it('upserts built rows and deletes stale challenge rows', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'submission-1',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 90,
+          finalScore: 91,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+      prismaMock.$executeRaw.mockResolvedValueOnce(2).mockResolvedValueOnce(1);
+
+      const result = await service.syncChallengeResultsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(result).toEqual({
+        rowsBuilt: 1,
+        rowsUpserted: 1,
+        staleRowsDeleted: 2,
+      });
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(2);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.syncChallengeResults',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            rowsBuilt: 1,
+            rowsUpserted: 1,
+            staleRowsDeleted: 2,
           }),
         }),
       );
@@ -262,6 +441,217 @@ describe('ReviewService', () => {
           status: 'SUCCESS',
           details: expect.objectContaining({
             failedSubmissionCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('getMarathonMatchReviewReadiness', () => {
+    const phaseId = 'phase-review';
+
+    it('returns zero counts when challengeId or phaseId is missing', async () => {
+      const result = await service.getMarathonMatchReviewReadiness(
+        challengeId,
+        '',
+      );
+
+      expect(result).toEqual({
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+      });
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+      expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
+    });
+
+    it('returns latest-submission review readiness counts and logs success', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        {
+          expectedSubmissionCount: '3',
+          reviewedSubmissionCount: '2',
+          completedSubmissionCount: '1',
+        },
+      ]);
+
+      const readiness = await service.getMarathonMatchReviewReadiness(
+        challengeId,
+        phaseId,
+      );
+
+      expect(readiness).toEqual({
+        expectedSubmissionCount: 3,
+        reviewedSubmissionCount: 2,
+        completedSubmissionCount: 1,
+      });
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('ROW_NUMBER() OVER');
+      expect(sqlText).toContain('latest_submissions');
+      expect(sqlText).toContain('completedSubmissionCount');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getMarathonMatchReviewReadiness',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            phaseId,
+            expectedSubmissionCount: 3,
+            reviewedSubmissionCount: 2,
+            completedSubmissionCount: 1,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('getAiFailedDecisionSubmissionIds', () => {
+    it('returns empty set when no submission ids are provided', async () => {
+      const result = await service.getAiFailedDecisionSubmissionIds(
+        challengeId,
+        [],
+      );
+
+      expect(result).toEqual(new Set());
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('returns failed submission ids when ai decision status is FAILED or ERROR', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        { submissionId: 'submission-1' },
+        { submissionId: 'submission-2' },
+      ]);
+
+      const result = await service.getAiFailedDecisionSubmissionIds(
+        challengeId,
+        ['submission-1', 'submission-2', 'submission-3'],
+      );
+
+      expect(result).toEqual(new Set(['submission-1', 'submission-2']));
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('"aiReviewDecision"');
+      expect(sqlText).toContain('"aiReviewConfig"');
+      expect(sqlText).toContain("'FAILED', 'ERROR'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getAiFailedDecisionSubmissionIds',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            evaluatedSubmissionCount: 3,
+            aiFailedSubmissionCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('markSubmissionsAsAiFailedReview', () => {
+    it('returns 0 when submission ids are missing', async () => {
+      const result = await service.markSubmissionsAsAiFailedReview(
+        challengeId,
+        [],
+      );
+
+      expect(result).toBe(0);
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('updates submission status to AI_FAILED_REVIEW and logs success', async () => {
+      prismaMock.$executeRaw.mockResolvedValueOnce(2);
+
+      const result = await service.markSubmissionsAsAiFailedReview(
+        challengeId,
+        ['submission-1', 'submission-2'],
+      );
+
+      expect(result).toBe(2);
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$executeRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain("'AI_FAILED_REVIEW'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.markSubmissionsAsAiFailedReview',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            submissionCount: 2,
+            updatedCount: 2,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('getPendingAiDecisionsEscalationsCount', () => {
+    it('returns pending AI escalation count when query succeeds', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '3' }]);
+
+      const result = await service.getPendingAiDecisionsEscalationsCount(
+        challengeId,
+      );
+
+      expect(result).toBe(3);
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('"aiReviewDecisionEscalation"');
+      expect(sqlText).toContain('"aiReviewDecision"');
+      expect(sqlText).toContain('"submission"');
+      expect(sqlText).toContain("'PENDING_APPROVAL'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getPendingAiDecisionsEscalationsCount',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            pendingAiDecisionsEscalations: 3,
+          }),
+        }),
+      );
+    });
+
+    it('logs error and rethrows when query fails', async () => {
+      prismaMock.$queryRaw.mockRejectedValueOnce(new Error('query failed'));
+
+      await expect(
+        service.getPendingAiDecisionsEscalationsCount(challengeId),
+      ).rejects.toThrow('query failed');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getPendingAiDecisionsEscalationsCount',
+        expect.objectContaining({
+          status: 'ERROR',
+          details: expect.objectContaining({
+            error: 'query failed',
           }),
         }),
       );
@@ -424,10 +814,12 @@ describe('ReviewService', () => {
       legacySubmissionId: 'legacy-1',
       memberId: '123456',
       submittedDate: '2024-10-21T10:00:00.000Z',
-      aggregateScore: '95',
+      finalScore: '95',
       scorecardId: 'scorecard-1',
       scorecardLegacyId: 'legacy-scorecard',
       minimumPassingScore: '80',
+      reviewTypeName: 'Final Review',
+      scorecardType: 'REVIEW',
       ...overrides,
     });
 

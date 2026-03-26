@@ -18,6 +18,8 @@ import { Auth0Module } from '../auth/auth0.module';
 import { PhaseChangeNotificationService } from './services/phase-change-notification.service';
 import { FinanceModule } from '../finance/finance.module';
 import { ReviewSummationApiService } from './services/review-summation-api.service';
+import { MarathonMatchModule } from '../marathon-match/marathon-match.module';
+import { MemberApiModule } from '../member-api/member-api.module';
 
 @Module({
   imports: [
@@ -32,6 +34,8 @@ import { ReviewSummationApiService } from './services/review-summation-api.servi
     MembersModule,
     Auth0Module,
     FinanceModule,
+    MemberApiModule,
+    MarathonMatchModule,
   ],
   providers: [
     AutopilotService,
