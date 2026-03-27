@@ -14,6 +14,7 @@ describe('SyncService', () => {
   };
   let schedulerService: {
     getAllScheduledTransitionsWithData: jest.Mock;
+    buildJobId: jest.Mock;
   };
 
   beforeEach(() => {
@@ -30,6 +31,11 @@ describe('SyncService', () => {
 
     schedulerService = {
       getAllScheduledTransitionsWithData: jest.fn().mockReturnValue(new Map()),
+      buildJobId: jest
+        .fn()
+        .mockImplementation((challengeId: string, phaseId: string) => {
+          return `${challengeId}|${phaseId}`;
+        }),
     };
 
     service = new SyncService(
@@ -157,5 +163,67 @@ describe('SyncService', () => {
       status: 'CANCELLED_FAILED_REVIEW',
       operator: AutopilotOperator.SYSTEM_SYNC,
     });
+  });
+
+  it('matches scheduled jobs by BullMQ job ID and cancels obsolete job IDs safely', async () => {
+    const challengeId = 'challenge-active';
+    const phaseId = 'phase-active';
+    const activeJobId = `${challengeId}|${phaseId}`;
+    const obsoleteJobId = 'challenge-obsolete|phase-obsolete';
+    const scheduledEndDate = '2026-03-31T09:42:04.567Z';
+
+    schedulerService.getAllScheduledTransitionsWithData.mockReturnValue(
+      new Map([
+        [
+          activeJobId,
+          {
+            date: scheduledEndDate,
+            state: 'END',
+          },
+        ],
+        [
+          obsoleteJobId,
+          {
+            date: '2026-03-30T09:42:04.567Z',
+            state: 'END',
+          },
+        ],
+      ]),
+    );
+
+    challengeApiService.getAllActiveChallenges.mockImplementation(
+      ({ status }: { status?: string }) => {
+        if (status === 'ACTIVE') {
+          return [
+            {
+              id: challengeId,
+              projectId: 999,
+              status: 'ACTIVE',
+              phases: [
+                {
+                  id: phaseId,
+                  name: 'Review',
+                  isOpen: true,
+                  actualEndDate: null,
+                  scheduledEndDate,
+                },
+              ],
+            },
+          ];
+        }
+
+        return [];
+      },
+    );
+
+    await service.synchronizeChallenges();
+
+    expect(autopilotService.schedulePhaseTransition).not.toHaveBeenCalled();
+    expect(autopilotService.reschedulePhaseTransition).not.toHaveBeenCalled();
+    expect(autopilotService.cancelPhaseTransition).toHaveBeenCalledTimes(1);
+    expect(autopilotService.cancelPhaseTransition).toHaveBeenCalledWith(
+      'challenge-obsolete',
+      'phase-obsolete',
+    );
   });
 });
