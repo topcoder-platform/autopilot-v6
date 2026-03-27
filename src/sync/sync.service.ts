@@ -47,9 +47,9 @@ export class SyncService {
 
       const scheduledJobs =
         this.schedulerService.getAllScheduledTransitionsWithData();
-      const scheduledPhaseKeys = new Set(scheduledJobs.keys());
+      const scheduledJobIds = new Set(scheduledJobs.keys());
 
-      const activePhaseKeys = new Set<string>();
+      const activeJobIds = new Set<string>();
       const now = new Date();
 
       // 1. Add/update schedules for active challenges
@@ -103,9 +103,10 @@ export class SyncService {
           if (!scheduleDate) continue;
 
           const phaseKey = `${challenge.id}:${phase.id}`;
-          activePhaseKeys.add(phaseKey);
+          const jobId = this.schedulerService.buildJobId(challenge.id, phase.id);
+          activeJobIds.add(jobId);
 
-          const scheduledJob = scheduledJobs.get(phaseKey);
+          const scheduledJob = scheduledJobs.get(jobId);
 
           const phaseData: PhaseTransitionPayload = {
             projectId: challenge.projectId,
@@ -143,15 +144,23 @@ export class SyncService {
       }
 
       // 2. Remove obsolete schedules
-      for (const scheduledPhaseKey of scheduledPhaseKeys) {
-        if (!activePhaseKeys.has(scheduledPhaseKey)) {
+      for (const scheduledJobId of scheduledJobIds) {
+        if (!activeJobIds.has(scheduledJobId)) {
           this.logger.log(
-            `Obsolete schedule found: ${scheduledPhaseKey}. Cancelling...`,
+            `Obsolete schedule found: ${scheduledJobId}. Cancelling...`,
           );
-          const [challengeId, phaseId] = scheduledPhaseKey.split(':');
+
+          const parsedJob = this.parseScheduledJobId(scheduledJobId);
+          if (!parsedJob) {
+            this.logger.warn(
+              `Unable to parse scheduled job ID ${scheduledJobId}; skipping cancellation.`,
+            );
+            continue;
+          }
+
           await this.autopilotService.cancelPhaseTransition(
-            challengeId,
-            phaseId,
+            parsedJob.challengeId,
+            parsedJob.phaseId,
           );
           removed++;
         }
@@ -167,6 +176,31 @@ export class SyncService {
       const err = error as Error;
       this.logger.error('Challenge synchronization failed', err.stack);
     }
+  }
+
+  private parseScheduledJobId(
+    jobId: string,
+  ): { challengeId: string; phaseId: string } | null {
+    if (!jobId) {
+      return null;
+    }
+
+    const delimiter = jobId.includes('|')
+      ? '|'
+      : jobId.includes(':')
+        ? ':'
+        : null;
+
+    if (!delimiter) {
+      return null;
+    }
+
+    const [challengeId, phaseId] = jobId.split(delimiter);
+    if (!challengeId || !phaseId) {
+      return null;
+    }
+
+    return { challengeId, phaseId };
   }
 
   /**

@@ -43,6 +43,7 @@ export class PhaseScheduleManager {
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
   private readonly challengeStatusCache: Map<string, string>;
+  private readonly processedOpenPhaseFingerprints: Map<string, string>;
   private static readonly OVERDUE_PHASE_GRACE_PERIOD_MS = 60_000;
   private static readonly PAYABLE_CHALLENGE_STATUSES = new Set([
     'COMPLETED',
@@ -94,6 +95,7 @@ export class PhaseScheduleManager {
     );
 
     this.challengeStatusCache = new Map<string, string>();
+    this.processedOpenPhaseFingerprints = new Map<string, string>();
   }
 
   async schedulePhaseTransition(
@@ -407,6 +409,11 @@ export class PhaseScheduleManager {
       );
 
       if (openPhasesRequiringScorecards.length > 0) {
+        this.pruneOpenPhaseProcessingState(
+          challengeDetails.id,
+          openPhasesRequiringScorecards,
+        );
+
         const phaseNames = openPhasesRequiringScorecards
           .map((phase) => phase.name)
           .join(', ');
@@ -416,6 +423,21 @@ export class PhaseScheduleManager {
 
         let processedCount = 0;
         for (const phase of openPhasesRequiringScorecards) {
+          const phaseKey = this.buildOpenPhaseProcessingKey(
+            challengeDetails.id,
+            phase.id,
+          );
+          const phaseFingerprint = this.buildOpenPhaseFingerprint(phase);
+          const lastProcessedFingerprint =
+            this.processedOpenPhaseFingerprints.get(phaseKey);
+
+          if (lastProcessedFingerprint === phaseFingerprint) {
+            this.logger.debug(
+              `[MANUAL PHASE DETECTION] Skipping unchanged open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}; already processed for current phase-open fingerprint.`,
+            );
+            continue;
+          }
+
           try {
             this.logger.log(
               `[MANUAL PHASE DETECTION] Processing open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
@@ -441,6 +463,10 @@ export class PhaseScheduleManager {
             await this.phaseReviewService.handlePhaseOpenedForChallenge(
               challengeDetails,
               phase.id,
+            );
+            this.processedOpenPhaseFingerprints.set(
+              phaseKey,
+              phaseFingerprint,
             );
             processedCount += 1;
             this.logger.log(
@@ -516,6 +542,40 @@ export class PhaseScheduleManager {
       `[FINANCE] Challenge ${challengeId} transitioned to ${currentStatus}; triggering payment generation.`,
     );
     void this.financeApiService.generateChallengePayments(challengeId);
+  }
+
+  private buildOpenPhaseProcessingKey(
+    challengeId: string,
+    phaseId: string,
+  ): string {
+    return `${challengeId}|${phaseId}`;
+  }
+
+  private buildOpenPhaseFingerprint(phase: IPhase): string {
+    const effectiveStart = phase.actualStartDate ?? phase.scheduledStartDate;
+    const effectiveEnd = phase.actualEndDate ?? 'OPEN';
+    return `${phase.name}|${phase.phaseId}|${phase.isOpen ? 'OPEN' : 'CLOSED'}|${effectiveStart ?? 'UNKNOWN'}|${effectiveEnd}`;
+  }
+
+  private pruneOpenPhaseProcessingState(
+    challengeId: string,
+    openPhases: IPhase[],
+  ): void {
+    const activeKeys = new Set(
+      openPhases.map((phase) =>
+        this.buildOpenPhaseProcessingKey(challengeId, phase.id),
+      ),
+    );
+
+    for (const key of this.processedOpenPhaseFingerprints.keys()) {
+      if (!key.startsWith(`${challengeId}|`)) {
+        continue;
+      }
+
+      if (!activeKeys.has(key)) {
+        this.processedOpenPhaseFingerprints.delete(key);
+      }
+    }
   }
 
   private async createReviewOpportunitiesForChallenge(
