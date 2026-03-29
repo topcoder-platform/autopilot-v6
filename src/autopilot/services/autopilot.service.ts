@@ -104,8 +104,8 @@ export class AutopilotService {
     );
   }
 
-  handlePhaseTransition(message: PhaseTransitionPayload): void {
-    void this.phaseScheduleManager.handlePhaseTransition(message);
+  async handlePhaseTransition(message: PhaseTransitionPayload): Promise<void> {
+    await this.phaseScheduleManager.handlePhaseTransition(message);
   }
 
   async handleNewChallenge(challenge: ChallengeUpdatePayload): Promise<void> {

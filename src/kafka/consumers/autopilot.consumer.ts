@@ -98,7 +98,7 @@ export class AutopilotConsumer {
 
           switch (topic) {
             case KAFKA_TOPICS.PHASE_TRANSITION:
-              this.autopilotService.handlePhaseTransition(
+              await this.autopilotService.handlePhaseTransition(
                 payload as PhaseTransitionPayload,
               );
               break;

@@ -688,23 +688,71 @@ export class ReviewService {
     }
   }
 
-  async getActiveCheckpointSubmissionIds(
+  async getActiveCheckpointSubmissions(
     challengeId: string,
-  ): Promise<string[]> {
+  ): Promise<ActiveContestSubmission[]> {
     const query = Prisma.sql`
-      SELECT "id"
-      FROM ${ReviewService.SUBMISSION_TABLE}
-      WHERE "challengeId" = ${challengeId}
-        AND ("status" = 'ACTIVE' OR "status" IS NULL)
-        AND UPPER(("type")::text) = 'CHECKPOINT_SUBMISSION'
+      SELECT
+        s."id",
+        s."memberId",
+        CASE
+          WHEN ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(s."memberId", s."id")
+            ORDER BY
+              s."submittedDate" DESC NULLS LAST,
+              s."createdAt" DESC NULLS LAST,
+              s."updatedAt" DESC NULLS LAST,
+              s."id" DESC
+          ) = 1 THEN TRUE
+          ELSE FALSE
+        END AS "isLatest"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
     `;
 
     try {
       const submissions =
-        await this.prisma.$queryRaw<SubmissionRecord[]>(query);
-      const submissionIds = submissions
-        .map((record) => record.id)
-        .filter(Boolean);
+        await this.prisma.$queryRaw<
+          Array<{ id: string; memberId: string | null; isLatest: boolean }>
+        >(query);
+
+      const sanitized = submissions
+        .filter((record) => Boolean(record?.id))
+        .map((record) => ({
+          id: record.id,
+          memberId: record.memberId ?? null,
+          isLatest: Boolean(record.isLatest),
+        }));
+
+      void this.dbLogger.logAction('review.getActiveCheckpointSubmissions', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { submissionCount: sanitized.length },
+      });
+
+      return sanitized;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getActiveCheckpointSubmissions', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
+  async getActiveCheckpointSubmissionIds(
+    challengeId: string,
+  ): Promise<string[]> {
+    try {
+      const submissions =
+        await this.getActiveCheckpointSubmissions(challengeId);
+      const submissionIds = submissions.map((record) => record.id);
 
       void this.dbLogger.logAction('review.getActiveCheckpointSubmissionIds', {
         challengeId,
@@ -758,7 +806,9 @@ export class ReviewService {
 
     try {
       const rows = await this.prisma.$queryRaw<SubmissionRecord[]>(query);
-      const submissionIds = rows.map((r) => r.id).filter(Boolean);
+      const submissionIds = Array.from(
+        new Set(rows.map((record) => record.id).filter(Boolean)),
+      );
 
       void this.dbLogger.logAction('review.getCheckpointPassedSubmissionIds', {
         challengeId,
@@ -1509,6 +1559,85 @@ export class ReviewService {
           error: err.message,
         },
       });
+
+      throw err;
+    }
+  }
+
+  async deletePendingReviewsExceptSubmissions(
+    challengeId: string,
+    phaseId: string,
+    submissionIds: string[],
+  ): Promise<number> {
+    const trimmedPhaseId = phaseId?.trim();
+    const validSubmissionIds = Array.from(
+      new Set(
+        submissionIds
+          .map((id) => id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    if (!trimmedPhaseId) {
+      return 0;
+    }
+
+    const submissionFilter =
+      validSubmissionIds.length > 0
+        ? Prisma.sql`
+            AND "submissionId" IS NOT NULL
+            AND "submissionId" NOT IN (
+              ${Prisma.join(validSubmissionIds.map((id) => Prisma.sql`${id}`))}
+            )
+          `
+        : Prisma.sql`
+            AND "submissionId" IS NOT NULL
+          `;
+
+    const query = Prisma.sql`
+      DELETE FROM ${ReviewService.REVIEW_TABLE}
+      WHERE "phaseId" = ${trimmedPhaseId}
+        AND (
+          "status" IS NULL
+          OR UPPER(("status")::text) = 'PENDING'
+        )
+        ${submissionFilter}
+    `;
+
+    try {
+      const deleted = await this.prisma.$executeRaw(query);
+
+      void this.dbLogger.logAction(
+        'review.deletePendingReviewsExceptSubmissions',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            retainedSubmissionCount: validSubmissionIds.length,
+            deletedCount: deleted,
+          },
+        },
+      );
+
+      return deleted;
+    } catch (error) {
+      const err = error as Error;
+
+      void this.dbLogger.logAction(
+        'review.deletePendingReviewsExceptSubmissions',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            retainedSubmissionCount: validSubmissionIds.length,
+            error: err.message,
+          },
+        },
+      );
 
       throw err;
     }

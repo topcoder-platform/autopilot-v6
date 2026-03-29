@@ -61,7 +61,6 @@ const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
-  private topgearPostMortemLocks = new Set<string>();
   private scheduledJobs = new Map<string, PhaseTransitionPayload>();
   private static phaseChainCallback:
     | ((
@@ -110,7 +109,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly postMortemRoles: string[];
   private readonly postMortemScorecardId: string | null;
   private readonly postMortemDurationHours: number;
-  private readonly topgearPostMortemScorecardId: string | null;
   private readonly appealsPhaseNames: Set<string>;
   private readonly appealsResponsePhaseNames: Set<string>;
 
@@ -150,10 +148,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.postMortemScorecardId =
       this.configService.get<string | null>(
         'autopilot.postMortemScorecardId',
-      ) ?? null;
-    this.topgearPostMortemScorecardId =
-      this.configService.get<string | null>(
-        'autopilot.topgearPostMortemScorecardId',
       ) ?? null;
     this.postMortemDurationHours =
       this.configService.get<number>('autopilot.postMortemDurationHours') ?? 72;
@@ -369,10 +363,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       };
 
       await this.triggerKafkaEvent(effectiveData);
-
-      // Call advancePhase method when phase transition is triggered
-      // Use the normalized operator so scheduler-specific rules apply
-      await this.advancePhase(effectiveData);
     } catch (error) {
       this.logger.error(
         `Failed to trigger Kafka event for job ${jobId}`,
@@ -1661,76 +1651,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         err.stack,
       );
       throw err;
-    }
-  }
-
-  private async ensureTopgearPostMortemReview(
-    challenge: IChallenge,
-    submissionPhase: IPhase,
-  ): Promise<void> {
-    // Prevent concurrent duplicate creations for the same challenge within this process
-    this.topgearPostMortemLocks =
-      this.topgearPostMortemLocks || new Set<string>();
-    if (this.topgearPostMortemLocks.has(challenge.id)) {
-      this.logger.debug?.(
-        `[TOPGEAR] Post-Mortem creation already in progress for challenge ${challenge.id}; skipping.`,
-      );
-      return;
-    }
-    this.topgearPostMortemLocks.add(challenge.id);
-    try {
-      // Determine scorecard to use: env var or fallback by name
-      let scorecardId = this.topgearPostMortemScorecardId;
-      if (!scorecardId) {
-        try {
-          scorecardId = await this.reviewService.getScorecardIdByName(
-            'Topgear Task Post Mortem',
-          );
-        } catch {
-          // Already logged in review service
-        }
-      }
-
-      if (!scorecardId) {
-        this.logger.warn(
-          `[TOPGEAR] Post-mortem scorecard is not configured or found by name; skipping creation for challenge ${challenge.id}.`,
-        );
-        return;
-      }
-
-      let postMortemPhase =
-        challenge.phases?.find((p) => isPostMortemPhaseName(p.name)) ?? null;
-
-      if (!postMortemPhase) {
-        try {
-          // Create a Post-Mortem phase chained after the submission phase, but keep it closed.
-          // We preserve future phases (e.g., Iterative Review) and let phase chain open Post-Mortem
-          // only after the submission phase is closed (which will happen after a successful IR).
-          postMortemPhase =
-            await this.challengeApiService.createPostMortemPhasePreserving(
-              challenge.id,
-              submissionPhase.id,
-              this.postMortemDurationHours,
-              false,
-            );
-          this.logger.log(
-            `[TOPGEAR] Created Post-Mortem phase ${postMortemPhase.id} for challenge ${challenge.id} due to late submission.`,
-          );
-        } catch (error) {
-          const err = error as Error;
-          this.logger.error(
-            `[TOPGEAR] Failed to create Post-Mortem phase for challenge ${challenge.id}: ${err.message}`,
-            err.stack,
-          );
-          return;
-        }
-      }
-
-      // Do NOT pre-create pending reviews or schedule closure here.
-      // The phase chain will open Post-Mortem only after submission closes (after successful IR),
-      // and standard open-phase handling will create pending reviews and schedule closure.
-    } finally {
-      this.topgearPostMortemLocks.delete(challenge.id);
     }
   }
 
