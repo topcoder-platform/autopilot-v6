@@ -605,6 +605,59 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getPendingAiDecisionsEscalationsCount', () => {
+    it('returns pending AI escalation count when query succeeds', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '3' }]);
+
+      const result = await service.getPendingAiDecisionsEscalationsCount(
+        challengeId,
+      );
+
+      expect(result).toBe(3);
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('"aiReviewDecisionEscalation"');
+      expect(sqlText).toContain('"aiReviewDecision"');
+      expect(sqlText).toContain('"submission"');
+      expect(sqlText).toContain("'PENDING_APPROVAL'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getPendingAiDecisionsEscalationsCount',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            pendingAiDecisionsEscalations: 3,
+          }),
+        }),
+      );
+    });
+
+    it('logs error and rethrows when query fails', async () => {
+      prismaMock.$queryRaw.mockRejectedValueOnce(new Error('query failed'));
+
+      await expect(
+        service.getPendingAiDecisionsEscalationsCount(challengeId),
+      ).rejects.toThrow('query failed');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getPendingAiDecisionsEscalationsCount',
+        expect.objectContaining({
+          status: 'ERROR',
+          details: expect.objectContaining({
+            error: 'query failed',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('updatePendingReviewScorecards', () => {
     const phaseId = 'phase-1';
     const scorecardId = 'scorecard-123';

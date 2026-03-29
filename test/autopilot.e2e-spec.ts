@@ -238,6 +238,7 @@ describe('Autopilot Service (e2e)', () => {
       getScorecardPassingScore: jest.fn().mockResolvedValue(50),
       getCompletedReviewCountForPhase: jest.fn().mockResolvedValue(0),
       getPendingAppealCount: jest.fn().mockResolvedValue(0),
+      getPendingAiDecisionsEscalationsCount: jest.fn().mockResolvedValue(0),
       getActiveSubmissionIds: jest.fn().mockResolvedValue([]),
       generateReviewSummaries: jest.fn().mockResolvedValue([]),
     } satisfies Record<string, jest.Mock>;
