@@ -781,11 +781,12 @@ export class AutopilotService {
       // This avoids waiting for ALL AI workflows to complete before processing.
       if (this.first2FinishService.isFirst2FinishChallenge(challenge.type)) {
         this.logger.log(
-          `AI workflow completed for F2F challenge ${challengeId}; triggering submission processing.`,
+          `AI workflow completed for F2F challenge ${challengeId}, submission ${payload.submissionId}; triggering submission processing.`,
         );
 
         await this.first2FinishService.handleSubmissionByChallengeId(
           challengeId,
+          payload.submissionId,
         );
         return;
       }
