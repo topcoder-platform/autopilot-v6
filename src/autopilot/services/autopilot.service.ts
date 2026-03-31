@@ -775,7 +775,22 @@ export class AutopilotService {
         return;
       }
 
-      // Get all AI workflow IDs configured for this challenge
+      // For F2F challenges, trigger submission processing immediately.
+      // The F2F service checks per-submission AI decisions (hasAiDecisionForSubmission)
+      // and will proceed with iterative review once the current submission has a decision.
+      // This avoids waiting for ALL AI workflows to complete before processing.
+      if (this.first2FinishService.isFirst2FinishChallenge(challenge.type)) {
+        this.logger.log(
+          `AI workflow completed for F2F challenge ${challengeId}; triggering submission processing.`,
+        );
+
+        await this.first2FinishService.handleSubmissionByChallengeId(
+          challengeId,
+        );
+        return;
+      }
+
+      // For non-F2F challenges, wait for all AI workflows to complete before closing the phase
       const aiWorkflowIds = Array.from(
         new Set(
           (challenge.reviewers ?? [])
@@ -791,7 +806,6 @@ export class AutopilotService {
         return;
       }
 
-      // Check if there are any remaining in-progress AI workflows
       const inProgressAiWorkflows =
         await this.reviewService.getInProgressAiWorkflowRunCount(
           challengeId,
