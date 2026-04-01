@@ -303,7 +303,7 @@ export class First2FinishService {
 
       if (aiDecision) {
         this.logger.debug(
-          `Submission ${submissionId} already has an AI review decision for challenge ${challenge.id}; skipping AI Screening gate.`,
+          `Submission ${submissionId} already has an AI review decision (${aiDecision.status}) for challenge ${challenge.id}; skipping AI Screening gate.`,
         );
       } else if (this.shouldRestartAiScreeningPhase(aiScreeningPhase)) {
         this.logger.debug(
@@ -485,6 +485,9 @@ export class First2FinishService {
     // do not create & attach reviews for failed ai decissions.
     // leave the iterative review phase open so copilot/reviewer can unlock submission
     if (aiDecision && aiDecision.status.toUpperCase() !== 'PASSED') {
+      this.logger.log(
+        `Skipping iterative review creation for submission ${submissionId ?? 'latest'} on challenge ${challenge.id}; AI decision is ${aiDecision.status} (requires PASSED).`,
+      );
       return;
     }
 
@@ -758,7 +761,7 @@ export class First2FinishService {
 
       if (aiDecision) {
         this.logger.debug(
-          `Submission ${preferredSubmissionId} already has an AI review decision for challenge ${challengeId}; skipping AI Screening gate.`,
+          `Submission ${preferredSubmissionId} already has an AI review decision (${aiDecision.status}) for challenge ${challengeId}; skipping AI Screening gate.`,
         );
       } else if (this.shouldRestartAiScreeningPhase(aiScreeningPhase)) {
         this.logger.debug(
@@ -830,6 +833,9 @@ export class First2FinishService {
     // do not create & attach reviews for failed ai decissions.
     // leave the iterative review phase open so copilot/reviewer can unlock submission
     if (aiDecision && aiDecision.status.toUpperCase() !== 'PASSED') {
+      this.logger.log(
+        `Skipping next iterative review preparation for submission ${preferredSubmissionId} on challenge ${challengeId}; AI decision is ${aiDecision.status} (requires PASSED).`,
+      );
       return;
     }
 
