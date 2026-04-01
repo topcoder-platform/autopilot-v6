@@ -930,6 +930,10 @@ export class ReviewService {
       WHERE c."challengeId" = ${challengeId}
         AND d."submissionId" = ${submissionId}
         AND UPPER((d."status")::text) != 'PENDING'
+      ORDER BY
+        c."version" DESC,
+        COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+        d."id" DESC
       LIMIT 1
     `;
 
