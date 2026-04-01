@@ -128,6 +128,7 @@ describe('First2FinishService', () => {
       getAllSubmissionIdsOrdered: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       getReviewerSubmissionPairs: jest.fn(),
+      getAiFailedDecisionSubmissionIds: jest.fn(),
       createPendingReview: jest.fn(),
       getPendingReviewCount: jest.fn(),
       getScorecardPassingScore: jest.fn(),
@@ -165,6 +166,7 @@ describe('First2FinishService', () => {
     );
 
     reviewService.getReviewerSubmissionPairs.mockResolvedValue(new Set());
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPendingReviewCount.mockResolvedValue(0);
     reviewService.hasAiDecisionForSubmission.mockResolvedValue(undefined);
     resourcesService.getMemberHandleMap.mockResolvedValue(new Map());
@@ -615,6 +617,56 @@ describe('First2FinishService', () => {
     expect(reviewService.createPendingReview).not.toHaveBeenCalled();
     // Phase stays open (no advancePhase END call for the iterative phase)
     expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+  });
+
+  it('filters AI-failed submissions from iterative review candidate assignment', async () => {
+    const activeIterativePhase = buildIterativePhase({
+      id: 'iterative-phase-active',
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [activeIterativePhase],
+      reviewers: [buildReviewer()],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([
+      'sub-failed',
+      'sub-eligible',
+    ]);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
+      new Set(['sub-failed']),
+    );
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: 'review-1',
+    });
+
+    await service.handleSubmissionByChallengeId(challenge.id);
+
+    expect(reviewService.getAiFailedDecisionSubmissionIds).toHaveBeenCalledWith(
+      challenge.id,
+      ['sub-failed', 'sub-eligible'],
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(1);
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'sub-eligible',
+      'resource-1',
+      activeIterativePhase.id,
+      'iterative-scorecard',
+      challenge.id,
+    );
   });
 
   it('proceeds with review assignment when submission has a PASSED AI decision', async () => {

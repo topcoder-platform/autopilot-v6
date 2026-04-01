@@ -1098,6 +1098,16 @@ export class First2FinishService {
       return false;
     }
 
+    const eligibleSubmissionIds =
+      await this.filterAiFailedIterativeSubmissionIds(
+        challengeId,
+        candidateSubmissionIds,
+      );
+
+    if (!eligibleSubmissionIds.length) {
+      return false;
+    }
+
     const pendingPairs = await this.reviewService.getExistingReviewPairs(
       phase.id,
       challengeId,
@@ -1112,7 +1122,7 @@ export class First2FinishService {
         phase,
         reviewer.id,
         scorecardId,
-        candidateSubmissionIds,
+        eligibleSubmissionIds,
         usedPairs,
       );
 
@@ -1122,6 +1132,45 @@ export class First2FinishService {
     }
 
     return false;
+  }
+
+  private async filterAiFailedIterativeSubmissionIds(
+    challengeId: string,
+    submissionIds: string[],
+  ): Promise<string[]> {
+    if (!submissionIds.length) {
+      return submissionIds;
+    }
+
+    try {
+      const aiFailedIds =
+        await this.reviewService.getAiFailedDecisionSubmissionIds(
+          challengeId,
+          submissionIds,
+        );
+
+      if (!aiFailedIds.size) {
+        return submissionIds;
+      }
+
+      const filteredSubmissionIds = submissionIds.filter(
+        (submissionId) => !aiFailedIds.has(submissionId),
+      );
+
+      this.logger.log(
+        `Excluded ${submissionIds.length - filteredSubmissionIds.length} iterative review submission(s) for challenge ${challengeId} due to failed AI decisions.`,
+      );
+
+      return filteredSubmissionIds;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to filter iterative review submissions by AI decision for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+
+      return submissionIds;
+    }
   }
 
   private isDuplicateReviewPairError(error: unknown): boolean {
