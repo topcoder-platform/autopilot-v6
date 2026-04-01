@@ -941,6 +941,18 @@ export class ReviewService {
       const rows = await this.prisma.$queryRaw<{ status: string }[]>(query);
       return rows.length > 0 ? rows[0] : undefined;
     } catch (error) {
+      const err = error as Error;
+
+      void this.dbLogger.logAction('review.hasAiDecisionForSubmission', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          submissionId,
+          error: err.message,
+        },
+      });
+
       return undefined;
     }
   }
