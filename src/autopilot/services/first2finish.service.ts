@@ -291,16 +291,17 @@ export class First2FinishService {
     const aiScreeningPhase = (challenge.phases ?? []).find(
       (p) => p.name === AI_SCREENING_PHASE_NAME,
     );
+    let aiDecision: { status: string } | undefined;
     if (aiScreeningPhase) {
-      const hasDecision =
+      aiDecision =
         submissionId != null
           ? await this.reviewService.hasAiDecisionForSubmission(
               challenge.id,
               submissionId,
             )
-          : false;
+          : undefined;
 
-      if (hasDecision) {
+      if (aiDecision) {
         this.logger.debug(
           `Submission ${submissionId} already has an AI review decision for challenge ${challenge.id}; skipping AI Screening gate.`,
         );
@@ -479,6 +480,12 @@ export class First2FinishService {
       if (!activePhase) {
         return;
       }
+    }
+
+    // do not create & attach reviews for failed ai decissions.
+    // leave the iterative review phase open so copilot/reviewer can unlock submission
+    if (aiDecision && aiDecision.status.toUpperCase() !== 'PASSED') {
+      return;
     }
 
     const assigned = await this.assignIterativeReviewToReviewers(
@@ -742,13 +749,14 @@ export class First2FinishService {
     const aiScreeningPhase = (challenge.phases ?? []).find(
       (p) => p.name === AI_SCREENING_PHASE_NAME,
     );
+    let aiDecision: { status: string } | undefined;
     if (aiScreeningPhase) {
-      const hasDecision = await this.reviewService.hasAiDecisionForSubmission(
+      aiDecision = await this.reviewService.hasAiDecisionForSubmission(
         challengeId,
         preferredSubmissionId,
       );
 
-      if (hasDecision) {
+      if (aiDecision) {
         this.logger.debug(
           `Submission ${preferredSubmissionId} already has an AI review decision for challenge ${challengeId}; skipping AI Screening gate.`,
         );
@@ -816,6 +824,12 @@ export class First2FinishService {
     }
 
     if (!nextPhase) {
+      return;
+    }
+
+    // do not create & attach reviews for failed ai decissions.
+    // leave the iterative review phase open so copilot/reviewer can unlock submission
+    if (aiDecision && aiDecision.status.toUpperCase() !== 'PASSED') {
       return;
     }
 

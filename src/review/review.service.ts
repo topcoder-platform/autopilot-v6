@@ -917,13 +917,13 @@ export class ReviewService {
   async hasAiDecisionForSubmission(
     challengeId: string,
     submissionId: string,
-  ): Promise<boolean> {
+  ): Promise<undefined | { status: string }> {
     if (!challengeId || !submissionId) {
-      return false;
+      return undefined;
     }
 
     const query = Prisma.sql`
-      SELECT 1
+      SELECT d."status"::text
       FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
       INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
         ON c."id" = d."configId"
@@ -934,10 +934,10 @@ export class ReviewService {
     `;
 
     try {
-      const rows = await this.prisma.$queryRaw<unknown[]>(query);
-      return rows.length > 0;
+      const rows = await this.prisma.$queryRaw<{ status: string }[]>(query);
+      return rows.length > 0 ? rows[0] : undefined;
     } catch (error) {
-      return false;
+      return undefined;
     }
   }
 
