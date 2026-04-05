@@ -21,6 +21,7 @@ import {
   CHECKPOINT_SUBMISSION_PHASE_NAME,
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+  ITERATIVE_REVIEW_PHASE_NAME,
   REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
@@ -594,20 +595,19 @@ export class PhaseScheduleManager {
     let createdCount = 0;
 
     for (const reviewer of reviewers) {
-      const type =
-        reviewer.type?.toString().trim().toUpperCase() || 'REGULAR_REVIEW';
+      const phase = this.findPhaseForReviewer(challenge, reviewer);
+      const type = this.resolveReviewOpportunityType(reviewer, phase);
 
-      if (existingTypes.has(type)) {
-        this.logger.log(
-          `[REVIEW OPPORTUNITIES] Opportunity of type ${type} already exists for challenge ${challenge.id}; skipping duplicate creation.`,
+      if (!phase) {
+        this.logger.warn(
+          `[REVIEW OPPORTUNITIES] Unable to locate phase for reviewer ${reviewer.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
         );
         continue;
       }
 
-      const phase = this.findPhaseForReviewer(challenge, reviewer);
-      if (!phase) {
-        this.logger.warn(
-          `[REVIEW OPPORTUNITIES] Unable to locate phase for reviewer ${reviewer.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
+      if (existingTypes.has(type)) {
+        this.logger.log(
+          `[REVIEW OPPORTUNITIES] Opportunity of type ${type} already exists for challenge ${challenge.id}; skipping duplicate creation.`,
         );
         continue;
       }
@@ -689,6 +689,35 @@ export class PhaseScheduleManager {
     return (challenge.phases ?? []).find(
       (phase) => phase.phaseId === reviewer.phaseId,
     );
+  }
+
+  /**
+   * Resolve the review opportunity type for a reviewer configuration.
+   * Falls back to the linked phase so legacy/manual F2F reviewer configs
+   * without an explicit type still open iterative review opportunities.
+   *
+   * @param reviewer reviewer configuration from challenge-api
+   * @param phase matched challenge phase for the reviewer, if any
+   * @returns normalized review opportunity type for review-api
+   */
+  private resolveReviewOpportunityType(
+    reviewer: IChallengeReviewer,
+    phase?: IPhase,
+  ): string {
+    const explicitType = reviewer.type?.toString().trim().toUpperCase();
+
+    if (explicitType) {
+      return explicitType;
+    }
+
+    if (
+      phase?.name?.toString().trim().toUpperCase() ===
+      ITERATIVE_REVIEW_PHASE_NAME.toUpperCase()
+    ) {
+      return 'ITERATIVE_REVIEW';
+    }
+
+    return 'REGULAR_REVIEW';
   }
 
   private resolvePhaseDuration(phase: IPhase): number {
