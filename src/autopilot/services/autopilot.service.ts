@@ -775,39 +775,53 @@ export class AutopilotService {
         return;
       }
 
-      // Get all AI workflow IDs configured for this challenge
-      const aiWorkflowIds = Array.from(
-        new Set(
-          (challenge.reviewers ?? [])
-            .map((reviewer) => reviewer.aiWorkflowId)
-            .filter((workflowId): workflowId is string => Boolean(workflowId)),
-        ),
+      // For F2F challenges, close AI Screening immediately when any AI workflow completes.
+      // The F2F service processes submissions one at a time and checks per-submission AI decisions.
+      // This avoids waiting for ALL AI workflows to complete before processing.
+      const isF2F = this.first2FinishService.isFirst2FinishChallenge(
+        challenge.type,
       );
 
-      if (aiWorkflowIds.length === 0) {
-        this.logger.debug(
-          `No AI workflows configured for challenge ${challengeId}; ignoring completion event`,
+      if (!isF2F) {
+        // For non-F2F challenges, wait for all AI workflows to complete before closing the phase
+        const aiWorkflowIds = Array.from(
+          new Set(
+            (challenge.reviewers ?? [])
+              .map((reviewer) => reviewer.aiWorkflowId)
+              .filter((workflowId): workflowId is string =>
+                Boolean(workflowId),
+              ),
+          ),
         );
-        return;
+
+        if (aiWorkflowIds.length === 0) {
+          this.logger.debug(
+            `No AI workflows configured for challenge ${challengeId}; ignoring completion event`,
+          );
+          return;
+        }
+
+        const inProgressAiWorkflows =
+          await this.reviewService.getInProgressAiWorkflowRunCount(
+            challengeId,
+            aiWorkflowIds,
+          );
+
+        if (inProgressAiWorkflows > 0) {
+          this.logger.debug(
+            `AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
+          );
+          return;
+        }
+
+        this.logger.log(
+          `All AI workflows completed for phase ${aiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
+        );
+      } else {
+        this.logger.log(
+          `AI workflow completed for F2F challenge ${challengeId}, submission ${payload.submissionId}. Closing AI Screening phase.`,
+        );
       }
-
-      // Check if there are any remaining in-progress AI workflows
-      const inProgressAiWorkflows =
-        await this.reviewService.getInProgressAiWorkflowRunCount(
-          challengeId,
-          aiWorkflowIds,
-        );
-
-      if (inProgressAiWorkflows > 0) {
-        this.logger.debug(
-          `AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
-        );
-        return;
-      }
-
-      this.logger.log(
-        `All AI workflows completed for phase ${aiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
-      );
 
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,

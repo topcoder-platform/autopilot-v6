@@ -759,26 +759,36 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Block closing AI Screening until all configured AI workflows are completed
+      // For F2F challenges, allow immediate close since they process submissions one at a time
       if (operation === 'close' && isAiScreeningPhase) {
         try {
           const challenge = await this.challengeApiService.getChallengeById(
             data.challengeId,
           );
-          const aiWorkflowIds = this.getAiWorkflowIds(challenge);
 
-          const inProgressAiWorkflows =
-            await this.reviewService.getInProgressAiWorkflowRunCount(
-              data.challengeId,
-              aiWorkflowIds,
-            );
+          // For F2F challenges, skip the check for all workflows to complete.
+          // F2F processes submissions one at a time and checks per-submission AI decisions.
+          const isF2F = this.first2FinishService.isFirst2FinishChallenge(
+            challenge.type,
+          );
 
-          if (inProgressAiWorkflows > 0) {
-            await this.deferAiScreeningPhaseClosure(
-              data,
-              inProgressAiWorkflows,
-              `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
-            );
-            return;
+          if (!isF2F) {
+            const aiWorkflowIds = this.getAiWorkflowIds(challenge);
+
+            const inProgressAiWorkflows =
+              await this.reviewService.getInProgressAiWorkflowRunCount(
+                data.challengeId,
+                aiWorkflowIds,
+              );
+
+            if (inProgressAiWorkflows > 0) {
+              await this.deferAiScreeningPhaseClosure(
+                data,
+                inProgressAiWorkflows,
+                `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
+              );
+              return;
+            }
           }
         } catch (error) {
           const err = error as Error;

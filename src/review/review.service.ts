@@ -914,6 +914,49 @@ export class ReviewService {
     }
   }
 
+  async hasAiDecisionForSubmission(
+    challengeId: string,
+    submissionId: string,
+  ): Promise<undefined | { status: string }> {
+    if (!challengeId || !submissionId) {
+      return undefined;
+    }
+
+    const query = Prisma.sql`
+      SELECT d."status"::text
+      FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+      INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+        ON c."id" = d."configId"
+      WHERE c."challengeId" = ${challengeId}
+        AND d."submissionId" = ${submissionId}
+        AND UPPER((d."status")::text) != 'PENDING'
+      ORDER BY
+        c."version" DESC,
+        COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+        d."id" DESC
+      LIMIT 1
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<{ status: string }[]>(query);
+      return rows.length > 0 ? rows[0] : undefined;
+    } catch (error) {
+      const err = error as Error;
+
+      void this.dbLogger.logAction('review.hasAiDecisionForSubmission', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          submissionId,
+          error: err.message,
+        },
+      });
+
+      return undefined;
+    }
+  }
+
   async getAiFailedDecisionSubmissionIds(
     challengeId: string,
     submissionIds: string[],
