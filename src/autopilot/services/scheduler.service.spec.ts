@@ -247,6 +247,8 @@ describe('SchedulerService (review phase deferral)', () => {
 
     first2FinishService = {
       handleIterativePhaseClosed: jest.fn().mockResolvedValue(undefined),
+      handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
+      isFirst2FinishChallenge: jest.fn().mockReturnValue(false),
     } as unknown as jest.Mocked<First2FinishService>;
 
     scheduler = new SchedulerService(
@@ -614,6 +616,26 @@ describe('SchedulerService (review phase deferral)', () => {
     });
 
     challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [phaseDetails],
+      reviewers: [
+        {
+          id: 'checkpoint-reviewer-config',
+          scorecardId: 'checkpoint-scorecard',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: payload.phaseId,
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: null,
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
 
     const advancePhaseResponse: Awaited<
