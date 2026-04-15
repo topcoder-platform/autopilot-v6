@@ -66,12 +66,8 @@ workflows:
             only:
               - develop
               - reviews
-<<<<<<< HEAD
           tags:
             only: /^dev-.*/
-=======
-              - f2f-ai-screening
->>>>>>> b23c62980fc0f362f05616637c9d265f398d7d16
             
     # Production builds are exectuted only on tagged commits to the
     # master branch.
