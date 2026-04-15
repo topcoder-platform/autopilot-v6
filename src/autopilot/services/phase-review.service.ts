@@ -473,19 +473,42 @@ export class PhaseReviewService {
       this.challengeHasAiScreeningPhase(challenge) &&
       (isReviewPhase || phase.name.toLowerCase().includes('screening'))
     ) {
+      const beforeAiFilter = submissionIds.length;
       submissionIds = await this.excludeAiFailedReviewSubmissions(
         challengeId,
         submissionIds,
       );
+      if (beforeAiFilter !== submissionIds.length) {
+        this.logger.debug(
+          `Submission filtering: AI failed review removed ${beforeAiFilter - submissionIds.length} submission(s) (remaining: ${submissionIds.length})`,
+        );
+      }
     }
 
     if (
       submissionIds.length &&
       (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
     ) {
+      const beforeScreeningFilter = submissionIds.length;
       submissionIds = await this.excludeFailedScreeningSubmissions(
         challenge,
         submissionIds,
+      );
+      if (beforeScreeningFilter !== submissionIds.length) {
+        this.logger.debug(
+          `Submission filtering: Failed screening removed ${beforeScreeningFilter - submissionIds.length} submission(s) (remaining: ${submissionIds.length})`,
+        );
+      }
+    }
+
+    // Log submission filtering for debugging - this helps track potential issues with review deletion
+    if (submissionIds.length === 0) {
+      this.logger.debug(
+        `No submissions remained after filtering for challenge ${challengeId}, phase ${phase.id}. Skipping stale review deletion.`,
+      );
+    } else {
+      this.logger.debug(
+        `About to call deleteStalePendingSubmissionReviews for challenge ${challengeId}, phase ${phase.id} with ${submissionIds.length} allowed submission(s): ${submissionIds.join(', ')}`,
       );
     }
 

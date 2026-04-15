@@ -1753,11 +1753,29 @@ export class ReviewService {
       ),
     );
 
-    const allowedCondition = normalizedSubmissionIds.length
-      ? Prisma.sql`AND "submissionId" NOT IN (
-          ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
-        )`
-      : Prisma.sql``;
+    // CRITICAL: If no allowed submissions are provided, log a warning and return early.
+    // This prevents accidental deletion of all reviews due to incomplete WHERE clause.
+    if (!normalizedSubmissionIds.length) {
+      this.logger.warn(
+        `deleteStalePendingSubmissionReviews called with empty allowedSubmissionIds for phase ${trimmedPhaseId} on challenge ${challengeId}. Skipping deletion to prevent unintended data loss.`,
+      );
+      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
+        challengeId,
+        status: 'SKIPPED',
+        source: ReviewService.name,
+        details: {
+          phaseId: trimmedPhaseId,
+          reason: 'empty-allowed-submission-ids',
+          allowedSubmissionCount: 0,
+          deletedCount: 0,
+        },
+      });
+      return 0;
+    }
+
+    const allowedCondition = Prisma.sql`AND "submissionId" NOT IN (
+      ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
+    )`;
 
     const query = Prisma.sql`
       DELETE FROM ${ReviewService.REVIEW_TABLE}
