@@ -26,6 +26,9 @@ describe('PhaseScheduleManager', () => {
     createReviewOpportunity: jest.Mock;
     getReviewOpportunitiesByChallengeId: jest.Mock;
   };
+  let reviewService: {
+    updatePendingReviewScorecards: jest.Mock;
+  };
   let dbLogger: {
     logAction: jest.Mock;
   };
@@ -52,6 +55,10 @@ describe('PhaseScheduleManager', () => {
       getReviewOpportunitiesByChallengeId: jest.fn().mockResolvedValue([]),
     };
 
+    reviewService = {
+      updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
+    };
+
     dbLogger = {
       logAction: jest.fn().mockResolvedValue(undefined),
     };
@@ -61,13 +68,11 @@ describe('PhaseScheduleManager', () => {
     };
 
     service = new PhaseScheduleManager(
-      {
-        setPhaseChainCallback: jest.fn(),
-      } as unknown as SchedulerService,
+      schedulerService as unknown as SchedulerService,
       challengeApiService as unknown as ChallengeApiService,
-      {} as unknown as PhaseReviewService,
+      phaseReviewService as unknown as PhaseReviewService,
       {} as unknown as ReviewAssignmentService,
-      {} as unknown as ReviewService,
+      reviewService as unknown as ReviewService,
       reviewApiService as unknown as ReviewApiService,
       {
         get: jest.fn().mockReturnValue(undefined),

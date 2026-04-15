@@ -16,6 +16,7 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewSummationApiService } from './review-summation-api.service';
+import { MarathonMatchReviewService } from '../../marathon-match/marathon-match-review.service';
 
 const basePhase = {
   id: 'phase-1',
@@ -99,6 +100,7 @@ describe('PhaseReviewService', () => {
   let configService: jest.Mocked<ConfigService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let reviewSummationApiService: jest.Mocked<ReviewSummationApiService>;
+  let marathonMatchReviewService: jest.Mocked<MarathonMatchReviewService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
 
   beforeAll(() => {
@@ -118,7 +120,9 @@ describe('PhaseReviewService', () => {
     reviewService = {
       getActiveContestSubmissions: jest.fn(),
       getActiveCheckpointSubmissionIds: jest.fn(),
+      getActiveCheckpointSubmissions: jest.fn(),
       deleteStalePendingSubmissionReviews: jest.fn(),
+      deletePendingReviewsExceptSubmissions: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
@@ -149,12 +153,16 @@ describe('PhaseReviewService', () => {
     reviewSummationApiService = {
       finalizeSummations: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<ReviewSummationApiService>;
+    marathonMatchReviewService = {
+      handleReviewPhaseOpened: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<MarathonMatchReviewService>;
     dbLogger = {
       logAction: jest.fn(),
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
     reviewService.deleteStalePendingSubmissionReviews.mockResolvedValue(0);
+    reviewService.deletePendingReviewsExceptSubmissions.mockResolvedValue(0);
     resourcesService.getReviewerResources.mockResolvedValue([
       {
         id: 'resource-1',
@@ -171,12 +179,16 @@ describe('PhaseReviewService', () => {
         roleName: 'Post-Mortem Reviewer',
       },
     ] as any);
-    reviewService.createPendingReview.mockResolvedValue(true);
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: 'review-1',
+    });
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
     reviewService.getActiveCheckpointSubmissionIds.mockResolvedValue([]);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([]);
     challengeCompletionService.finalizeChallenge.mockResolvedValue(true);
 
     service = new PhaseReviewService(
@@ -184,6 +196,7 @@ describe('PhaseReviewService', () => {
       reviewService,
       resourcesService,
       configService,
+      marathonMatchReviewService,
       challengeCompletionService,
       reviewSummationApiService,
       dbLogger,
@@ -802,6 +815,9 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
     resourcesService.getReviewerResources.mockResolvedValue([
       { id: 'checkpoint-resource' },
+    ] as any);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([
+      { id: 'submission-1', memberId: '123', isLatest: true },
     ] as any);
     reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
       'submission-1',

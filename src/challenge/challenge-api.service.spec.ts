@@ -22,7 +22,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let challengeUpdate: jest.Mock;
   let challengeFindUnique: jest.Mock;
   let txChallengeFindUnique: jest.Mock;
-  let txPhaseFindUnique: jest.Mock;
+  let txPhaseFindFirst: jest.Mock;
   let txQueryRaw: jest.Mock;
   let service: ChallengeApiService;
   let configService: jest.Mocked<ConfigService>;
@@ -33,13 +33,13 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     challengePhaseUpdate = jest.fn().mockResolvedValue(undefined);
     challengePhaseCreate = jest.fn().mockResolvedValue({ id: 'new-phase' });
     challengePhaseDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
-    challengePhaseUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+    challengePhaseUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
     challengePhaseFindMany = jest.fn().mockResolvedValue([]);
     challengeUpdate = jest.fn().mockResolvedValue(undefined);
 
     challengeFindUnique = jest.fn();
     txChallengeFindUnique = jest.fn();
-    txPhaseFindUnique = jest.fn();
+    txPhaseFindFirst = jest.fn();
     txQueryRaw = jest.fn().mockResolvedValue(undefined);
 
     prisma = {
@@ -64,7 +64,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
           update: challengeUpdate,
         },
         phase: {
-          findUnique: txPhaseFindUnique,
+          findFirst: txPhaseFindFirst,
         },
         challengePhase: {
           update: challengePhaseUpdate,
@@ -182,16 +182,22 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
 
     expect(challengeFindUnique).toHaveBeenCalled();
     expect(rescheduleSpy).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
-    expect(challengePhaseUpdate).toHaveBeenCalledWith({
-      where: { id: reviewPhase.id },
-      data: expect.objectContaining({
-        scheduledStartDate: fixedNow,
-        scheduledEndDate: new Date(
-          fixedNow.getTime() + phaseDurationSeconds * 1000,
-        ),
-        duration: phaseDurationSeconds,
+    expect(challengePhaseUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: reviewPhase.id,
+          isOpen: false,
+        }),
+        data: expect.objectContaining({
+          isOpen: true,
+          scheduledStartDate: fixedNow,
+          scheduledEndDate: new Date(
+            fixedNow.getTime() + phaseDurationSeconds * 1000,
+          ),
+          duration: phaseDurationSeconds,
+        }),
       }),
-    });
+    );
   });
 
   it('extends the appeals phase duration when opening late', async () => {
@@ -265,14 +271,20 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
 
     await service.advancePhase('challenge-appeals', 'appeals-phase', 'open');
 
-    expect(challengePhaseUpdate).toHaveBeenCalledWith({
-      where: { id: appealsPhase.id },
-      data: expect.objectContaining({
-        scheduledStartDate: lateNow,
-        scheduledEndDate: new Date(lateNow.getTime() + 3600 * 1000),
-        duration: appealsPhase.duration,
+    expect(challengePhaseUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: appealsPhase.id,
+          isOpen: false,
+        }),
+        data: expect.objectContaining({
+          isOpen: true,
+          scheduledStartDate: lateNow,
+          scheduledEndDate: new Date(lateNow.getTime() + 3600 * 1000),
+          duration: appealsPhase.duration,
+        }),
       }),
-    });
+    );
   });
 
   it('extends a non-appeals phase opened late when remaining time is shorter than the configured duration', async () => {
@@ -350,16 +362,22 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       'open',
     );
 
-    expect(challengePhaseUpdate).toHaveBeenCalledWith({
-      where: { id: submissionPhase.id },
-      data: expect.objectContaining({
-        scheduledStartDate: lateNow,
-        scheduledEndDate: new Date(
-          lateNow.getTime() + submissionPhase.duration * 1000,
-        ),
-        duration: submissionPhase.duration,
+    expect(challengePhaseUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: submissionPhase.id,
+          isOpen: false,
+        }),
+        data: expect.objectContaining({
+          isOpen: true,
+          scheduledStartDate: lateNow,
+          scheduledEndDate: new Date(
+            lateNow.getTime() + submissionPhase.duration * 1000,
+          ),
+          duration: submissionPhase.duration,
+        }),
       }),
-    });
+    );
   });
 
   describe('createPostMortemPhase', () => {
@@ -465,7 +483,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       );
       expect(reopenArgs.duration).toBe(72 * 60 * 60);
       expect(challengePhaseCreate).not.toHaveBeenCalled();
-      expect(txPhaseFindUnique).not.toHaveBeenCalled();
+      expect(txPhaseFindFirst).not.toHaveBeenCalled();
       expect(challengeUpdate).toHaveBeenCalledWith({
         where: { id: challengeId },
         data: { currentPhaseNames: [existingPostMortem.name] },
@@ -507,7 +525,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         phases: [submissionPhase, iterativeReviewPhase],
         currentPhaseNames: [],
       } as any);
-      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+      txPhaseFindFirst.mockResolvedValueOnce(postMortemPhaseType as any);
 
       const createdPostMortem = {
         id: 'phase-postmortem',
@@ -546,8 +564,8 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       expect(challengePhaseDeleteMany).toHaveBeenCalledWith({
         where: { id: { in: [iterativeReviewPhase.id] } },
       });
-      expect(txPhaseFindUnique).toHaveBeenCalledWith({
-        where: { name: 'Post-Mortem' },
+      expect(txPhaseFindFirst).toHaveBeenCalledWith({
+        where: { name: { in: expect.arrayContaining(['Post-Mortem']) } },
       });
       expect(challengePhaseCreate).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -626,7 +644,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         name: 'Post-Mortem',
         description: 'Post-Mortem phase',
       };
-      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+      txPhaseFindFirst.mockResolvedValueOnce(postMortemPhaseType as any);
 
       const createdPostMortem = {
         id: 'phase-postmortem',
@@ -712,7 +730,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         name: 'Post-Mortem',
         description: 'Post-Mortem phase',
       };
-      txPhaseFindUnique.mockResolvedValueOnce(postMortemPhaseType as any);
+      txPhaseFindFirst.mockResolvedValueOnce(postMortemPhaseType as any);
 
       const createdPostMortem = { id: 'phase-postmortem' };
       challengePhaseCreate.mockResolvedValueOnce(createdPostMortem as any);
