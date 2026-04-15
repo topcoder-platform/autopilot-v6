@@ -12,12 +12,22 @@ import { PhaseScheduleManager } from './phase-schedule-manager.service';
 
 describe('PhaseScheduleManager', () => {
   let service: PhaseScheduleManager;
+  let schedulerService: {
+    setPhaseChainCallback: jest.Mock;
+    evaluateManualPhaseCompletion: jest.Mock;
+  };
+  let phaseReviewService: {
+    handlePhaseOpenedForChallenge: jest.Mock;
+  };
   let challengeApiService: {
     getChallengeById: jest.Mock;
   };
   let reviewApiService: {
     createReviewOpportunity: jest.Mock;
     getReviewOpportunitiesByChallengeId: jest.Mock;
+  };
+  let reviewService: {
+    updatePendingReviewScorecards: jest.Mock;
   };
   let dbLogger: {
     logAction: jest.Mock;
@@ -27,6 +37,15 @@ describe('PhaseScheduleManager', () => {
   };
 
   beforeEach(() => {
+    schedulerService = {
+      setPhaseChainCallback: jest.fn(),
+      evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+    };
+
+    phaseReviewService = {
+      handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
+    };
+
     challengeApiService = {
       getChallengeById: jest.fn(),
     };
@@ -34,6 +53,10 @@ describe('PhaseScheduleManager', () => {
     reviewApiService = {
       createReviewOpportunity: jest.fn().mockResolvedValue({ id: 'opp-1' }),
       getReviewOpportunitiesByChallengeId: jest.fn().mockResolvedValue([]),
+    };
+
+    reviewService = {
+      updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
     };
 
     dbLogger = {
@@ -45,13 +68,11 @@ describe('PhaseScheduleManager', () => {
     };
 
     service = new PhaseScheduleManager(
-      {
-        setPhaseChainCallback: jest.fn(),
-      } as unknown as SchedulerService,
+      schedulerService as unknown as SchedulerService,
       challengeApiService as unknown as ChallengeApiService,
-      {} as unknown as PhaseReviewService,
+      phaseReviewService as unknown as PhaseReviewService,
       {} as unknown as ReviewAssignmentService,
-      {} as unknown as ReviewService,
+      reviewService as unknown as ReviewService,
       reviewApiService as unknown as ReviewApiService,
       {
         get: jest.fn().mockReturnValue(undefined),
@@ -146,6 +167,80 @@ describe('PhaseScheduleManager', () => {
     );
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-3',
+    );
+  });
+
+  it('processes unchanged open review phases only once during manual phase detection', async () => {
+    const reviewPhase = {
+      id: 'phase-review-1',
+      phaseId: 'template-review-1',
+      name: 'Review',
+      isOpen: true,
+      actualStartDate: '2026-03-26T10:17:54.388Z',
+      scheduledStartDate: '2026-03-26T10:17:54.388Z',
+      actualEndDate: null,
+      scheduledEndDate: '2026-03-28T10:17:54.388Z',
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: 'challenge-manual-open-dedupe',
+      status: 'ACTIVE',
+      phases: [reviewPhase],
+      reviewers: [],
+    });
+
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          processPastDueOpenPhases: () => Promise<number>;
+        },
+        'processPastDueOpenPhases',
+      )
+      .mockResolvedValue(0);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          scheduleRelevantPhases: () => Promise<void>;
+        },
+        'scheduleRelevantPhases',
+      )
+      .mockResolvedValue(undefined);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          resolveScorecardIdForOpenPhase: () => string | null;
+        },
+        'resolveScorecardIdForOpenPhase',
+      )
+      .mockReturnValue(null);
+
+    const updateMessage = {
+      id: 'challenge-manual-open-dedupe',
+      operator: AutopilotOperator.SYSTEM,
+      projectId: 1003,
+      status: 'ACTIVE',
+    };
+
+    await service.handleChallengeUpdate(updateMessage);
+    await service.handleChallengeUpdate(updateMessage);
+
+    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'challenge-manual-open-dedupe' }),
+      'phase-review-1',
     );
   });
 

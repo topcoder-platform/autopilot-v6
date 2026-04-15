@@ -124,7 +124,10 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createPendingReview: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
-    reviewService.createPendingReview.mockResolvedValue(false);
+    reviewService.createPendingReview.mockResolvedValue({
+      created: false,
+      reviewId: null,
+    });
 
     resourcesService = {
       getReviewerResources: jest.fn(),
@@ -304,7 +307,10 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         roleName: 'Approver',
       },
     ]);
-    reviewService.createPendingReview.mockResolvedValueOnce(true);
+    reviewService.createPendingReview.mockResolvedValueOnce({
+      created: true,
+      reviewId: 'review-1',
+    });
 
     await autopilotService.handleSubmissionNotificationAggregate(
       createPayload({
