@@ -36,6 +36,12 @@ import { challengeAllowsUnlimitedSubmissions } from '../utils/challenge-metadata
 @Injectable()
 export class PhaseReviewService {
   private readonly logger = new Logger(PhaseReviewService.name);
+  private static readonly STALE_PENDING_REVIEW_PHASE_NAMES = new Set<string>([
+    'Review',
+    'Checkpoint Review',
+    'Screening',
+    'Checkpoint Screening',
+  ]);
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
@@ -300,25 +306,6 @@ export class PhaseReviewService {
       return;
     }
 
-    const roleNames = getRoleNamesForPhase(phase.name);
-    const reviewerResources = await this.resourcesService.getReviewerResources(
-      challengeId,
-      roleNames,
-    );
-
-    if (!reviewerResources.length) {
-      this.logPhaseAction('INFO', challengeId, {
-        phaseId: phase.id,
-        phaseName: phase.name,
-        reason: 'no-reviewer-resources',
-        rolesRequested: roleNames,
-      });
-      this.logger.log(
-        `No reviewer resources found for challenge ${challengeId} and phase ${phase.name}`,
-      );
-      return;
-    }
-
     let submissionIds: string[] = [];
     if (isApprovalPhase) {
       try {
@@ -390,12 +377,15 @@ export class PhaseReviewService {
         throw err;
       }
     } else if (phase.name === 'Checkpoint Screening') {
-      // For checkpoint screening, review all active checkpoint submissions
-      submissionIds =
-        await this.reviewService.getActiveCheckpointSubmissionIds(challengeId);
+      const activeCheckpointSubmissions =
+        await this.reviewService.getActiveCheckpointSubmissions(challengeId);
+      submissionIds = this.selectSubmissionIdsForPendingReviews(
+        challengeId,
+        phase.id,
+        activeCheckpointSubmissions,
+        allowUnlimitedSubmissions,
+      );
     } else if (phase.name === 'Checkpoint Review') {
-      // For checkpoint review, only review submissions that PASSED checkpoint screening
-      // Find the screening phase template and its configured scorecard
       const screeningPhase = (challenge.phases ?? []).find(
         (p) => p.name === 'Checkpoint Screening',
       );
@@ -439,11 +429,26 @@ export class PhaseReviewService {
       }
 
       try {
-        submissionIds =
+        const activeCheckpointSubmissions =
+          await this.reviewService.getActiveCheckpointSubmissions(challengeId);
+        const eligibleCheckpointSubmissionIds =
+          this.selectSubmissionIdsForPendingReviews(
+            challengeId,
+            phase.id,
+            activeCheckpointSubmissions,
+            allowUnlimitedSubmissions,
+          );
+
+        const checkpointPassedSubmissionIds =
           await this.reviewService.getCheckpointPassedSubmissionIds(
             challengeId,
             screeningScorecardId,
           );
+
+        const passedSubmissionIds = new Set(checkpointPassedSubmissionIds);
+        submissionIds = eligibleCheckpointSubmissionIds.filter((submissionId) =>
+          passedSubmissionIds.has(submissionId),
+        );
       } catch (error) {
         const err = error as Error;
         this.logger.error(
@@ -455,32 +460,11 @@ export class PhaseReviewService {
     } else {
       const activeSubmissions =
         await this.reviewService.getActiveContestSubmissions(challengeId);
-
-      let filteredSubmissions: ActiveContestSubmission[];
-
-      if (allowUnlimitedSubmissions) {
-        filteredSubmissions = activeSubmissions;
-      } else {
-        filteredSubmissions = this.selectLatestSubmissions(activeSubmissions);
-
-        if (!filteredSubmissions.length && activeSubmissions.length) {
-          this.logger.warn(
-            `No latest submissions found for challenge ${challengeId} in phase ${phase.id}; skipping review creation because only the latest submission per member is reviewed when a submission limit is enforced.`,
-          );
-        }
-      }
-
-      if (!allowUnlimitedSubmissions) {
-        const skipped = activeSubmissions.length - filteredSubmissions.length;
-        if (skipped > 0 && filteredSubmissions.length > 0) {
-          this.logger.log(
-            `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phase.id} because only the latest submissions are reviewed when the submission limit is enforced.`,
-          );
-        }
-      }
-
-      submissionIds = Array.from(
-        new Set(filteredSubmissions.map((submission) => submission.id)),
+      submissionIds = this.selectSubmissionIdsForPendingReviews(
+        challengeId,
+        phase.id,
+        activeSubmissions,
+        allowUnlimitedSubmissions,
       );
     }
 
@@ -526,15 +510,40 @@ export class PhaseReviewService {
       );
     }
 
+    await this.pruneStalePendingReviews(
+      challengeId,
+      phase.id,
+      phase.name,
+      submissionIds,
+    );
+
     if (!submissionIds.length) {
       this.logPhaseAction('INFO', challengeId, {
         phaseId: phase.id,
         phaseName: phase.name,
         reason: 'no-submissions-found',
-        reviewerResourceCount: reviewerResources.length,
       });
       this.logger.log(
         `No submissions found for challenge ${challengeId}; skipping review creation for phase ${phase.name}`,
+      );
+      return;
+    }
+
+    const roleNames = getRoleNamesForPhase(phase.name);
+    const reviewerResources = await this.resourcesService.getReviewerResources(
+      challengeId,
+      roleNames,
+    );
+
+    if (!reviewerResources.length) {
+      this.logPhaseAction('INFO', challengeId, {
+        phaseId: phase.id,
+        phaseName: phase.name,
+        reason: 'no-reviewer-resources',
+        rolesRequested: roleNames,
+      });
+      this.logger.log(
+        `No reviewer resources found for challenge ${challengeId} and phase ${phase.name}`,
       );
       return;
     }
@@ -772,6 +781,79 @@ export class PhaseReviewService {
     });
 
     return sorted[0] ?? null;
+  }
+
+  private selectSubmissionIdsForPendingReviews(
+    challengeId: string,
+    phaseId: string,
+    submissions: ActiveContestSubmission[],
+    allowUnlimitedSubmissions: boolean,
+  ): string[] {
+    const filteredSubmissions = allowUnlimitedSubmissions
+      ? submissions
+      : this.selectLatestSubmissions(submissions);
+
+    if (
+      !allowUnlimitedSubmissions &&
+      !filteredSubmissions.length &&
+      submissions.length
+    ) {
+      this.logger.warn(
+        `No latest submissions found for challenge ${challengeId} in phase ${phaseId}; skipping review creation because only the latest submission per member is reviewed when a submission limit is enforced.`,
+      );
+    }
+
+    if (!allowUnlimitedSubmissions) {
+      const skipped = submissions.length - filteredSubmissions.length;
+      if (skipped > 0 && filteredSubmissions.length > 0) {
+        this.logger.log(
+          `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phaseId} because only the latest submissions are reviewed when the submission limit is enforced.`,
+        );
+      }
+    }
+
+    return Array.from(
+      new Set(
+        filteredSubmissions
+          .map((submission) => submission.id)
+          .filter((submissionId): submissionId is string =>
+            Boolean(submissionId),
+          ),
+      ),
+    );
+  }
+
+  private async pruneStalePendingReviews(
+    challengeId: string,
+    phaseId: string,
+    phaseName: string,
+    submissionIds: string[],
+  ): Promise<void> {
+    if (!PhaseReviewService.STALE_PENDING_REVIEW_PHASE_NAMES.has(phaseName)) {
+      return;
+    }
+
+    try {
+      const deleted =
+        await this.reviewService.deletePendingReviewsExceptSubmissions(
+          challengeId,
+          phaseId,
+          submissionIds,
+        );
+
+      if (deleted > 0) {
+        this.logger.log(
+          `Deleted ${deleted} stale pending review(s) for challenge ${challengeId}, phase ${phaseId} after recalculating eligible submissions.`,
+        );
+      }
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to delete stale pending reviews for challenge ${challengeId}, phase ${phaseId}: ${err.message}`,
+        err.stack,
+      );
+      throw err;
+    }
   }
 
   private selectLatestSubmissions(

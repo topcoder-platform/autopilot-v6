@@ -18,10 +18,14 @@ import {
 import {
   AI_SCREENING_PHASE_NAME,
   APPROVAL_PHASE_NAMES,
+  CHECKPOINT_SUBMISSION_PHASE_NAME,
   DEFAULT_APPEALS_PHASE_NAMES,
   DEFAULT_APPEALS_RESPONSE_PHASE_NAMES,
+  ITERATIVE_REVIEW_PHASE_NAME,
+  REGISTRATION_PHASE_NAME,
   REVIEW_PHASE_NAMES,
   SCREENING_PHASE_NAMES,
+  SUBMISSION_PHASE_NAME,
 } from '../constants/review.constants';
 import {
   getNormalizedStringArray,
@@ -216,14 +220,21 @@ export class PhaseScheduleManager {
       );
 
       if (message.state === 'END') {
-        const canceled = await this.cancelPhaseTransition(
+        const jobId = this.schedulerService.buildJobId(
           message.challengeId,
           message.phaseId,
         );
-        if (canceled) {
-          this.logger.log(
-            `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
+
+        if (this.schedulerService.getScheduledTransition(jobId)) {
+          const canceled = await this.cancelPhaseTransition(
+            message.challengeId,
+            message.phaseId,
           );
+          if (canceled) {
+            this.logger.log(
+              `Cleaned up job for phase ${message.phaseId} (challenge ${message.challengeId}) from registry after consuming event.`,
+            );
+          }
         }
       }
     } catch (error) {
@@ -610,12 +621,27 @@ export class PhaseScheduleManager {
       return;
     }
 
-    let existing: any[] = [];
+    let existingTypes = new Set<string>();
     try {
-      existing =
+      const existing =
         await this.reviewApiService.getReviewOpportunitiesByChallengeId(
           challenge.id,
         );
+
+      if (Array.isArray(existing)) {
+        existingTypes = new Set(
+          existing
+            .map((item) => {
+              if (!item || typeof item !== 'object') {
+                return '';
+              }
+
+              const type = (item as { type?: unknown }).type;
+              return typeof type === 'string' ? type.trim().toUpperCase() : '';
+            })
+            .filter((type) => type.length > 0),
+        );
+      }
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -625,30 +651,23 @@ export class PhaseScheduleManager {
       // Continue to attempt creation to avoid silently skipping
     }
 
-    const existingTypes = new Set(
-      existing
-        .map((item) => (item?.type ?? '').toString().trim().toUpperCase())
-        .filter((type) => type.length > 0),
-    );
-
     const firstPlacePrize = this.getFirstPlacePrize(challenge);
     let createdCount = 0;
 
     for (const reviewer of reviewers) {
-      const type =
-        reviewer.type?.toString().trim().toUpperCase() || 'REGULAR_REVIEW';
+      const phase = this.findPhaseForReviewer(challenge, reviewer);
+      const type = this.resolveReviewOpportunityType(reviewer, phase);
 
-      if (existingTypes.has(type)) {
-        this.logger.log(
-          `[REVIEW OPPORTUNITIES] Opportunity of type ${type} already exists for challenge ${challenge.id}; skipping duplicate creation.`,
+      if (!phase) {
+        this.logger.warn(
+          `[REVIEW OPPORTUNITIES] Unable to locate phase for reviewer ${reviewer.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
         );
         continue;
       }
 
-      const phase = this.findPhaseForReviewer(challenge, reviewer);
-      if (!phase) {
-        this.logger.warn(
-          `[REVIEW OPPORTUNITIES] Unable to locate phase for reviewer ${reviewer.id} on challenge ${challenge.id}; skipping opportunity creation for type ${type}.`,
+      if (existingTypes.has(type)) {
+        this.logger.log(
+          `[REVIEW OPPORTUNITIES] Opportunity of type ${type} already exists for challenge ${challenge.id}; skipping duplicate creation.`,
         );
         continue;
       }
@@ -730,6 +749,35 @@ export class PhaseScheduleManager {
     return (challenge.phases ?? []).find(
       (phase) => phase.phaseId === reviewer.phaseId,
     );
+  }
+
+  /**
+   * Resolve the review opportunity type for a reviewer configuration.
+   * Falls back to the linked phase so legacy/manual F2F reviewer configs
+   * without an explicit type still open iterative review opportunities.
+   *
+   * @param reviewer reviewer configuration from challenge-api
+   * @param phase matched challenge phase for the reviewer, if any
+   * @returns normalized review opportunity type for review-api
+   */
+  private resolveReviewOpportunityType(
+    reviewer: IChallengeReviewer,
+    phase?: IPhase,
+  ): string {
+    const explicitType = reviewer.type?.toString().trim().toUpperCase();
+
+    if (explicitType) {
+      return explicitType;
+    }
+
+    if (
+      phase?.name?.toString().trim().toUpperCase() ===
+      ITERATIVE_REVIEW_PHASE_NAME.toUpperCase()
+    ) {
+      return 'ITERATIVE_REVIEW';
+    }
+
+    return 'REGULAR_REVIEW';
   }
 
   private resolvePhaseDuration(phase: IPhase): number {
@@ -938,6 +986,10 @@ export class PhaseScheduleManager {
           return false;
         }
 
+        if (!this.shouldImmediatelyProcessOverduePhase(phase.name)) {
+          return false;
+        }
+
         const scheduledEndTime = new Date(phase.scheduledEndDate).getTime();
 
         if (Number.isNaN(scheduledEndTime)) {
@@ -1044,6 +1096,22 @@ export class PhaseScheduleManager {
     }
 
     return processedCount;
+  }
+
+  private shouldImmediatelyProcessOverduePhase(
+    phaseName?: string | null,
+  ): boolean {
+    const normalized = phaseName?.trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return (
+      normalized === REGISTRATION_PHASE_NAME ||
+      normalized === SUBMISSION_PHASE_NAME ||
+      normalized === CHECKPOINT_SUBMISSION_PHASE_NAME ||
+      this.appealsPhaseNames.has(normalized)
+    );
   }
 
   private async scheduleRelevantPhases(

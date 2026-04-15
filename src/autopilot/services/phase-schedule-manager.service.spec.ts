@@ -1,4 +1,13 @@
+import type { ConfigService } from '@nestjs/config';
+import type { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { FinanceApiService } from '../../finance/finance-api.service';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
+import type { ReviewApiService } from '../../review/review-api.service';
+import type { ReviewService } from '../../review/review.service';
+import type { SchedulerService } from './scheduler.service';
+import type { PhaseReviewService } from './phase-review.service';
+import type { ReviewAssignmentService } from './review-assignment.service';
+import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { PhaseScheduleManager } from './phase-schedule-manager.service';
 
 describe('PhaseScheduleManager', () => {
@@ -12,6 +21,13 @@ describe('PhaseScheduleManager', () => {
   };
   let challengeApiService: {
     getChallengeById: jest.Mock;
+  };
+  let reviewApiService: {
+    createReviewOpportunity: jest.Mock;
+    getReviewOpportunitiesByChallengeId: jest.Mock;
+  };
+  let dbLogger: {
+    logAction: jest.Mock;
   };
   let financeApiService: {
     generateChallengePayments: jest.Mock;
@@ -31,24 +47,33 @@ describe('PhaseScheduleManager', () => {
       getChallengeById: jest.fn(),
     };
 
+    reviewApiService = {
+      createReviewOpportunity: jest.fn().mockResolvedValue({ id: 'opp-1' }),
+      getReviewOpportunitiesByChallengeId: jest.fn().mockResolvedValue([]),
+    };
+
+    dbLogger = {
+      logAction: jest.fn().mockResolvedValue(undefined),
+    };
+
     financeApiService = {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
     };
 
     service = new PhaseScheduleManager(
-      schedulerService as any,
-      challengeApiService as any,
-      phaseReviewService as any,
-      {} as any,
-      {} as any,
-      {} as any,
+      {
+        setPhaseChainCallback: jest.fn(),
+      } as unknown as SchedulerService,
+      challengeApiService as unknown as ChallengeApiService,
+      {} as unknown as PhaseReviewService,
+      {} as unknown as ReviewAssignmentService,
+      {} as unknown as ReviewService,
+      reviewApiService as unknown as ReviewApiService,
       {
         get: jest.fn().mockReturnValue(undefined),
-      } as any,
-      {
-        logAction: jest.fn(),
-      } as any,
-      financeApiService as any,
+      } as unknown as ConfigService,
+      dbLogger as unknown as AutopilotDbLoggerService,
+      financeApiService as unknown as FinanceApiService,
     );
   });
 
@@ -211,6 +236,50 @@ describe('PhaseScheduleManager', () => {
     expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'challenge-manual-open-dedupe' }),
       'phase-review-1',
+    );
+  });
+
+  it('infers iterative review opportunities from the reviewer phase when reviewer type is missing', async () => {
+    await (
+      service as unknown as {
+        createReviewOpportunitiesForChallenge: (
+          challenge: unknown,
+        ) => Promise<void>;
+      }
+    ).createReviewOpportunitiesForChallenge({
+      id: 'challenge-iterative',
+      status: 'ACTIVE',
+      phases: [
+        {
+          id: 'phase-1',
+          phaseId: 'iterative-review-phase',
+          name: 'Iterative Review',
+          duration: 86400,
+          scheduledStartDate: '2026-04-02T00:00:00.000Z',
+          actualStartDate: null,
+        },
+      ],
+      prizeSets: [],
+      reviewers: [
+        {
+          id: 'reviewer-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: 'iterative-review-phase',
+          fixedAmount: 25,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          shouldOpenOpportunity: true,
+        },
+      ],
+    });
+
+    expect(reviewApiService.createReviewOpportunity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-iterative',
+        type: 'ITERATIVE_REVIEW',
+      }),
     );
   });
 });
