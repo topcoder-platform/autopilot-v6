@@ -123,8 +123,7 @@ export class ReviewService {
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
   private static readonly AI_REVIEW_CONFIG_TABLE = Prisma.sql`"aiReviewConfig"`;
   private static readonly AI_REVIEW_DECISION_TABLE = Prisma.sql`"aiReviewDecision"`;
-  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE =
-    Prisma.sql`"aiReviewDecisionEscalation"`;
+  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE = Prisma.sql`"aiReviewDecisionEscalation"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -1756,20 +1755,21 @@ export class ReviewService {
     // CRITICAL: If no allowed submissions are provided, log a warning and return early.
     // This prevents accidental deletion of all reviews due to incomplete WHERE clause.
     if (!normalizedSubmissionIds.length) {
-      this.logger.warn(
-        `deleteStalePendingSubmissionReviews called with empty allowedSubmissionIds for phase ${trimmedPhaseId} on challenge ${challengeId}. Skipping deletion to prevent unintended data loss.`,
-      );
-      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
-        challengeId,
-        status: 'SKIPPED',
-        source: ReviewService.name,
-        details: {
-          phaseId: trimmedPhaseId,
-          reason: 'empty-allowed-submission-ids',
-          allowedSubmissionCount: 0,
-          deletedCount: 0,
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'INFO',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            reason: 'empty-allowed-submission-ids',
+            message: `deleteStalePendingSubmissionReviews called with empty allowedSubmissionIds for phase ${trimmedPhaseId} on challenge ${challengeId}. Skipping deletion to prevent unintended data loss.`,
+            allowedSubmissionCount: 0,
+            deletedCount: 0,
+          },
         },
-      });
+      );
       return 0;
     }
 
@@ -1796,30 +1796,36 @@ export class ReviewService {
     try {
       const deleted = await this.prisma.$executeRaw(query);
 
-      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
-        challengeId,
-        status: 'SUCCESS',
-        source: ReviewService.name,
-        details: {
-          phaseId: trimmedPhaseId,
-          allowedSubmissionCount: normalizedSubmissionIds.length,
-          deletedCount: deleted,
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            allowedSubmissionCount: normalizedSubmissionIds.length,
+            deletedCount: deleted,
+          },
         },
-      });
+      );
 
       return deleted;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
-        challengeId,
-        status: 'ERROR',
-        source: ReviewService.name,
-        details: {
-          phaseId: trimmedPhaseId,
-          allowedSubmissionCount: normalizedSubmissionIds.length,
-          error: err.message,
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            allowedSubmissionCount: normalizedSubmissionIds.length,
+            error: err.message,
+          },
         },
-      });
+      );
       throw err;
     }
   }
