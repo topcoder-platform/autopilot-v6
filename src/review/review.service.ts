@@ -606,6 +606,45 @@ export class ReviewService {
   async getActiveContestSubmissions(
     challengeId: string,
   ): Promise<ActiveContestSubmission[]> {
+    return this.getContestSubmissions(
+      challengeId,
+      false,
+      'review.getActiveContestSubmissions',
+    );
+  }
+
+  async getContestSubmissionsForLatestSelection(
+    challengeId: string,
+  ): Promise<ActiveContestSubmission[]> {
+    return this.getContestSubmissions(
+      challengeId,
+      true,
+      'review.getContestSubmissionsForLatestSelection',
+    );
+  }
+
+  private async getContestSubmissions(
+    challengeId: string,
+    includeAiFailedReview: boolean,
+    actionName:
+      | 'review.getActiveContestSubmissions'
+      | 'review.getContestSubmissionsForLatestSelection',
+  ): Promise<ActiveContestSubmission[]> {
+    const statusFilter = includeAiFailedReview
+      ? Prisma.sql`
+          AND (
+            s."status" IS NULL
+            OR s."status" = 'ACTIVE'
+            OR s."status" = 'AI_FAILED_REVIEW'
+          )
+        `
+      : Prisma.sql`
+          AND (
+            s."status" = 'ACTIVE'
+            OR s."status" IS NULL
+          )
+        `;
+
     const query = Prisma.sql`
       SELECT
         s."id",
@@ -623,11 +662,7 @@ export class ReviewService {
         END AS "isLatest"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       WHERE s."challengeId" = ${challengeId}
-        AND (
-          s."status" IS NULL
-          OR s."status" = 'ACTIVE'
-          OR s."status" = 'AI_FAILED_REVIEW'
-        )
+        ${statusFilter}
         AND (
           s."type" IS NULL
           OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
@@ -648,7 +683,7 @@ export class ReviewService {
           isLatest: Boolean(record.isLatest),
         }));
 
-      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+      void this.dbLogger.logAction(actionName, {
         challengeId,
         status: 'SUCCESS',
         source: ReviewService.name,
@@ -658,7 +693,7 @@ export class ReviewService {
       return sanitized;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+      void this.dbLogger.logAction(actionName, {
         challengeId,
         status: 'ERROR',
         source: ReviewService.name,

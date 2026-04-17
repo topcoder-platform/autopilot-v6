@@ -459,7 +459,9 @@ export class PhaseReviewService {
       }
     } else {
       const activeSubmissions =
-        await this.reviewService.getActiveContestSubmissions(challengeId);
+        await this.reviewService.getContestSubmissionsForLatestSelection(
+          challengeId,
+        );
       submissionIds = this.selectSubmissionIdsForPendingReviews(
         challengeId,
         phase.id,

@@ -106,10 +106,12 @@ describe('PhaseReviewService pending review cleanup', () => {
   };
   let reviewService: {
     getActiveContestSubmissions: jest.Mock;
+    getContestSubmissionsForLatestSelection: jest.Mock;
     getActiveCheckpointSubmissions: jest.Mock;
     getCheckpointPassedSubmissionIds: jest.Mock;
     getExistingReviewPairs: jest.Mock;
     createPendingReview: jest.Mock;
+    deleteStalePendingSubmissionReviews: jest.Mock;
     deletePendingReviewsExceptSubmissions: jest.Mock;
     getFailedScreeningSubmissionIds: jest.Mock;
     getAiFailedDecisionSubmissionIds: jest.Mock;
@@ -130,6 +132,10 @@ describe('PhaseReviewService pending review cleanup', () => {
     reviewService = {
       getActiveContestSubmissions:
         createMockMethod<ReviewService['getActiveContestSubmissions']>(),
+      getContestSubmissionsForLatestSelection:
+        createMockMethod<
+          ReviewService['getContestSubmissionsForLatestSelection']
+        >(),
       getActiveCheckpointSubmissions:
         createMockMethod<ReviewService['getActiveCheckpointSubmissions']>(),
       getCheckpointPassedSubmissionIds:
@@ -138,6 +144,10 @@ describe('PhaseReviewService pending review cleanup', () => {
         createMockMethod<ReviewService['getExistingReviewPairs']>(),
       createPendingReview:
         createMockMethod<ReviewService['createPendingReview']>(),
+      deleteStalePendingSubmissionReviews:
+        createMockMethod<
+          ReviewService['deleteStalePendingSubmissionReviews']
+        >(),
       deletePendingReviewsExceptSubmissions:
         createMockMethod<
           ReviewService['deletePendingReviewsExceptSubmissions']
@@ -164,6 +174,7 @@ describe('PhaseReviewService pending review cleanup', () => {
       created: true,
       reviewId: 'review-1',
     });
+    reviewService.deleteStalePendingSubmissionReviews.mockResolvedValue(0);
     reviewService.deletePendingReviewsExceptSubmissions.mockResolvedValue(1);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
@@ -207,7 +218,9 @@ describe('PhaseReviewService pending review cleanup', () => {
     ];
 
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, baseReviewPhase.id);
 
@@ -239,7 +252,9 @@ describe('PhaseReviewService pending review cleanup', () => {
     ];
 
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, baseReviewPhase.id);
 
