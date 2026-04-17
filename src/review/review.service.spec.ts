@@ -129,6 +129,57 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getActiveContestSubmissions', () => {
+    it('includes AI_FAILED_REVIEW submissions when computing latest flags', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        { id: 'submission-1', memberId: 'member-1', isLatest: false },
+        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+      ]);
+
+      const submissions = await service.getActiveContestSubmissions(challengeId);
+
+      expect(submissions).toEqual([
+        { id: 'submission-1', memberId: 'member-1', isLatest: false },
+        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+      ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('ROW_NUMBER() OVER');
+      expect(sqlText).toContain('COALESCE(s."memberId", s."id")');
+      expect(sqlText).toContain("s.\"status\" = 'ACTIVE'");
+      expect(sqlText).toContain("s.\"status\" = 'AI_FAILED_REVIEW'");
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getActiveContestSubmissions',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            submissionCount: 2,
+          }),
+        }),
+      );
+    });
+
+    it('filters out rows without ids after querying eligible statuses', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        { id: '', memberId: 'member-1', isLatest: false },
+        { id: 'submission-2', memberId: null, isLatest: true },
+      ]);
+
+      const submissions = await service.getActiveContestSubmissions(challengeId);
+
+      expect(submissions).toEqual([
+        { id: 'submission-2', memberId: null, isLatest: true },
+      ]);
+    });
+  });
+
   describe('buildChallengeResultRecordsForChallenge', () => {
     it('prefers the latest submission when submissions are limited', async () => {
       prismaMock.$queryRaw.mockResolvedValue([

@@ -623,7 +623,11 @@ export class ReviewService {
         END AS "isLatest"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       WHERE s."challengeId" = ${challengeId}
-        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."status" IS NULL
+          OR s."status" = 'ACTIVE'
+          OR s."status" = 'AI_FAILED_REVIEW'
+        )
         AND (
           s."type" IS NULL
           OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
