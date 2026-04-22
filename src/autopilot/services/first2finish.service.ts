@@ -414,15 +414,20 @@ export class First2FinishService {
         return;
       }
 
-      const completedIterativePhases = challenge.phases.filter(
-        (phaseCandidate) =>
-          phaseCandidate.id !== currentPhase.id &&
-          phaseCandidate.name === ITERATIVE_REVIEW_PHASE_NAME &&
-          !phaseCandidate.isOpen &&
-          !!phaseCandidate.actualEndDate,
-      );
+      let hasPriorIterativeAssignments = false;
 
-      if (completedIterativePhases.length > 0) {
+      if (!submissionId) {
+        const reviewerHistoryPairs =
+          await this.reviewService.getReviewerSubmissionPairs(challenge.id);
+        hasPriorIterativeAssignments = reviewerHistoryPairs.size > 0;
+      }
+
+      const shouldRotateToNextPhase =
+        (Boolean(submissionId) &&
+          (!aiDecision || aiDecision.status.toUpperCase() === 'PASSED')) ||
+        (!submissionId && hasPriorIterativeAssignments);
+
+      if (shouldRotateToNextPhase) {
         try {
           await this.schedulerService.advancePhase({
             projectId: challenge.projectId,
@@ -432,6 +437,7 @@ export class First2FinishService {
             state: 'END',
             operator: AutopilotOperator.SYSTEM,
             projectStatus: challenge.status,
+            skipIterativePhaseRefresh: true,
           });
 
           this.logger.debug(
