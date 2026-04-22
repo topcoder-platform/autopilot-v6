@@ -414,20 +414,15 @@ export class First2FinishService {
         return;
       }
 
-      let hasPriorIterativeAssignments = false;
+      const completedIterativePhases = challenge.phases.filter(
+        (phaseCandidate) =>
+          phaseCandidate.id !== currentPhase.id &&
+          phaseCandidate.name === ITERATIVE_REVIEW_PHASE_NAME &&
+          !phaseCandidate.isOpen &&
+          !!phaseCandidate.actualEndDate,
+      );
 
-      if (!submissionId) {
-        const reviewerHistoryPairs =
-          await this.reviewService.getReviewerSubmissionPairs(challenge.id);
-        hasPriorIterativeAssignments = reviewerHistoryPairs.size > 0;
-      }
-
-      const shouldRotateToNextPhase =
-        (Boolean(submissionId) &&
-          (!aiDecision || aiDecision.status.toUpperCase() === 'PASSED')) ||
-        (!submissionId && hasPriorIterativeAssignments);
-
-      if (shouldRotateToNextPhase) {
+      if (completedIterativePhases.length > 0) {
         try {
           await this.schedulerService.advancePhase({
             projectId: challenge.projectId,
@@ -437,7 +432,6 @@ export class First2FinishService {
             state: 'END',
             operator: AutopilotOperator.SYSTEM,
             projectStatus: challenge.status,
-            skipIterativePhaseRefresh: true,
           });
 
           this.logger.debug(
@@ -1018,40 +1012,17 @@ export class First2FinishService {
     predecessor: IPhase,
   ): Promise<IPhase | null> {
     try {
-      const refreshedPredecessor = await this.challengeApiService.getPhaseDetails(
-        challenge.id,
-        predecessor.id,
-      );
-
-      const effectivePredecessor = refreshedPredecessor ?? predecessor;
-
-      if (
-        effectivePredecessor.isOpen &&
-        effectivePredecessor.name === ITERATIVE_REVIEW_PHASE_NAME
-      ) {
-        await this.schedulerService.advancePhase({
-          projectId: challenge.projectId,
-          challengeId: challenge.id,
-          phaseId: effectivePredecessor.id,
-          phaseTypeName: effectivePredecessor.name,
-          state: 'END',
-          operator: AutopilotOperator.SYSTEM,
-          projectStatus: challenge.status,
-          skipIterativePhaseRefresh: true,
-        });
-      }
-
       const durationSeconds = Math.max(
         Math.round(this.iterativeReviewDurationMs / 1000),
-        effectivePredecessor.duration || 1,
+        predecessor.duration || 1,
       );
 
       return await this.challengeApiService.createIterativeReviewPhase(
         challenge.id,
-        effectivePredecessor.id,
-        effectivePredecessor.phaseId,
-        effectivePredecessor.name,
-        effectivePredecessor.description,
+        predecessor.id,
+        predecessor.phaseId,
+        predecessor.name,
+        predecessor.description,
         durationSeconds,
       );
     } catch (error) {
