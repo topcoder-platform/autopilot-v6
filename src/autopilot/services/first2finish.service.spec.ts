@@ -429,6 +429,146 @@ describe('First2FinishService', () => {
     );
   });
 
+  it('closes a stale open iterative phase after AI screening closes before assigning the next eligible submission', async () => {
+    const completedPhase = buildIterativePhase({
+      id: 'iterative-phase-1',
+      isOpen: false,
+      actualEndDate: iso(),
+    });
+    const staleOpenPhase = buildIterativePhase({
+      id: 'iterative-phase-2',
+      isOpen: true,
+      actualEndDate: null,
+      predecessor: completedPhase.id,
+    });
+    const aiScreeningPhase = buildIterativePhase({
+      id: 'ai-screening-phase-1',
+      name: AI_SCREENING_PHASE_NAME,
+      isOpen: false,
+      actualEndDate: iso(),
+    });
+
+    const challenge = buildChallenge({
+      phases: [completedPhase, staleOpenPhase, aiScreeningPhase],
+      reviewers: [buildReviewer()],
+      numOfSubmissions: 3,
+    });
+
+    const nextPhase = buildIterativePhase({
+      id: 'iterative-phase-3',
+      isOpen: true,
+      actualEndDate: null,
+      predecessor: staleOpenPhase.id,
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    challengeApiService.createIterativeReviewPhase.mockResolvedValue(nextPhase);
+
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.getReviewerSubmissionPairs.mockResolvedValue(
+      new Set(['resource-1:sub-1']),
+    );
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([
+      'sub-2-failed',
+      'sub-3',
+      'sub-1',
+    ]);
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
+      new Set(['sub-2-failed']),
+    );
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: null,
+    });
+
+    await service.handleSubmissionByChallengeId(challenge.id);
+
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: challenge.id,
+        phaseId: staleOpenPhase.id,
+        state: 'END',
+        skipIterativePhaseRefresh: true,
+      }),
+    );
+
+    expect(challengeApiService.createIterativeReviewPhase).toHaveBeenCalledWith(
+      challenge.id,
+      staleOpenPhase.id,
+      staleOpenPhase.phaseId,
+      staleOpenPhase.name,
+      staleOpenPhase.description,
+      expect.any(Number),
+    );
+
+    expect(reviewService.createPendingReview).toHaveBeenCalledWith(
+      'sub-3',
+      'resource-1',
+      nextPhase.id,
+      'iterative-scorecard',
+      challenge.id,
+    );
+  });
+
+  it('closes an open predecessor phase before creating the next iterative phase', async () => {
+    const predecessorPhase = buildIterativePhase({
+      id: 'iterative-phase-open',
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [predecessorPhase],
+      reviewers: [buildReviewer()],
+    });
+
+    const nextPhase = buildIterativePhase({
+      id: 'iterative-phase-next',
+      isOpen: true,
+      actualEndDate: null,
+      predecessor: predecessorPhase.id,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(predecessorPhase);
+    challengeApiService.createIterativeReviewPhase.mockResolvedValue(nextPhase);
+
+    const created = await (service as unknown as {
+      createNextIterativePhase: (
+        challengeArg: IChallenge,
+        predecessorArg: IPhase,
+      ) => Promise<IPhase | null>;
+    }).createNextIterativePhase(challenge, predecessorPhase);
+
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: challenge.id,
+        phaseId: predecessorPhase.id,
+        state: 'END',
+        skipIterativePhaseRefresh: true,
+      }),
+    );
+
+    expect(challengeApiService.createIterativeReviewPhase).toHaveBeenCalledWith(
+      challenge.id,
+      predecessorPhase.id,
+      predecessorPhase.phaseId,
+      predecessorPhase.name,
+      predecessorPhase.description,
+      expect.any(Number),
+    );
+
+    expect(created).toEqual(nextPhase);
+  });
+
   it('closes submission and registration after a passing iterative review', async () => {
     const iterativePhase = buildIterativePhase({
       id: 'iter-phase',
