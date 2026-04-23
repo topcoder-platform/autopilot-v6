@@ -123,8 +123,7 @@ export class ReviewService {
   private static readonly SUBMISSION_TABLE = Prisma.sql`"submission"`;
   private static readonly AI_REVIEW_CONFIG_TABLE = Prisma.sql`"aiReviewConfig"`;
   private static readonly AI_REVIEW_DECISION_TABLE = Prisma.sql`"aiReviewDecision"`;
-  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE =
-    Prisma.sql`"aiReviewDecisionEscalation"`;
+  private static readonly AI_REVIEW_DECISION_ESCALATION_TABLE = Prisma.sql`"aiReviewDecisionEscalation"`;
   private static readonly REVIEW_SUMMATION_TABLE = Prisma.sql`"reviewSummation"`;
   private static readonly SCORECARD_TABLE = Prisma.sql`"scorecard"`;
   private static readonly REVIEW_TYPE_TABLE = Prisma.sql`"reviewType"`;
@@ -607,6 +606,45 @@ export class ReviewService {
   async getActiveContestSubmissions(
     challengeId: string,
   ): Promise<ActiveContestSubmission[]> {
+    return this.getContestSubmissions(
+      challengeId,
+      false,
+      'review.getActiveContestSubmissions',
+    );
+  }
+
+  async getContestSubmissionsForLatestSelection(
+    challengeId: string,
+  ): Promise<ActiveContestSubmission[]> {
+    return this.getContestSubmissions(
+      challengeId,
+      true,
+      'review.getContestSubmissionsForLatestSelection',
+    );
+  }
+
+  private async getContestSubmissions(
+    challengeId: string,
+    includeAiFailedReview: boolean,
+    actionName:
+      | 'review.getActiveContestSubmissions'
+      | 'review.getContestSubmissionsForLatestSelection',
+  ): Promise<ActiveContestSubmission[]> {
+    const statusFilter = includeAiFailedReview
+      ? Prisma.sql`
+          AND (
+            s."status" IS NULL
+            OR s."status" = 'ACTIVE'
+            OR s."status" = 'AI_FAILED_REVIEW'
+          )
+        `
+      : Prisma.sql`
+          AND (
+            s."status" = 'ACTIVE'
+            OR s."status" IS NULL
+          )
+        `;
+
     const query = Prisma.sql`
       SELECT
         s."id",
@@ -624,7 +662,7 @@ export class ReviewService {
         END AS "isLatest"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       WHERE s."challengeId" = ${challengeId}
-        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        ${statusFilter}
         AND (
           s."type" IS NULL
           OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
@@ -645,7 +683,7 @@ export class ReviewService {
           isLatest: Boolean(record.isLatest),
         }));
 
-      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+      void this.dbLogger.logAction(actionName, {
         challengeId,
         status: 'SUCCESS',
         source: ReviewService.name,
@@ -655,7 +693,7 @@ export class ReviewService {
       return sanitized;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('review.getActiveContestSubmissions', {
+      void this.dbLogger.logAction(actionName, {
         challengeId,
         status: 'ERROR',
         source: ReviewService.name,
@@ -1753,11 +1791,30 @@ export class ReviewService {
       ),
     );
 
-    const allowedCondition = normalizedSubmissionIds.length
-      ? Prisma.sql`AND "submissionId" NOT IN (
-          ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
-        )`
-      : Prisma.sql``;
+    // CRITICAL: If no allowed submissions are provided, log a warning and return early.
+    // This prevents accidental deletion of all reviews due to incomplete WHERE clause.
+    if (!normalizedSubmissionIds.length) {
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'INFO',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            reason: 'empty-allowed-submission-ids',
+            message: `deleteStalePendingSubmissionReviews called with empty allowedSubmissionIds for phase ${trimmedPhaseId} on challenge ${challengeId}. Skipping deletion to prevent unintended data loss.`,
+            allowedSubmissionCount: 0,
+            deletedCount: 0,
+          },
+        },
+      );
+      return 0;
+    }
+
+    const allowedCondition = Prisma.sql`AND "submissionId" NOT IN (
+      ${Prisma.join(normalizedSubmissionIds.map((id) => Prisma.sql`${id}`))}
+    )`;
 
     const query = Prisma.sql`
       DELETE FROM ${ReviewService.REVIEW_TABLE}
@@ -1778,30 +1835,36 @@ export class ReviewService {
     try {
       const deleted = await this.prisma.$executeRaw(query);
 
-      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
-        challengeId,
-        status: 'SUCCESS',
-        source: ReviewService.name,
-        details: {
-          phaseId: trimmedPhaseId,
-          allowedSubmissionCount: normalizedSubmissionIds.length,
-          deletedCount: deleted,
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            allowedSubmissionCount: normalizedSubmissionIds.length,
+            deletedCount: deleted,
+          },
         },
-      });
+      );
 
       return deleted;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('review.deleteStalePendingSubmissionReviews', {
-        challengeId,
-        status: 'ERROR',
-        source: ReviewService.name,
-        details: {
-          phaseId: trimmedPhaseId,
-          allowedSubmissionCount: normalizedSubmissionIds.length,
-          error: err.message,
+      void this.dbLogger.logAction(
+        'review.deleteStalePendingSubmissionReviews',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: {
+            phaseId: trimmedPhaseId,
+            allowedSubmissionCount: normalizedSubmissionIds.length,
+            error: err.message,
+          },
         },
-      });
+      );
       throw err;
     }
   }
