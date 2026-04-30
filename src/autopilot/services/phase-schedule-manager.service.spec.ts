@@ -1,18 +1,66 @@
+import type { ConfigService } from '@nestjs/config';
+import type { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { FinanceApiService } from '../../finance/finance-api.service';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
+import type { ReviewApiService } from '../../review/review-api.service';
+import type { ReviewService } from '../../review/review.service';
+import type { SchedulerService } from './scheduler.service';
+import type { PhaseReviewService } from './phase-review.service';
+import type { ReviewAssignmentService } from './review-assignment.service';
+import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { PhaseScheduleManager } from './phase-schedule-manager.service';
 
 describe('PhaseScheduleManager', () => {
   let service: PhaseScheduleManager;
+  let schedulerService: {
+    setPhaseChainCallback: jest.Mock;
+    evaluateManualPhaseCompletion: jest.Mock;
+  };
+  let phaseReviewService: {
+    handlePhaseOpenedForChallenge: jest.Mock;
+  };
   let challengeApiService: {
     getChallengeById: jest.Mock;
+  };
+  let reviewApiService: {
+    createReviewOpportunity: jest.Mock;
+    getReviewOpportunitiesByChallengeId: jest.Mock;
+  };
+  let reviewService: {
+    updatePendingReviewScorecards: jest.Mock;
+  };
+  let dbLogger: {
+    logAction: jest.Mock;
   };
   let financeApiService: {
     generateChallengePayments: jest.Mock;
   };
 
   beforeEach(() => {
+    schedulerService = {
+      setPhaseChainCallback: jest.fn(),
+      evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+    };
+
+    phaseReviewService = {
+      handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
+    };
+
     challengeApiService = {
       getChallengeById: jest.fn(),
+    };
+
+    reviewApiService = {
+      createReviewOpportunity: jest.fn().mockResolvedValue({ id: 'opp-1' }),
+      getReviewOpportunitiesByChallengeId: jest.fn().mockResolvedValue([]),
+    };
+
+    reviewService = {
+      updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
+    };
+
+    dbLogger = {
+      logAction: jest.fn().mockResolvedValue(undefined),
     };
 
     financeApiService = {
@@ -20,21 +68,17 @@ describe('PhaseScheduleManager', () => {
     };
 
     service = new PhaseScheduleManager(
-      {
-        setPhaseChainCallback: jest.fn(),
-      } as any,
-      challengeApiService as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
+      schedulerService as unknown as SchedulerService,
+      challengeApiService as unknown as ChallengeApiService,
+      phaseReviewService as unknown as PhaseReviewService,
+      {} as unknown as ReviewAssignmentService,
+      reviewService as unknown as ReviewService,
+      reviewApiService as unknown as ReviewApiService,
       {
         get: jest.fn().mockReturnValue(undefined),
-      } as any,
-      {
-        logAction: jest.fn(),
-      } as any,
-      financeApiService as any,
+      } as unknown as ConfigService,
+      dbLogger as unknown as AutopilotDbLoggerService,
+      financeApiService as unknown as FinanceApiService,
     );
   });
 
@@ -123,6 +167,124 @@ describe('PhaseScheduleManager', () => {
     );
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-3',
+    );
+  });
+
+  it('processes unchanged open review phases only once during manual phase detection', async () => {
+    const reviewPhase = {
+      id: 'phase-review-1',
+      phaseId: 'template-review-1',
+      name: 'Review',
+      isOpen: true,
+      actualStartDate: '2026-03-26T10:17:54.388Z',
+      scheduledStartDate: '2026-03-26T10:17:54.388Z',
+      actualEndDate: null,
+      scheduledEndDate: '2026-03-28T10:17:54.388Z',
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: 'challenge-manual-open-dedupe',
+      status: 'ACTIVE',
+      phases: [reviewPhase],
+      reviewers: [],
+    });
+
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          processPastDueOpenPhases: () => Promise<number>;
+        },
+        'processPastDueOpenPhases',
+      )
+      .mockResolvedValue(0);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          scheduleRelevantPhases: () => Promise<void>;
+        },
+        'scheduleRelevantPhases',
+      )
+      .mockResolvedValue(undefined);
+
+    jest
+      .spyOn(
+        service as unknown as {
+          resolveScorecardIdForOpenPhase: () => string | null;
+        },
+        'resolveScorecardIdForOpenPhase',
+      )
+      .mockReturnValue(null);
+
+    const updateMessage = {
+      id: 'challenge-manual-open-dedupe',
+      operator: AutopilotOperator.SYSTEM,
+      projectId: 1003,
+      status: 'ACTIVE',
+    };
+
+    await service.handleChallengeUpdate(updateMessage);
+    await service.handleChallengeUpdate(updateMessage);
+
+    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'challenge-manual-open-dedupe' }),
+      'phase-review-1',
+    );
+  });
+
+  it('infers iterative review opportunities from the reviewer phase when reviewer type is missing', async () => {
+    await (
+      service as unknown as {
+        createReviewOpportunitiesForChallenge: (
+          challenge: unknown,
+        ) => Promise<void>;
+      }
+    ).createReviewOpportunitiesForChallenge({
+      id: 'challenge-iterative',
+      status: 'ACTIVE',
+      phases: [
+        {
+          id: 'phase-1',
+          phaseId: 'iterative-review-phase',
+          name: 'Iterative Review',
+          duration: 86400,
+          scheduledStartDate: '2026-04-02T00:00:00.000Z',
+          actualStartDate: null,
+        },
+      ],
+      prizeSets: [],
+      reviewers: [
+        {
+          id: 'reviewer-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: 'iterative-review-phase',
+          fixedAmount: 25,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          shouldOpenOpportunity: true,
+        },
+      ],
+    });
+
+    expect(reviewApiService.createReviewOpportunity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-iterative',
+        type: 'ITERATIVE_REVIEW',
+      }),
     );
   });
 });

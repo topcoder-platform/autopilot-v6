@@ -16,6 +16,7 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewSummationApiService } from './review-summation-api.service';
+import { MarathonMatchReviewService } from '../../marathon-match/marathon-match-review.service';
 
 const basePhase = {
   id: 'phase-1',
@@ -99,6 +100,7 @@ describe('PhaseReviewService', () => {
   let configService: jest.Mocked<ConfigService>;
   let challengeCompletionService: jest.Mocked<ChallengeCompletionService>;
   let reviewSummationApiService: jest.Mocked<ReviewSummationApiService>;
+  let marathonMatchReviewService: jest.Mocked<MarathonMatchReviewService>;
   let dbLogger: jest.Mocked<AutopilotDbLoggerService>;
 
   beforeAll(() => {
@@ -117,8 +119,11 @@ describe('PhaseReviewService', () => {
 
     reviewService = {
       getActiveContestSubmissions: jest.fn(),
+      getContestSubmissionsForLatestSelection: jest.fn(),
       getActiveCheckpointSubmissionIds: jest.fn(),
+      getActiveCheckpointSubmissions: jest.fn(),
       deleteStalePendingSubmissionReviews: jest.fn(),
+      deletePendingReviewsExceptSubmissions: jest.fn(),
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
@@ -149,12 +154,16 @@ describe('PhaseReviewService', () => {
     reviewSummationApiService = {
       finalizeSummations: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<ReviewSummationApiService>;
+    marathonMatchReviewService = {
+      handleReviewPhaseOpened: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<MarathonMatchReviewService>;
     dbLogger = {
       logAction: jest.fn(),
     } as unknown as jest.Mocked<AutopilotDbLoggerService>;
 
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
     reviewService.deleteStalePendingSubmissionReviews.mockResolvedValue(0);
+    reviewService.deletePendingReviewsExceptSubmissions.mockResolvedValue(0);
     resourcesService.getReviewerResources.mockResolvedValue([
       {
         id: 'resource-1',
@@ -171,12 +180,16 @@ describe('PhaseReviewService', () => {
         roleName: 'Post-Mortem Reviewer',
       },
     ] as any);
-    reviewService.createPendingReview.mockResolvedValue(true);
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: 'review-1',
+    });
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
     reviewService.getActiveCheckpointSubmissionIds.mockResolvedValue([]);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([]);
     challengeCompletionService.finalizeChallenge.mockResolvedValue(true);
 
     service = new PhaseReviewService(
@@ -184,6 +197,7 @@ describe('PhaseReviewService', () => {
       reviewService,
       resourcesService,
       configService,
+      marathonMatchReviewService,
       challengeCompletionService,
       reviewSummationApiService,
       dbLogger,
@@ -209,13 +223,15 @@ describe('PhaseReviewService', () => {
       { id: 'unique-submission', memberId: null, isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
-    expect(reviewService.getActiveContestSubmissions).toHaveBeenCalledWith(
-      challenge.id,
-    );
+    expect(
+      reviewService.getContestSubmissionsForLatestSelection,
+    ).toHaveBeenCalledWith(challenge.id);
 
     const createdSubmissionIds =
       reviewService.createPendingReview.mock.calls.map(
@@ -249,7 +265,9 @@ describe('PhaseReviewService', () => {
       { id: 'latest-submission', memberId: '123', isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
@@ -274,7 +292,9 @@ describe('PhaseReviewService', () => {
       { id: 'latest-submission', memberId: '123', isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
@@ -304,7 +324,9 @@ describe('PhaseReviewService', () => {
         { id: 'latest-submission', memberId: '123', isLatest: true },
       ];
 
-      reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+      reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+        submissions,
+      );
 
       await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
@@ -336,7 +358,9 @@ describe('PhaseReviewService', () => {
       { id: 'latest-submission', memberId: null, isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
@@ -377,7 +401,9 @@ describe('PhaseReviewService', () => {
       { id: 'passed-submission', memberId: '456', isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
       new Set(['failed-submission']),
     );
@@ -413,7 +439,9 @@ describe('PhaseReviewService', () => {
       { id: 'eligible-submission', memberId: '456', isLatest: true },
     ];
 
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
       new Set(['ai-failed-submission']),
     );
@@ -475,7 +503,9 @@ describe('PhaseReviewService', () => {
       { id: 'submission-1', memberId: '123', isLatest: true },
       { id: 'submission-2', memberId: '456', isLatest: true },
     ];
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
       new Set(['submission-1', 'submission-2']),
     );
@@ -526,7 +556,9 @@ describe('PhaseReviewService', () => {
       { id: 'ai-passed-submission', memberId: '123', isLatest: true },
       { id: 'ai-failed-submission', memberId: '456', isLatest: true },
     ];
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
       new Set(['ai-failed-submission']),
     );
@@ -576,7 +608,9 @@ describe('PhaseReviewService', () => {
       { id: 'submission-1', memberId: '123', isLatest: true },
       { id: 'submission-2', memberId: '456', isLatest: true },
     ];
-    reviewService.getActiveContestSubmissions.mockResolvedValue(submissions);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
 
     await service.handlePhaseOpened(challenge.id, screeningPhase.id);
 
@@ -589,6 +623,43 @@ describe('PhaseReviewService', () => {
     expect(createdSubmissionIds).toEqual(
       expect.arrayContaining(['submission-1', 'submission-2']),
     );
+  });
+
+  it('does not treat an older active submission as latest when a newer AI-failed submission exists', async () => {
+    const aiScreeningPhase = {
+      ...basePhase,
+      id: 'phase-ai-screening',
+      phaseId: 'template-ai-screening',
+      name: 'AI Screening',
+    };
+    const challenge = buildChallenge({});
+    challenge.phases = [aiScreeningPhase, { ...basePhase }];
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const submissions: ActiveContestSubmission[] = [
+      { id: 'older-active-submission', memberId: '123', isLatest: false },
+      { id: 'newer-ai-failed-submission', memberId: '123', isLatest: true },
+    ];
+
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
+    reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(
+      new Set(['newer-ai-failed-submission']),
+    );
+    reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(1);
+
+    await service.handlePhaseOpened(challenge.id, basePhase.id);
+
+    expect(reviewService.getAiFailedDecisionSubmissionIds).toHaveBeenCalledWith(
+      challenge.id,
+      ['newer-ai-failed-submission'],
+    );
+    expect(reviewService.markSubmissionsAsAiFailedReview).toHaveBeenCalledWith(
+      challenge.id,
+      ['newer-ai-failed-submission'],
+    );
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
   });
 
   it('creates post-mortem pending reviews for Post-Mortem Reviewer resources', async () => {
@@ -802,6 +873,9 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
     resourcesService.getReviewerResources.mockResolvedValue([
       { id: 'checkpoint-resource' },
+    ] as any);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([
+      { id: 'submission-1', memberId: '123', isLatest: true },
     ] as any);
     reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
       'submission-1',
