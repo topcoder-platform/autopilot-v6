@@ -16,11 +16,11 @@ describe('PhaseScheduleManager', () => {
     setPhaseChainCallback: jest.Mock;
     evaluateManualPhaseCompletion: jest.Mock;
   };
-  let phaseReviewService: {
-    handlePhaseOpenedForChallenge: jest.Mock;
-  };
   let challengeApiService: {
     getChallengeById: jest.Mock;
+  };
+  let phaseReviewService: {
+    handlePhaseOpenedForChallenge: jest.Mock;
   };
   let reviewApiService: {
     createReviewOpportunity: jest.Mock;
@@ -37,17 +37,12 @@ describe('PhaseScheduleManager', () => {
   };
 
   beforeEach(() => {
-    schedulerService = {
-      setPhaseChainCallback: jest.fn(),
-      evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+    challengeApiService = {
+      getChallengeById: jest.fn(),
     };
 
     phaseReviewService = {
       handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
-    };
-
-    challengeApiService = {
-      getChallengeById: jest.fn(),
     };
 
     reviewApiService = {
@@ -105,6 +100,53 @@ describe('PhaseScheduleManager', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-1',
     );
+  });
+
+  it('delegates manual Marathon Match review phase opens from challenge-api updates', async () => {
+    const reviewPhase = {
+      id: 'review-phase-instance',
+      phaseId: 'review-phase',
+      name: 'Review',
+      description: null,
+      isOpen: true,
+      duration: 86400,
+      scheduledStartDate: '2026-04-30T00:00:00.000Z',
+      scheduledEndDate: '2026-05-01T00:00:00.000Z',
+      actualStartDate: '2026-04-30T01:00:00.000Z',
+      actualEndDate: null,
+      predecessor: 'submission-phase',
+      constraints: [],
+    };
+    const challenge = {
+      id: 'challenge-mm',
+      status: 'ACTIVE',
+      projectId: 1003,
+      type: 'Marathon Match',
+      phases: [reviewPhase],
+      reviewers: [],
+      prizeSets: [],
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-mm',
+      operator: AutopilotOperator.ADMIN,
+      projectId: 1003,
+      status: 'ACTIVE',
+    });
+
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledWith(challenge, reviewPhase.id);
   });
 
   it('does not trigger finance generation for non-payable non-active statuses', async () => {
