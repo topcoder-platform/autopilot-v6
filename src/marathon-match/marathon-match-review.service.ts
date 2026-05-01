@@ -31,6 +31,7 @@ export class MarathonMatchReviewService {
    * Marathon Match submissions in review.
    * @param challenge Challenge snapshot containing the opened review phase.
    * @param phase Open review phase that should receive Marathon Match system reviews.
+   * @throws Error when required Marathon Match review configuration is missing.
    */
   async handleReviewPhaseOpened(
     challenge: IChallenge,
@@ -55,12 +56,34 @@ export class MarathonMatchReviewService {
       this.logger.warn(
         `MARATHON_MATCH_SYSTEM_RESOURCE_ID is not configured; skipping Marathon Match review setup for challenge ${challengeId}.`,
       );
-      return;
+      throw new Error(
+        `MARATHON_MATCH_SYSTEM_RESOURCE_ID is required to create Marathon Match system reviews for challenge ${challengeId}.`,
+      );
     }
 
     const marathonMatchConfig =
       await this.marathonMatchApiService.getConfig(challengeId);
-    const reviewScorecardId = marathonMatchConfig?.reviewScorecardId?.trim();
+
+    if (!marathonMatchConfig) {
+      await this.dbLogger.logAction('marathonMatch.handleReviewPhaseOpened', {
+        challengeId,
+        status: 'INFO',
+        source: MarathonMatchReviewService.name,
+        details: {
+          phaseId: phase.id,
+          phaseName: phase.name,
+          reason: 'missing-marathon-match-config',
+        },
+      });
+      this.logger.warn(
+        `Marathon Match config for challenge ${challengeId} could not be loaded; skipping system review creation.`,
+      );
+      throw new Error(
+        `Marathon Match config is required to create system reviews for challenge ${challengeId}.`,
+      );
+    }
+
+    const reviewScorecardId = marathonMatchConfig.reviewScorecardId?.trim();
 
     if (!reviewScorecardId) {
       await this.dbLogger.logAction('marathonMatch.handleReviewPhaseOpened', {
@@ -76,7 +99,9 @@ export class MarathonMatchReviewService {
       this.logger.warn(
         `Marathon Match config for challenge ${challengeId} did not provide reviewScorecardId; skipping system review creation.`,
       );
-      return;
+      throw new Error(
+        `Marathon Match review scorecard is required to create system reviews for challenge ${challengeId}.`,
+      );
     }
 
     const activeSubmissions =
