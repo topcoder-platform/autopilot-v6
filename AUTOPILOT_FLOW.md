@@ -107,6 +107,7 @@ This document maps the current stateful behavior in autopilot: why an action run
 - **Why**: all pending reviews for an open Review or Screening phase are gone.
 - **Code**: `AutopilotService.handleReviewCompleted`
 - **What it does**:
+  - for Marathon Match Review, first verifies every latest contest submission has a review record and completed system review
   - closes the phase early via `SchedulerService.advancePhase`
   - skips the normal “must have completed review count” recheck because the close was review-driven
 

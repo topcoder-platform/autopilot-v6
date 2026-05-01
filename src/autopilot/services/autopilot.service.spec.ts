@@ -121,6 +121,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       getCompletedReviewCountForPhase: jest.fn(),
       getScorecardPassingScore: jest.fn(),
       getPendingReviewCount: jest.fn(),
+      getMarathonMatchReviewReadiness: jest.fn(),
       createPendingReview: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
@@ -446,6 +447,11 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
 
     beforeEach(() => {
       reviewService.getPendingReviewCount.mockResolvedValue(0);
+      reviewService.getMarathonMatchReviewReadiness.mockResolvedValue({
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+      });
     });
 
     it('does not close the review phase while reviews are still pending', async () => {
@@ -472,6 +478,78 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         'challenge-1',
       );
       expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    });
+
+    it('does not close Marathon Match Review until every latest submission has a completed system review', async () => {
+      const reviewPhase = buildReviewPhase('Review');
+      challengeApiService.getChallengeById.mockResolvedValue({
+        ...buildReviewChallenge(reviewPhase),
+        type: 'Marathon Match',
+      });
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+      reviewService.getMarathonMatchReviewReadiness.mockResolvedValueOnce({
+        expectedSubmissionCount: 2,
+        reviewedSubmissionCount: 2,
+        completedSubmissionCount: 1,
+      });
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(
+        reviewService.getMarathonMatchReviewReadiness,
+      ).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
+      expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    });
+
+    it('closes Marathon Match Review when all latest system reviews are completed', async () => {
+      const reviewPhase = buildReviewPhase('Review');
+      challengeApiService.getChallengeById.mockResolvedValue({
+        ...buildReviewChallenge(reviewPhase),
+        type: 'Marathon Match',
+      });
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+      reviewService.getMarathonMatchReviewReadiness.mockResolvedValueOnce({
+        expectedSubmissionCount: 2,
+        reviewedSubmissionCount: 2,
+        completedSubmissionCount: 2,
+      });
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(
+        reviewService.getMarathonMatchReviewReadiness,
+      ).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
+      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
+        reviewPhase.id,
+        'challenge-1',
+      );
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          challengeId: 'challenge-1',
+          phaseId: reviewPhase.id,
+          phaseTypeName: reviewPhase.name,
+          state: 'END',
+        }),
+      );
     });
 
     it.each([
