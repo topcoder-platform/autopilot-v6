@@ -15,6 +15,10 @@ describe('PhaseScheduleManager', () => {
   let schedulerService: {
     setPhaseChainCallback: jest.Mock;
     evaluateManualPhaseCompletion: jest.Mock;
+    buildJobId: jest.Mock;
+    getScheduledTransition: jest.Mock;
+    schedulePhaseTransition: jest.Mock;
+    cancelScheduledTransition: jest.Mock;
   };
   let challengeApiService: {
     getChallengeById: jest.Mock;
@@ -37,6 +41,17 @@ describe('PhaseScheduleManager', () => {
   };
 
   beforeEach(() => {
+    schedulerService = {
+      setPhaseChainCallback: jest.fn(),
+      evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+      buildJobId: jest.fn(
+        (challengeId: string, phaseId: string) => `${challengeId}|${phaseId}`,
+      ),
+      getScheduledTransition: jest.fn().mockReturnValue(undefined),
+      schedulePhaseTransition: jest.fn().mockResolvedValue('job-id'),
+      cancelScheduledTransition: jest.fn().mockResolvedValue(true),
+    };
+
     challengeApiService = {
       getChallengeById: jest.fn(),
     };
@@ -277,10 +292,12 @@ describe('PhaseScheduleManager', () => {
     await service.handleChallengeUpdate(updateMessage);
     await service.handleChallengeUpdate(updateMessage);
 
-    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledWith(
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'challenge-manual-open-dedupe' }),
       'phase-review-1',
     );

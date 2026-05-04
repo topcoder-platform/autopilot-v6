@@ -10,6 +10,11 @@ import {
   IPhase,
 } from '../challenge/interfaces/challenge.interface';
 import { SchedulerService } from '../autopilot/services/scheduler.service';
+import {
+  APPROVAL_PHASE_NAMES,
+  REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
+} from '../autopilot/constants/review.constants';
 
 @Injectable()
 export class RecoveryService implements OnApplicationBootstrap {
@@ -48,6 +53,10 @@ export class RecoveryService implements OnApplicationBootstrap {
           this.logger.warn(
             `Challenge ${challenge.id} has no phases to schedule.`,
           );
+          continue;
+        }
+
+        if (await this.replayOpenReviewPreparation(challenge)) {
           continue;
         }
 
@@ -119,6 +128,61 @@ export class RecoveryService implements OnApplicationBootstrap {
       const err = error as Error;
       this.logger.error('Recovery process failed:', err.stack || err.message);
     }
+  }
+
+  /**
+   * Replays already-open review preparation phases through the regular
+   * challenge-update handler during recovery.
+   * @param challenge Active challenge snapshot returned by Challenge API.
+   * @returns True when an open review-preparation phase was replayed and normal
+   * recovery scheduling for that challenge can be skipped.
+   * @throws This method catches replay errors and returns false so recovery can
+   * continue with its regular scheduling fallback.
+   */
+  private async replayOpenReviewPreparation(
+    challenge: IChallenge,
+  ): Promise<boolean> {
+    if (!this.hasOpenReviewPreparationPhase(challenge)) {
+      return false;
+    }
+
+    try {
+      await this.autopilotService.handleChallengeUpdate({
+        id: challenge.id,
+        projectId: challenge.projectId,
+        status: challenge.status,
+        operator: AutopilotOperator.SYSTEM_RECOVERY,
+      });
+      this.logger.log(
+        `Replayed open review preparation for challenge ${challenge.id} during recovery.`,
+      );
+      return true;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to replay open review preparation for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Detects open phases that require pending review or Marathon Match SYSTEM
+   * review setup.
+   * @param challenge Active challenge snapshot returned by Challenge API.
+   * @returns True when an open Review, Screening, or Approval phase is present.
+   * @throws This helper does not throw.
+   */
+  private hasOpenReviewPreparationPhase(challenge: IChallenge): boolean {
+    return (challenge.phases ?? []).some(
+      (phase) =>
+        phase.isOpen === true &&
+        !phase.actualEndDate &&
+        (REVIEW_PHASE_NAMES.has(phase.name) ||
+          SCREENING_PHASE_NAMES.has(phase.name) ||
+          APPROVAL_PHASE_NAMES.has(phase.name)),
+    );
   }
 
   /**
