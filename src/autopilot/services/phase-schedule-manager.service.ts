@@ -38,6 +38,7 @@ import {
   getReviewerConfigsForPhase,
   selectScorecardId,
 } from '../utils/reviewer.utils';
+import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { FinanceApiService } from '../../finance/finance-api.service';
 
@@ -475,10 +476,7 @@ export class PhaseScheduleManager {
               challengeDetails,
               phase.id,
             );
-            this.processedOpenPhaseFingerprints.set(
-              phaseKey,
-              phaseFingerprint,
-            );
+            this.processedOpenPhaseFingerprints.set(phaseKey, phaseFingerprint);
             processedCount += 1;
             this.logger.log(
               `[MANUAL PHASE DETECTION] Successfully processed open phase ${phase.id} (${phase.name}) for challenge ${challengeDetails.id}`,
@@ -848,6 +846,16 @@ export class PhaseScheduleManager {
     challenge: IChallenge,
     phase: IPhase,
   ): string | null {
+    if (
+      isMarathonMatchChallenge(challenge.type) &&
+      REVIEW_PHASE_NAMES.has(phase.name)
+    ) {
+      this.logger.debug(
+        `Skipping reviewer-config scorecard updates for Marathon Match review phase ${phase.id} on challenge ${challenge.id}; system reviews use the Marathon Match config scorecard.`,
+      );
+      return null;
+    }
+
     const phaseTemplateId = phase.phaseId;
     if (!phaseTemplateId) {
       return null;

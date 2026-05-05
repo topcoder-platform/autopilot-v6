@@ -223,13 +223,11 @@ export class ReviewService {
     phaseId: string,
     resourceId: string,
     submissionId: string | null,
-    scorecardId: string | null,
   ): bigint {
     const key = [
       phaseId?.trim() ?? '',
       resourceId?.trim() ?? '',
       submissionId?.trim() ?? 'null',
-      scorecardId?.trim() ?? 'null',
     ].join('|');
 
     const hash = createHash('sha256').update(key).digest('hex').slice(0, 16);
@@ -1463,6 +1461,18 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Ensures a pending review assignment exists for one reviewer/phase/submission
+   * tuple.
+   * @param submissionId Submission to review, or null for challenge-level reviews.
+   * @param resourceId Reviewer resource that owns the assignment.
+   * @param phaseId Phase instance that owns the assignment.
+   * @param scorecardId Scorecard the pending assignment should use.
+   * @param challengeId Challenge used for audit logging.
+   * @returns Whether a row was created and the reusable non-completed review ID,
+   * if one should be dispatched.
+   * @throws Error when the database insert, lookup, or scorecard correction fails.
+   */
   async createPendingReview(
     submissionId: string | null,
     resourceId: string,
@@ -1494,10 +1504,9 @@ export class ReviewService {
         WHERE existing."resourceId" = ${resourceId}
           AND existing."phaseId" = ${phaseId}
           AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
-          AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
           AND (
             existing."status" IS NULL
-            OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+            OR UPPER((existing."status")::text) != 'NO_REVIEW'
           )
       )
       RETURNING "id"
@@ -1508,7 +1517,6 @@ export class ReviewService {
         phaseId,
         resourceId,
         submissionId,
-        scorecardId,
       );
 
       const { created, reviewId, pendingReviewIds } =
@@ -1529,26 +1537,58 @@ export class ReviewService {
           }
 
           const existingPendingReviews = await tx.$queryRaw<
-            Array<{ id: string }>
+            Array<{
+              id: string;
+              scorecardId: string | null;
+              status: string | null;
+            }>
           >(Prisma.sql`
-            SELECT existing."id"
+            SELECT
+              existing."id",
+              existing."scorecardId" AS "scorecardId",
+              existing."status"::text AS "status"
             FROM ${ReviewService.REVIEW_TABLE} existing
             WHERE existing."resourceId" = ${resourceId}
               AND existing."phaseId" = ${phaseId}
               AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
-              AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
               AND (
                 existing."status" IS NULL
-                OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+                OR UPPER((existing."status")::text) != 'NO_REVIEW'
               )
-            ORDER BY existing."createdAt" DESC, existing."id" DESC
+            ORDER BY
+              CASE
+                WHEN UPPER(COALESCE((existing."status")::text, 'PENDING')) = 'COMPLETED'
+                  THEN 1
+                ELSE 0
+              END,
+              existing."createdAt" DESC,
+              existing."id" DESC
             LIMIT 10
           `);
 
+          const reusableReviews = existingPendingReviews.filter(
+            (row) => row.status?.trim().toUpperCase() !== 'COMPLETED',
+          );
+          const reusableReview = reusableReviews[0] ?? null;
+
+          if (reusableReview && reusableReview.scorecardId !== scorecardId) {
+            await tx.$executeRaw(Prisma.sql`
+              UPDATE ${ReviewService.REVIEW_TABLE}
+              SET
+                "scorecardId" = ${scorecardId},
+                "updatedAt" = NOW()
+              WHERE "id" = ${reusableReview.id}
+                AND (
+                  "status" IS NULL
+                  OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+                )
+            `);
+          }
+
           return {
             created: false,
-            reviewId: existingPendingReviews[0]?.id ?? null,
-            pendingReviewIds: existingPendingReviews.map((row) => row.id),
+            reviewId: reusableReview?.id ?? null,
+            pendingReviewIds: reusableReviews.map((row) => row.id),
           };
         });
 

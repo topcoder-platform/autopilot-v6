@@ -138,7 +138,15 @@ describe('PhaseScheduleManager', () => {
       projectId: 1003,
       type: 'Marathon Match',
       phases: [reviewPhase],
-      reviewers: [],
+      reviewers: [
+        {
+          id: 'reviewer-config-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: reviewPhase.phaseId,
+          scorecardId: 'member-review-scorecard',
+        },
+      ],
       prizeSets: [],
     };
 
@@ -162,6 +170,7 @@ describe('PhaseScheduleManager', () => {
     expect(
       phaseReviewService.handlePhaseOpenedForChallenge,
     ).toHaveBeenCalledWith(challenge, reviewPhase.id);
+    expect(reviewService.updatePendingReviewScorecards).not.toHaveBeenCalled();
   });
 
   it('does not trigger finance generation for non-payable non-active statuses', async () => {
