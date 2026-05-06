@@ -432,11 +432,11 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 
 ### Member stats refresh / rerate
 
-- **Why**: challenge completed with winners.
+- **Why**: challenge completed with submitter results.
 - **Code**: `ChallengeCompletionService.triggerStatsRefreshForWinners`
 - **What it does**:
   - refreshes winner stats in member-api
-  - rerates winners if the challenge metadata marks it rated and the track/type pair is supported
+  - asks member-api to rerate every submitter for the native challenge track/type rating and any configured named rating paths that match the challenge, such as AI
 
 ### Challenge-result synchronization
 

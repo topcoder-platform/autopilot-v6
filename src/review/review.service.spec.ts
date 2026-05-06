@@ -136,7 +136,8 @@ describe('ReviewService', () => {
         { id: 'submission-2', memberId: 'member-1', isLatest: true },
       ]);
 
-      const submissions = await service.getActiveContestSubmissions(challengeId);
+      const submissions =
+        await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
         { id: 'submission-1', memberId: 'member-1', isLatest: false },
@@ -152,8 +153,8 @@ describe('ReviewService', () => {
 
       expect(sqlText).toContain('ROW_NUMBER() OVER');
       expect(sqlText).toContain('COALESCE(s."memberId", s."id")');
-      expect(sqlText).toContain("s.\"status\" = 'ACTIVE'");
-      expect(sqlText).not.toContain("s.\"status\" = 'AI_FAILED_REVIEW'");
+      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
+      expect(sqlText).not.toContain('s."status" = \'AI_FAILED_REVIEW\'');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getActiveContestSubmissions',
@@ -172,7 +173,8 @@ describe('ReviewService', () => {
         { id: 'submission-2', memberId: null, isLatest: true },
       ]);
 
-      const submissions = await service.getActiveContestSubmissions(challengeId);
+      const submissions =
+        await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
         { id: 'submission-2', memberId: null, isLatest: true },
@@ -202,8 +204,8 @@ describe('ReviewService', () => {
         ? rawQuery.strings.join('')
         : '';
 
-      expect(sqlText).toContain("s.\"status\" = 'ACTIVE'");
-      expect(sqlText).toContain("s.\"status\" = 'AI_FAILED_REVIEW'");
+      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
+      expect(sqlText).toContain('s."status" = \'AI_FAILED_REVIEW\'');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getContestSubmissionsForLatestSelection',
@@ -697,9 +699,8 @@ describe('ReviewService', () => {
     it('returns pending AI escalation count when query succeeds', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '3' }]);
 
-      const result = await service.getPendingAiDecisionsEscalationsCount(
-        challengeId,
-      );
+      const result =
+        await service.getPendingAiDecisionsEscalationsCount(challengeId);
 
       expect(result).toBe(3);
       expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);

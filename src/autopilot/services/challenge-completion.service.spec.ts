@@ -77,6 +77,9 @@ describe('ChallengeCompletionService', () => {
     rerateMemberStats: jest.MockedFunction<
       MemberApiService['rerateMemberStats']
     >;
+    rerateChallengeSubmitterRatings: jest.MockedFunction<
+      MemberApiService['rerateChallengeSubmitterRatings']
+    >;
   };
   let kafkaService: {
     produce: jest.MockedFunction<KafkaService['produce']>;
@@ -363,12 +366,16 @@ describe('ChallengeCompletionService', () => {
     memberApiService = {
       refreshMemberStats: jest.fn().mockResolvedValue(true),
       rerateMemberStats: jest.fn().mockResolvedValue(true),
+      rerateChallengeSubmitterRatings: jest.fn().mockResolvedValue(true),
     } as unknown as {
       refreshMemberStats: jest.MockedFunction<
         MemberApiService['refreshMemberStats']
       >;
       rerateMemberStats: jest.MockedFunction<
         MemberApiService['rerateMemberStats']
+      >;
+      rerateChallengeSubmitterRatings: jest.MockedFunction<
+        MemberApiService['rerateChallengeSubmitterRatings']
       >;
     };
 
@@ -448,13 +455,13 @@ describe('ChallengeCompletionService', () => {
       'user101',
       challenge.id,
     );
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(1);
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
-      'user101',
-      challenge.id,
-      'DEVELOP',
-      'Challenge',
-    );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
   it('stores remaining passing submissions as passed review winners', async () => {
@@ -616,22 +623,16 @@ describe('ChallengeCompletionService', () => {
       'user102',
       challenge.id,
     );
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(2);
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
-      'user101',
-      challenge.id,
-      'DEVELOP',
-      'Challenge',
-    );
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
-      'user102',
-      challenge.id,
-      'DEVELOP',
-      'Challenge',
-    );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
-  it('skips rerate when metadata marks the challenge as unrated', async () => {
+  it('delegates challenge rerate when metadata marks the challenge as unrated', async () => {
     const challenge = buildChallenge({
       prizeSets: [buildPlacementPrizeSet(2)],
       numOfSubmissions: 3,
@@ -644,10 +645,16 @@ describe('ChallengeCompletionService', () => {
 
     expect(result).toBe(true);
     expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
     expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
-  it('skips rerate when rating metadata is absent', async () => {
+  it('delegates challenge rerate when rating metadata is absent', async () => {
     const challenge = buildChallenge({
       prizeSets: [buildPlacementPrizeSet(2)],
       numOfSubmissions: 3,
@@ -660,6 +667,12 @@ describe('ChallengeCompletionService', () => {
 
     expect(result).toBe(true);
     expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
     expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
@@ -693,7 +706,13 @@ describe('ChallengeCompletionService', () => {
       PrizeSetTypeEnum.PLACEMENT,
     ]);
     expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(3);
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(3);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
   it('triggers member stats refresh and rerate after explicit winner completion', async () => {
@@ -756,22 +775,16 @@ describe('ChallengeCompletionService', () => {
       'user102',
       challenge.id,
     );
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledTimes(2);
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
-      'user101',
-      challenge.id,
-      'DATA_SCIENCE',
-      'MARATHON_MATCH',
-    );
-    expect(memberApiService.rerateMemberStats).toHaveBeenCalledWith(
-      'user102',
-      challenge.id,
-      'DATA_SCIENCE',
-      'MARATHON_MATCH',
-    );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
+    expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
-  it('skips rerate for normalized track and type pairs not supported by member-api', async () => {
+  it('delegates challenge rerate for track and type pairs not known by autopilot', async () => {
     const challenge = buildChallenge({
       status: ChallengeStatusEnum.ACTIVE,
       numOfSubmissions: 2,
@@ -800,6 +813,12 @@ describe('ChallengeCompletionService', () => {
       'user101',
       challenge.id,
     );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith(challenge.id);
     expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 

@@ -332,9 +332,7 @@ describe('SchedulerService (review phase deferral)', () => {
     );
     expect(
       reviewService.getPendingAiDecisionsEscalationsCount,
-    ).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    ).toHaveBeenCalledWith(payload.challengeId);
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -660,9 +658,7 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
     expect(
       reviewService.getPendingAiDecisionsEscalationsCount,
-    ).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    ).toHaveBeenCalledWith(payload.challengeId);
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,

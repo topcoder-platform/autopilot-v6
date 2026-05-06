@@ -267,7 +267,10 @@ describe('First2FinishService', () => {
 
     reviewService.getAllSubmissionIdsOrdered.mockResolvedValue(['sub-123']);
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
-    reviewService.createPendingReview.mockResolvedValue({ created: true, reviewId: null });
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: null,
+    });
 
     await service.handleSubmissionByChallengeId(challenge.id, 'sub-123');
 
@@ -323,7 +326,10 @@ describe('First2FinishService', () => {
 
     reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([]);
     reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
-    reviewService.createPendingReview.mockResolvedValue({ created: true, reviewId: null });
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: null,
+    });
 
     await service.handleSubmissionByChallengeId(challenge.id, 'sub-123');
 
@@ -392,7 +398,10 @@ describe('First2FinishService', () => {
       'sub-2',
       'sub-1',
     ]);
-    reviewService.createPendingReview.mockResolvedValue({ created: true, reviewId: null });
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: null,
+    });
 
     await service.handleSubmissionByChallengeId(challenge.id, 'sub-3');
 

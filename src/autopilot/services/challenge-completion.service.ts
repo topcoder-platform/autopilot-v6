@@ -31,10 +31,6 @@ import {
 @Injectable()
 export class ChallengeCompletionService {
   private readonly logger = new Logger(ChallengeCompletionService.name);
-  private readonly rerateSupportedPairs = new Set([
-    'DEVELOP::Challenge',
-    'DATA_SCIENCE::MARATHON_MATCH',
-  ]);
 
   constructor(
     private readonly challengeApiService: ChallengeApiService,
@@ -49,103 +45,22 @@ export class ChallengeCompletionService {
   ) {}
 
   /**
-   * Resolves the member-api rerate track/type payload from the challenge names.
-   * @param challenge Completed challenge snapshot from the Challenge API.
-   * @returns Contract-compliant rerate identifiers, or `null` when the challenge is unsupported.
-   * @throws Never. Unsupported or unrecognized values are logged and skipped.
-   */
-  private getSupportedReratePayload(
-    challenge: IChallenge,
-  ): { trackId: string; typeId: string } | null {
-    const trackId = this.normalizeMemberStatsTrackId(challenge.track);
-    const typeId = this.normalizeMemberStatsTypeId(challenge.type);
-
-    if (!trackId || !typeId) {
-      this.logger.warn(
-        `Skipping member stats rerate for challenge ${challenge.id} because track or type could not be normalized from challenge names.`,
-      );
-      return null;
-    }
-
-    const pairKey = `${trackId}::${typeId}`;
-    if (!this.rerateSupportedPairs.has(pairKey)) {
-      this.logger.warn(
-        `Skipping member stats rerate for challenge ${challenge.id} because rerates for ${trackId} / ${typeId} are not supported by member-api.`,
-      );
-      return null;
-    }
-
-    return { trackId, typeId };
-  }
-
-  /**
-   * Maps challenge track names to the enum names accepted by member-api rerates.
-   * @param track Challenge track name from challenge-api.
-   * @returns Supported member-api track enum name, or `null` when no mapping exists.
-   * @throws Never.
-   */
-  private normalizeMemberStatsTrackId(track?: string): string | null {
-    const normalized = track?.trim().toUpperCase();
-    if (!normalized) {
-      return null;
-    }
-
-    if (normalized.includes('DATA') && normalized.includes('SCIENCE')) {
-      return 'DATA_SCIENCE';
-    }
-
-    if (normalized.includes('DEVELOP') || normalized === 'DEV') {
-      return 'DEVELOP';
-    }
-
-    return null;
-  }
-
-  /**
-   * Maps challenge type names to the enum names accepted by member-api rerates.
-   * @param type Challenge type name from challenge-api.
-   * @returns Supported member-api type enum name, or `null` when no mapping exists.
-   * @throws Never.
-   */
-  private normalizeMemberStatsTypeId(type?: string): string | null {
-    const normalized = type
-      ?.trim()
-      .toUpperCase()
-      .replace(/[\s-]+/g, '_');
-    if (!normalized) {
-      return null;
-    }
-
-    if (normalized === 'CHALLENGE') {
-      return 'Challenge';
-    }
-
-    if (normalized === 'MARATHON_MATCH') {
-      return 'MARATHON_MATCH';
-    }
-
-    return null;
-  }
-
-  /**
-   * Schedules member stats refresh and rerate calls for the unique winner handles on a completed challenge.
+   * Schedules winner stats refreshes and challenge-level submitter rating updates.
    * @param challengeId Completed challenge identifier.
    * @param winners Winner records used to derive distinct member handles.
-   * @param challengeSnapshot Optional challenge snapshot reused to avoid an extra lookup.
-   * @returns Promise that resolves after the outbound calls have been scheduled.
+   * @returns Nothing. Outbound calls are started without blocking completion.
    * @throws Never. Errors are logged and swallowed so completion remains idempotent.
    *
    * Usage:
    * Invoked by the completion paths after finance has been triggered so member-api
-   * can refresh winner stats asynchronously without blocking challenge completion.
-   * Rerates are only sent for explicitly rated challenges whose normalized track/type
-   * names match the member-api contract.
+   * can refresh winner aggregate stats and rerate every submitter asynchronously
+   * without blocking challenge completion. Member-api decides which native and
+   * named rating dimensions apply to the challenge.
    */
-  private async triggerStatsRefreshForWinners(
+  private triggerStatsRefreshForWinners(
     challengeId: string,
     winners: IChallengeWinner[],
-    challengeSnapshot?: IChallenge,
-  ): Promise<void> {
+  ): void {
     try {
       const handles = Array.from(
         new Set(
@@ -155,35 +70,11 @@ export class ChallengeCompletionService {
         ),
       );
 
-      if (!handles.length) {
-        return;
-      }
-
       for (const handle of handles) {
         void this.memberApiService.refreshMemberStats(handle, challengeId);
       }
 
-      const challenge =
-        challengeSnapshot ??
-        (await this.challengeApiService.getChallengeById(challengeId));
-
-      if (!isRatedChallenge(challenge)) {
-        return;
-      }
-
-      const reratePayload = this.getSupportedReratePayload(challenge);
-      if (!reratePayload) {
-        return;
-      }
-
-      for (const handle of handles) {
-        void this.memberApiService.rerateMemberStats(
-          handle,
-          challengeId,
-          reratePayload.trackId,
-          reratePayload.typeId,
-        );
-      }
+      void this.memberApiService.rerateChallengeSubmitterRatings(challengeId);
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -622,7 +513,6 @@ export class ChallengeCompletionService {
         void this.triggerStatsRefreshForWinners(
           challengeId,
           challenge.winners ?? [],
-          challenge,
         );
       }
       this.logger.log(
@@ -749,12 +639,8 @@ export class ChallengeCompletionService {
     await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    // Trigger member stats refresh and rerating for winning members.
-    void this.triggerStatsRefreshForWinners(
-      challengeId,
-      placementWinners,
-      challenge,
-    );
+    // Trigger winner aggregate refreshes and submitter rating rerates.
+    void this.triggerStatsRefreshForWinners(challengeId, placementWinners);
     await this.publishChallengeCompletionUpdate(
       challengeId,
       placementWinners,
@@ -781,8 +667,8 @@ export class ChallengeCompletionService {
     await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    // Trigger member stats refresh and rerating for winning members.
-    void this.triggerStatsRefreshForWinners(challengeId, winners, challenge);
+    // Trigger winner aggregate refreshes and submitter rating rerates.
+    void this.triggerStatsRefreshForWinners(challengeId, winners);
     await this.publishChallengeCompletionUpdate(
       challengeId,
       winners,

@@ -290,7 +290,7 @@ The autopilot service uses a flexible logging strategy that adapts to different 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MEMBER_API_URL` | No | _(disabled)_ | Base URL of member-api-v6, e.g. `http://member-api:3000` |
+| `MEMBER_API_URL` | No | _(disabled)_ | Base URL of member-api-v6, e.g. `http://member-api:3000`; used after completion to refresh winner stats and rerate submitter ratings |
 | `MEMBER_API_TIMEOUT_MS` | No | `15000` | HTTP timeout for member-api calls |
 
 ### ECS Deployment Notes
