@@ -111,6 +111,19 @@ export interface SubmissionSummary {
   isPassing: boolean;
 }
 
+/**
+ * Controls how final review summaries are loaded for challenge finalization.
+ */
+export interface GenerateReviewSummaryOptions {
+  /**
+   * When true, finalized review summations are preserved when present, even if
+   * none meet the scorecard passing score. This is used by challenge types such
+   * as Marathon Match where ranking is driven by final summation scores and
+   * there is no minimum passing score.
+   */
+  preserveFinalSummations?: boolean;
+}
+
 export interface MarathonMatchReviewReadiness {
   expectedSubmissionCount: number;
   reviewedSubmissionCount: number;
@@ -2085,8 +2098,22 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Loads final per-submission review summaries, preferring finalized review
+   * summations and rebuilding from committed reviews only when summations are
+   * missing or need standard passing-score repair.
+   * @param challengeId Challenge whose final review summaries should be loaded.
+   * @param options Summary loading options. `preserveFinalSummations` keeps
+   * stored summations intact for challenge types that do not use minimum scores.
+   * @returns Per-submission final scores and passing metadata.
+   * @throws Error when review DB reads or summation rebuild writes fail.
+   *
+   * Used by final challenge completion, approval review assignment, and top
+   * review score derivation to rank eligible submissions.
+   */
   async generateReviewSummaries(
     challengeId: string,
+    options: GenerateReviewSummaryOptions = {},
   ): Promise<SubmissionSummary[]> {
     if (!challengeId) {
       return [];
@@ -2098,7 +2125,10 @@ export class ReviewService {
     if (!summaries.length) {
       summaries = await this.rebuildSummariesFromReviews(challengeId);
       usedRebuild = summaries.length > 0;
-    } else if (summaries.every((summary) => !summary.isPassing)) {
+    } else if (
+      !options.preserveFinalSummations &&
+      summaries.every((summary) => !summary.isPassing)
+    ) {
       const recalculatedSummaries =
         await this.fetchSummariesFromReviews(challengeId);
       const hasRecalculatedSummaries = recalculatedSummaries.length > 0;
@@ -2442,6 +2472,7 @@ export class ReviewService {
    */
   private async getChallengeResultCandidates(
     challengeId: string,
+    options: { ignorePassingScore?: boolean } = {},
   ): Promise<ChallengeResultCandidate[]> {
     if (!challengeId) {
       return [];
@@ -2625,7 +2656,11 @@ export class ReviewService {
         initialScore,
         finalScore,
         passingScore: resolvedPassingScore,
-        passedReview: count > 0 ? finalScore >= resolvedPassingScore : false,
+        passedReview:
+          count > 0
+            ? Boolean(options.ignorePassingScore) ||
+              finalScore >= resolvedPassingScore
+            : false,
         validSubmission: isValidChallengeResultStatus(accumulator.status),
       });
     }
@@ -2637,7 +2672,7 @@ export class ReviewService {
    * Build canonical review-api `challengeResult` rows for one completed
    * challenge without persisting them.
    * @param challengeId Challenge whose result rows should be built.
-   * @param options Placement, rating, and audit context for the rows.
+   * @param options Placement, rating, passing-score, and audit context for the rows.
    * @returns Canonical `challengeResult` rows keyed one-per-member.
    * @throws Error when review data cannot be loaded.
    */
@@ -2646,13 +2681,16 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
       createdAt?: Date;
       updatedAt?: Date;
     },
   ): Promise<ChallengeResultRecord[]> {
-    const candidates = await this.getChallengeResultCandidates(challengeId);
+    const candidates = await this.getChallengeResultCandidates(challengeId, {
+      ignorePassingScore: options.ignorePassingScore,
+    });
     const createdAt = options.createdAt ?? new Date();
     const updatedAt = options.updatedAt ?? createdAt;
 
@@ -2672,7 +2710,7 @@ export class ReviewService {
    * Upsert canonical review-api `challengeResult` rows for one challenge and
    * delete stale rows that no longer map to a participant outcome.
    * @param challengeId Challenge whose rows should be synchronized.
-   * @param options Placement, rating, and audit context for the rows.
+   * @param options Placement, rating, passing-score, and audit context for the rows.
    * @returns Summary of how many rows were built, upserted, and removed.
    * @throws Error when building or persisting rows fails.
    */
@@ -2681,6 +2719,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
       createdAt?: Date;

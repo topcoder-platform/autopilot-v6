@@ -343,6 +343,54 @@ describe('ReviewService', () => {
         }),
       ]);
     });
+
+    it('marks reviewed submissions as passing when passing-score checks are ignored', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'low-score-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 12,
+          finalScore: 12,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [],
+          allowUnlimitedSubmissions: false,
+          ignorePassingScore: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'low-score-submission',
+          initialScore: 12,
+          finalScore: 12,
+          placement: 0,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
   });
 
   describe('syncChallengeResultsForChallenge', () => {
@@ -943,6 +991,47 @@ describe('ReviewService', () => {
             submissionCount: 1,
             passingCount: 1,
             rebuiltFromReviews: true,
+          }),
+        }),
+      );
+    });
+
+    it('preserves stored final summations when passing-score repair is disabled', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        buildReviewSummationRow({
+          aggregateScore: '24.03',
+          isPassing: true,
+          minimumPassingScore: '80',
+        }),
+      ]);
+
+      const summaries = await service.generateReviewSummaries(challengeId, {
+        preserveFinalSummations: true,
+      });
+
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+      expect(summaries).toEqual([
+        {
+          submissionId: 'submission-1',
+          legacySubmissionId: 'legacy-1',
+          memberId: '123456',
+          submittedDate: new Date('2024-10-21T10:00:00.000Z'),
+          aggregateScore: 24.03,
+          scorecardId: 'scorecard-1',
+          scorecardLegacyId: 'legacy-scorecard',
+          passingScore: 80,
+          isPassing: false,
+        },
+      ]);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.generateReviewSummaries',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            submissionCount: 1,
+            passingCount: 0,
+            rebuiltFromReviews: false,
           }),
         }),
       );

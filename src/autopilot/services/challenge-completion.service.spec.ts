@@ -715,6 +715,88 @@ describe('ChallengeCompletionService', () => {
     expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
   });
 
+  it('completes Marathon Match challenges from review summations without requiring a passing score', async () => {
+    const challenge = buildChallenge({
+      track: 'Data Science',
+      type: 'Marathon Match',
+      prizeSets: [buildPlacementPrizeSet(1)],
+      numOfSubmissions: 2,
+    });
+
+    const marathonSummaries: SubmissionSummary[] = [
+      {
+        submissionId: 'sub-1',
+        legacySubmissionId: null,
+        memberId: '101',
+        submittedDate: new Date('2024-01-02T10:00:00.000Z'),
+        aggregateScore: 12,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 75,
+        isPassing: false,
+      },
+      {
+        submissionId: 'sub-2',
+        legacySubmissionId: null,
+        memberId: '102',
+        submittedDate: new Date('2024-01-02T09:00:00.000Z'),
+        aggregateScore: 24,
+        scorecardId: 'scorecard-1',
+        scorecardLegacyId: null,
+        passingScore: 75,
+        isPassing: false,
+      },
+    ];
+
+    reviewService.generateReviewSummaries.mockResolvedValueOnce(
+      marathonSummaries,
+    );
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(finalizeSummationsMock.mock.calls).toEqual([[challenge.id]]);
+    expect(marathonMatchApiService.getConfig).toHaveBeenCalledWith(
+      challenge.id,
+    );
+    expect(reviewService.generateReviewSummaries).toHaveBeenCalledWith(
+      challenge.id,
+      {
+        preserveFinalSummations: true,
+      },
+    );
+    expect(challengeApiService.cancelChallenge).not.toHaveBeenCalled();
+    expect(challengeApiService.completeChallenge).toHaveBeenCalledTimes(1);
+    expect(challengeApiService.completeChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      [
+        {
+          userId: 102,
+          handle: 'user102',
+          placement: 1,
+          type: PrizeSetTypeEnum.PLACEMENT,
+        },
+        {
+          userId: 101,
+          handle: 'user101',
+          placement: 1,
+          type: PrizeSetTypeEnum.PASSED_REVIEW,
+        },
+      ],
+    );
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        ignorePassingScore: true,
+        placementWinners: [expect.objectContaining({ userId: 102 })],
+      }),
+    );
+    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+  });
+
   it('triggers member stats refresh and rerate after explicit winner completion', async () => {
     const challenge = buildChallenge({
       status: ChallengeStatusEnum.ACTIVE,

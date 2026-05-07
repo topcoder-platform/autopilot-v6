@@ -104,6 +104,7 @@ export class ChallengeCompletionService {
           userId: winner.userId,
           placement: winner.placement,
         })),
+        ignorePassingScore: isMarathonMatchChallenge(challenge.type),
         allowUnlimitedSubmissions: challengeAllowsUnlimitedSubmissions(
           challenge,
           (message) => this.logger.warn(message),
@@ -523,7 +524,9 @@ export class ChallengeCompletionService {
 
     await this.reviewSummationApiService.finalizeSummations(challengeId);
 
-    if (isMarathonMatchChallenge(challenge.type)) {
+    const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
+
+    if (isMarathonMatch) {
       const marathonMatchConfig =
         await this.marathonMatchApiService.getConfig(challengeId);
       if (marathonMatchConfig?.relativeScoringEnabled) {
@@ -533,8 +536,12 @@ export class ChallengeCompletionService {
       }
     }
 
-    const summaries =
-      await this.reviewService.generateReviewSummaries(challengeId);
+    const summaries = await this.reviewService.generateReviewSummaries(
+      challengeId,
+      {
+        preserveFinalSummations: isMarathonMatch,
+      },
+    );
 
     if (!summaries.length) {
       if ((challenge.numOfSubmissions ?? 0) === 0) {
@@ -556,9 +563,11 @@ export class ChallengeCompletionService {
       return false;
     }
 
-    const passingSummaries = summaries.filter((summary) => summary.isPassing);
+    const completionSummaries = isMarathonMatch
+      ? summaries
+      : summaries.filter((summary) => summary.isPassing);
 
-    if (!passingSummaries.length) {
+    if (!completionSummaries.length) {
       this.logger.log(
         `No passing submissions detected for challenge ${challengeId}; marking as CANCELLED_FAILED_REVIEW.`,
       );
@@ -573,7 +582,13 @@ export class ChallengeCompletionService {
       return true;
     }
 
-    const sortedSummaries = [...passingSummaries].sort((a, b) => {
+    if (isMarathonMatch) {
+      this.logger.log(
+        `Marathon Match challenge ${challengeId} has ${completionSummaries.length} final review summation(s); completing without applying a minimum passing score.`,
+      );
+    }
+
+    const sortedSummaries = [...completionSummaries].sort((a, b) => {
       if (b.aggregateScore !== a.aggregateScore) {
         return b.aggregateScore - a.aggregateScore;
       }
