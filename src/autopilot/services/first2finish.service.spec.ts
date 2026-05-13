@@ -132,6 +132,7 @@ describe('First2FinishService', () => {
       createPendingReview: jest.fn(),
       getPendingReviewCount: jest.fn(),
       getScorecardPassingScore: jest.fn(),
+      getLatestPassingReviewForPhase: jest.fn(),
       hasAiDecisionForSubmission: jest.fn(),
     } as unknown as jest.Mocked<ReviewService>;
 
@@ -168,6 +169,7 @@ describe('First2FinishService', () => {
     reviewService.getReviewerSubmissionPairs.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getLatestPassingReviewForPhase.mockResolvedValue(null);
     reviewService.hasAiDecisionForSubmission.mockResolvedValue(undefined);
     resourcesService.getMemberHandleMap.mockResolvedValue(new Map());
   });
@@ -585,6 +587,86 @@ describe('First2FinishService', () => {
       ],
       { reason: 'iterative-review-pass' },
     );
+  });
+
+  it('reconciles a passing review when the iterative phase closes without a Kafka event', async () => {
+    const iterativePhase = buildIterativePhase({
+      id: 'iter-phase',
+      isOpen: false,
+      actualEndDate: iso(),
+    });
+    const submissionPhase = buildIterativePhase({
+      id: 'submission-phase',
+      name: SUBMISSION_PHASE_NAME,
+      isOpen: true,
+      actualEndDate: null,
+    });
+    const registrationPhase = buildIterativePhase({
+      id: 'registration-phase',
+      name: REGISTRATION_PHASE_NAME,
+      isOpen: true,
+      actualEndDate: null,
+    });
+
+    const challenge = buildChallenge({
+      phases: [iterativePhase, submissionPhase, registrationPhase],
+      reviewers: [buildReviewer()],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getLatestPassingReviewForPhase.mockResolvedValue({
+      id: 'review-1',
+      phaseId: iterativePhase.id,
+      resourceId: 'resource-1',
+      submissionId: 'submission-1',
+      scorecardId: 'iterative-scorecard',
+      score: 92,
+      status: 'COMPLETED',
+      submitterMemberId: '4001',
+      passingScore: 80,
+    });
+    resourcesService.getMemberHandleMap.mockResolvedValue(
+      new Map([['4001', 'resolvedHandle']]),
+    );
+
+    await service.handleIterativePhaseClosed(challenge.id);
+
+    expect(reviewService.getLatestPassingReviewForPhase.mock.calls).toEqual([
+      [challenge.id, iterativePhase.id],
+    ]);
+    expect(schedulerService.advancePhase.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          phaseId: submissionPhase.id,
+          state: 'END',
+        }),
+      ],
+      [
+        expect.objectContaining({
+          phaseId: registrationPhase.id,
+          state: 'END',
+        }),
+      ],
+    ]);
+    expect(
+      challengeCompletionService.completeChallengeWithWinners.mock.calls,
+    ).toEqual([
+      [
+        challenge.id,
+        [
+          {
+            handle: 'resolvedHandle',
+            placement: 1,
+            userId: 4001,
+          },
+        ],
+        { reason: 'iterative-review-pass-reconciled' },
+      ],
+    ]);
+    expect(challengeApiService.createIterativeReviewPhase.mock.calls).toEqual(
+      [],
+    );
+    expect(reviewService.getAllSubmissionIdsOrdered.mock.calls).toEqual([]);
   });
 
   it('skips review assignment when submission has a non-PASSED AI decision', async () => {
