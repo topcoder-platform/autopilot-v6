@@ -391,6 +391,72 @@ describe('ReviewService', () => {
         }),
       ]);
     });
+
+    it('fills non-winner placements from score order when all submissions should be ranked', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'second-place-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 12,
+          finalScore: 12,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'winner-submission',
+          memberId: '456',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 24,
+          finalScore: 24,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 456, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          rankAllSubmissions: true,
+          ignorePassingScore: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          userId: '123',
+          submissionId: 'second-place-submission',
+          placement: 2,
+          rated: true,
+          ratingOrder: 2,
+        }),
+        expect.objectContaining({
+          userId: '456',
+          submissionId: 'winner-submission',
+          placement: 1,
+          rated: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
   });
 
   describe('syncChallengeResultsForChallenge', () => {

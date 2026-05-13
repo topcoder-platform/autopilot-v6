@@ -789,10 +789,21 @@ describe('ChallengeCompletionService', () => {
       challenge.id,
       expect.objectContaining({
         ignorePassingScore: true,
+        rankAllSubmissions: true,
+        ratedChallenge: true,
         placementWinners: [expect.objectContaining({ userId: 102 })],
       }),
     );
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
+      challenge.id,
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledTimes(2);
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user102',
+      challenge.id,
+    );
+    expect(memberApiService.refreshMemberStats).toHaveBeenCalledWith(
+      'user101',
       challenge.id,
     );
   });

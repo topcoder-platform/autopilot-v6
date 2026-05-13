@@ -22,6 +22,7 @@ import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import {
   challengeAllowsUnlimitedSubmissions,
   isRatedChallenge,
+  parseMetadataBoolean,
 } from '../utils/challenge-metadata.utils';
 
 /**
@@ -45,17 +46,16 @@ export class ChallengeCompletionService {
   ) {}
 
   /**
-   * Schedules winner stats refreshes and challenge-level submitter rating updates.
+   * Schedules member stats refreshes and challenge-level submitter rating updates.
    * @param challengeId Completed challenge identifier.
-   * @param winners Winner records used to derive distinct member handles.
+   * @param winners Winner or finisher records used to derive distinct member handles.
    * @returns Nothing. Outbound calls are started without blocking completion.
    * @throws Never. Errors are logged and swallowed so completion remains idempotent.
    *
    * Usage:
-   * Invoked by the completion paths after finance has been triggered so member-api
-   * can refresh winner aggregate stats and rerate every submitter asynchronously
-   * without blocking challenge completion. Member-api decides which native and
-   * named rating dimensions apply to the challenge.
+   * Invoked by completion paths after finance has been triggered so member-api
+   * can refresh affected aggregate stats and rerate every submitter asynchronously.
+   * Member-api decides which native and named rating dimensions apply.
    */
   private triggerStatsRefreshForWinners(
     challengeId: string,
@@ -99,17 +99,19 @@ export class ChallengeCompletionService {
   ): Promise<void> {
     try {
       const createdAt = this.resolveChallengeResultCreatedAt(challenge);
+      const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
       await this.reviewService.syncChallengeResultsForChallenge(challengeId, {
         placementWinners: placementWinners.map((winner) => ({
           userId: winner.userId,
           placement: winner.placement,
         })),
-        ignorePassingScore: isMarathonMatchChallenge(challenge.type),
+        ignorePassingScore: isMarathonMatch,
         allowUnlimitedSubmissions: challengeAllowsUnlimitedSubmissions(
           challenge,
           (message) => this.logger.warn(message),
         ),
-        ratedChallenge: isRatedChallenge(challenge),
+        rankAllSubmissions: isMarathonMatch,
+        ratedChallenge: this.isRatedChallengeResult(challenge),
         actor: 'autopilot',
         createdAt,
         updatedAt: new Date(),
@@ -148,6 +150,33 @@ export class ChallengeCompletionService {
     }
 
     return new Date();
+  }
+
+  /**
+   * Resolve whether challenge result rows should be marked rated.
+   * @param challenge Challenge snapshot whose type and metadata should be inspected.
+   * @returns `true` when ratings should be enabled for result rows.
+   * @throws Never.
+   *
+   * Usage:
+   * Marathon Match results default to rated so final system scores feed the
+   * downstream rating replay unless metadata explicitly disables ratings.
+   */
+  private isRatedChallengeResult(challenge: IChallenge): boolean {
+    if (isRatedChallenge(challenge)) {
+      return true;
+    }
+
+    if (!isMarathonMatchChallenge(challenge.type)) {
+      return false;
+    }
+
+    const metadata = (challenge.metadata ?? {}) as Record<string, unknown>;
+    const unrated = parseMetadataBoolean(metadata.unrated);
+    const rated = parseMetadataBoolean(metadata.rated);
+    const isRated = parseMetadataBoolean(metadata.isRated);
+
+    return unrated !== true && rated !== false && isRated !== false;
   }
 
   private async ensureCancelledPostMortem(challengeId: string): Promise<void> {
@@ -654,8 +683,11 @@ export class ChallengeCompletionService {
     await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
-    // Trigger winner aggregate refreshes and submitter rating rerates.
-    void this.triggerStatsRefreshForWinners(challengeId, placementWinners);
+    // Trigger aggregate refreshes for MM finishers and submitter rating rerates.
+    void this.triggerStatsRefreshForWinners(
+      challengeId,
+      isMarathonMatch ? winners : placementWinners,
+    );
     await this.publishChallengeCompletionUpdate(
       challengeId,
       placementWinners,

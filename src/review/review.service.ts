@@ -2681,6 +2681,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
@@ -2699,6 +2700,7 @@ export class ReviewService {
       candidates,
       placementWinners: options.placementWinners,
       allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      rankAllSubmissions: options.rankAllSubmissions,
       ratedChallenge: options.ratedChallenge,
       actor: options.actor,
       createdAt,
@@ -2719,6 +2721,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
