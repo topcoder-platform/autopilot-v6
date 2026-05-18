@@ -262,6 +262,7 @@ describe('SchedulerService (review phase deferral)', () => {
 
     first2FinishService = {
       handleIterativePhaseClosed: jest.fn().mockResolvedValue(undefined),
+      handleIterativePhaseOpened: jest.fn().mockResolvedValue(undefined),
       handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
       isFirst2FinishChallenge: jest.fn().mockReturnValue(false),
     } as unknown as jest.Mocked<First2FinishService>;
@@ -504,7 +505,7 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });
 
-  it('refreshes submissions when iterative review opens', async () => {
+  it('repairs iterative assignment when iterative review opens', async () => {
     const payload = createPayload({
       state: 'START',
       phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
@@ -537,8 +538,11 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.phaseId,
     ]);
     expect(
+      first2FinishService.handleIterativePhaseOpened.mock.calls,
+    ).toContainEqual([payload.challengeId, payload.phaseId]);
+    expect(
       first2FinishService.handleSubmissionByChallengeId.mock.calls,
-    ).toContainEqual([payload.challengeId]);
+    ).toHaveLength(0);
   });
 
   it('does not recursively refresh when First2Finish opens a seeded iterative phase', async () => {
@@ -573,6 +577,9 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.challengeId,
       payload.phaseId,
     ]);
+    expect(
+      first2FinishService.handleIterativePhaseOpened.mock.calls,
+    ).toHaveLength(0);
     expect(
       first2FinishService.handleSubmissionByChallengeId.mock.calls,
     ).toHaveLength(0);

@@ -41,6 +41,7 @@ describe('PhaseScheduleManager', () => {
     generateChallengePayments: jest.Mock;
   };
   let first2FinishService: {
+    handleIterativePhaseOpened: jest.Mock;
     handleSubmissionByChallengeId: jest.Mock;
   };
 
@@ -82,6 +83,7 @@ describe('PhaseScheduleManager', () => {
     };
 
     first2FinishService = {
+      handleIterativePhaseOpened: jest.fn().mockResolvedValue(undefined),
       handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -228,8 +230,11 @@ describe('PhaseScheduleManager', () => {
       phaseReviewService.handlePhaseOpenedForChallenge.mock.calls,
     ).toContainEqual([challenge, iterativePhase.id]);
     expect(
+      first2FinishService.handleIterativePhaseOpened.mock.calls,
+    ).toContainEqual([challenge.id, iterativePhase.id]);
+    expect(
       first2FinishService.handleSubmissionByChallengeId.mock.calls,
-    ).toContainEqual([challenge.id]);
+    ).toHaveLength(0);
   });
 
   it('does not trigger finance generation for non-payable non-active statuses', async () => {

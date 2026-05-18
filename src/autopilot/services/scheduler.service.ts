@@ -1190,8 +1190,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             String(AutopilotOperator.SYSTEM)
         ) {
           try {
-            await this.first2FinishService.handleSubmissionByChallengeId(
+            await this.first2FinishService.handleIterativePhaseOpened(
               data.challengeId,
+              data.phaseId,
             );
           } catch (error) {
             const err = error as Error;

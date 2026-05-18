@@ -479,8 +479,9 @@ export class PhaseScheduleManager {
               phase.id,
             );
             if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
-              await this.first2FinishService.handleSubmissionByChallengeId(
+              await this.first2FinishService.handleIterativePhaseOpened(
                 challengeDetails.id,
+                phase.id,
               );
             }
             this.processedOpenPhaseFingerprints.set(phaseKey, phaseFingerprint);
