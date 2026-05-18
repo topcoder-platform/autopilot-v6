@@ -50,6 +50,18 @@ interface ReviewDetailRecord {
   status: string | null;
 }
 
+export interface PassingReviewDetailRecord {
+  id: string;
+  phaseId: string | null;
+  resourceId: string;
+  submissionId: string;
+  scorecardId: string | null;
+  score: number | string | null;
+  status: string | null;
+  submitterMemberId: string | null;
+  passingScore: number | string | null;
+}
+
 interface ScorecardRecord {
   minimumPassingScore: number | string | null;
 }
@@ -109,6 +121,19 @@ export interface SubmissionSummary {
   scorecardLegacyId: string | null;
   passingScore: number;
   isPassing: boolean;
+}
+
+/**
+ * Controls how final review summaries are loaded for challenge finalization.
+ */
+export interface GenerateReviewSummaryOptions {
+  /**
+   * When true, finalized review summations are preserved when present, even if
+   * none meet the scorecard passing score. This is used by challenge types such
+   * as Marathon Match where ranking is driven by final summation scores and
+   * there is no minimum passing score.
+   */
+  preserveFinalSummations?: boolean;
 }
 
 export interface MarathonMatchReviewReadiness {
@@ -223,13 +248,11 @@ export class ReviewService {
     phaseId: string,
     resourceId: string,
     submissionId: string | null,
-    scorecardId: string | null,
   ): bigint {
     const key = [
       phaseId?.trim() ?? '',
       resourceId?.trim() ?? '',
       submissionId?.trim() ?? 'null',
-      scorecardId?.trim() ?? 'null',
     ].join('|');
 
     const hash = createHash('sha256').update(key).digest('hex').slice(0, 16);
@@ -1463,6 +1486,18 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Ensures a pending review assignment exists for one reviewer/phase/submission
+   * tuple.
+   * @param submissionId Submission to review, or null for challenge-level reviews.
+   * @param resourceId Reviewer resource that owns the assignment.
+   * @param phaseId Phase instance that owns the assignment.
+   * @param scorecardId Scorecard the pending assignment should use.
+   * @param challengeId Challenge used for audit logging.
+   * @returns Whether a row was created and the reusable non-completed review ID,
+   * if one should be dispatched.
+   * @throws Error when the database insert, lookup, or scorecard correction fails.
+   */
   async createPendingReview(
     submissionId: string | null,
     resourceId: string,
@@ -1494,10 +1529,9 @@ export class ReviewService {
         WHERE existing."resourceId" = ${resourceId}
           AND existing."phaseId" = ${phaseId}
           AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
-          AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
           AND (
             existing."status" IS NULL
-            OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+            OR UPPER((existing."status")::text) != 'NO_REVIEW'
           )
       )
       RETURNING "id"
@@ -1508,7 +1542,6 @@ export class ReviewService {
         phaseId,
         resourceId,
         submissionId,
-        scorecardId,
       );
 
       const { created, reviewId, pendingReviewIds } =
@@ -1529,26 +1562,58 @@ export class ReviewService {
           }
 
           const existingPendingReviews = await tx.$queryRaw<
-            Array<{ id: string }>
+            Array<{
+              id: string;
+              scorecardId: string | null;
+              status: string | null;
+            }>
           >(Prisma.sql`
-            SELECT existing."id"
+            SELECT
+              existing."id",
+              existing."scorecardId" AS "scorecardId",
+              existing."status"::text AS "status"
             FROM ${ReviewService.REVIEW_TABLE} existing
             WHERE existing."resourceId" = ${resourceId}
               AND existing."phaseId" = ${phaseId}
               AND existing."submissionId" IS NOT DISTINCT FROM ${submissionId}
-              AND existing."scorecardId" IS NOT DISTINCT FROM ${scorecardId}
               AND (
                 existing."status" IS NULL
-                OR UPPER((existing."status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+                OR UPPER((existing."status")::text) != 'NO_REVIEW'
               )
-            ORDER BY existing."createdAt" DESC, existing."id" DESC
+            ORDER BY
+              CASE
+                WHEN UPPER(COALESCE((existing."status")::text, 'PENDING')) = 'COMPLETED'
+                  THEN 1
+                ELSE 0
+              END,
+              existing."createdAt" DESC,
+              existing."id" DESC
             LIMIT 10
           `);
 
+          const reusableReviews = existingPendingReviews.filter(
+            (row) => row.status?.trim().toUpperCase() !== 'COMPLETED',
+          );
+          const reusableReview = reusableReviews[0] ?? null;
+
+          if (reusableReview && reusableReview.scorecardId !== scorecardId) {
+            await tx.$executeRaw(Prisma.sql`
+              UPDATE ${ReviewService.REVIEW_TABLE}
+              SET
+                "scorecardId" = ${scorecardId},
+                "updatedAt" = NOW()
+              WHERE "id" = ${reusableReview.id}
+                AND (
+                  "status" IS NULL
+                  OR UPPER(("status")::text) NOT IN ('COMPLETED', 'NO_REVIEW')
+                )
+            `);
+          }
+
           return {
             created: false,
-            reviewId: existingPendingReviews[0]?.id ?? null,
-            pendingReviewIds: existingPendingReviews.map((row) => row.id),
+            reviewId: reusableReview?.id ?? null,
+            pendingReviewIds: reusableReviews.map((row) => row.id),
           };
         });
 
@@ -2045,8 +2110,22 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Loads final per-submission review summaries, preferring finalized review
+   * summations and rebuilding from committed reviews only when summations are
+   * missing or need standard passing-score repair.
+   * @param challengeId Challenge whose final review summaries should be loaded.
+   * @param options Summary loading options. `preserveFinalSummations` keeps
+   * stored summations intact for challenge types that do not use minimum scores.
+   * @returns Per-submission final scores and passing metadata.
+   * @throws Error when review DB reads or summation rebuild writes fail.
+   *
+   * Used by final challenge completion, approval review assignment, and top
+   * review score derivation to rank eligible submissions.
+   */
   async generateReviewSummaries(
     challengeId: string,
+    options: GenerateReviewSummaryOptions = {},
   ): Promise<SubmissionSummary[]> {
     if (!challengeId) {
       return [];
@@ -2058,7 +2137,10 @@ export class ReviewService {
     if (!summaries.length) {
       summaries = await this.rebuildSummariesFromReviews(challengeId);
       usedRebuild = summaries.length > 0;
-    } else if (summaries.every((summary) => !summary.isPassing)) {
+    } else if (
+      !options.preserveFinalSummations &&
+      summaries.every((summary) => !summary.isPassing)
+    ) {
       const recalculatedSummaries =
         await this.fetchSummariesFromReviews(challengeId);
       const hasRecalculatedSummaries = recalculatedSummaries.length > 0;
@@ -2402,6 +2484,7 @@ export class ReviewService {
    */
   private async getChallengeResultCandidates(
     challengeId: string,
+    options: { ignorePassingScore?: boolean } = {},
   ): Promise<ChallengeResultCandidate[]> {
     if (!challengeId) {
       return [];
@@ -2585,7 +2668,11 @@ export class ReviewService {
         initialScore,
         finalScore,
         passingScore: resolvedPassingScore,
-        passedReview: count > 0 ? finalScore >= resolvedPassingScore : false,
+        passedReview:
+          count > 0
+            ? Boolean(options.ignorePassingScore) ||
+              finalScore >= resolvedPassingScore
+            : false,
         validSubmission: isValidChallengeResultStatus(accumulator.status),
       });
     }
@@ -2597,7 +2684,7 @@ export class ReviewService {
    * Build canonical review-api `challengeResult` rows for one completed
    * challenge without persisting them.
    * @param challengeId Challenge whose result rows should be built.
-   * @param options Placement, rating, and audit context for the rows.
+   * @param options Placement, rating, passing-score, and audit context for the rows.
    * @returns Canonical `challengeResult` rows keyed one-per-member.
    * @throws Error when review data cannot be loaded.
    */
@@ -2606,13 +2693,17 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
+      ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
       createdAt?: Date;
       updatedAt?: Date;
     },
   ): Promise<ChallengeResultRecord[]> {
-    const candidates = await this.getChallengeResultCandidates(challengeId);
+    const candidates = await this.getChallengeResultCandidates(challengeId, {
+      ignorePassingScore: options.ignorePassingScore,
+    });
     const createdAt = options.createdAt ?? new Date();
     const updatedAt = options.updatedAt ?? createdAt;
 
@@ -2621,6 +2712,7 @@ export class ReviewService {
       candidates,
       placementWinners: options.placementWinners,
       allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      rankAllSubmissions: options.rankAllSubmissions,
       ratedChallenge: options.ratedChallenge,
       actor: options.actor,
       createdAt,
@@ -2632,7 +2724,7 @@ export class ReviewService {
    * Upsert canonical review-api `challengeResult` rows for one challenge and
    * delete stale rows that no longer map to a participant outcome.
    * @param challengeId Challenge whose rows should be synchronized.
-   * @param options Placement, rating, and audit context for the rows.
+   * @param options Placement, rating, passing-score, and audit context for the rows.
    * @returns Summary of how many rows were built, upserted, and removed.
    * @throws Error when building or persisting rows fails.
    */
@@ -2641,6 +2733,8 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
+      ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
       createdAt?: Date;
@@ -2836,6 +2930,98 @@ export class ReviewService {
         source: ReviewService.name,
         details: {
           reviewId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Finds the best completed review in a phase whose score meets the review
+   * scorecard passing threshold.
+   * @param challengeId Challenge that owns the submission under review.
+   * @param phaseId Phase instance whose completed reviews should be searched.
+   * @returns The highest scoring passing review, including submitter member id,
+   * or null when no passing review exists.
+   * @throws Error when the review database lookup fails.
+   *
+   * Used by First2Finish iterative-review reconciliation when the Kafka
+   * review-completed event was missed but the phase later closes successfully.
+   */
+  async getLatestPassingReviewForPhase(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<PassingReviewDetailRecord | null> {
+    if (!challengeId || !phaseId) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        r."id",
+        r."phaseId",
+        r."resourceId",
+        r."submissionId",
+        r."scorecardId",
+        GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) AS "score",
+        r."status"::text AS "status",
+        s."memberId" AS "submitterMemberId",
+        COALESCE(sc."minimumPassingScore", sc."minScore", 50) AS "passingScore"
+      FROM ${ReviewService.REVIEW_TABLE} r
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = r."submissionId"
+      LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND r."phaseId" = ${phaseId}
+        AND r."submissionId" IS NOT NULL
+        AND UPPER(COALESCE((r."status")::text, 'PENDING')) = 'COMPLETED'
+        AND GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
+      ORDER BY
+        GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) DESC,
+        s."submittedDate" ASC NULLS LAST,
+        r."createdAt" ASC NULLS LAST,
+        r."id" ASC
+      LIMIT 1
+    `;
+
+    try {
+      const [record] =
+        await this.prisma.$queryRaw<PassingReviewDetailRecord[]>(query);
+
+      void this.dbLogger.logAction('review.getLatestPassingReviewForPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          found: Boolean(record),
+          reviewId: record?.id ?? null,
+          submissionId: record?.submissionId ?? null,
+          score: record?.score ?? null,
+          passingScore: record?.passingScore ?? null,
+        },
+      });
+
+      return record ?? null;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getLatestPassingReviewForPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
           error: err.message,
         },
       });

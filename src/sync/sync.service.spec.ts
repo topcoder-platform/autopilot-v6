@@ -226,4 +226,43 @@ describe('SyncService', () => {
       'phase-obsolete',
     );
   });
+
+  it('replays active challenges with open review phases through challenge update handling', async () => {
+    const challengeId = 'challenge-open-review';
+    const phaseId = 'phase-review';
+
+    challengeApiService.getAllActiveChallenges.mockImplementation(
+      ({ status }: { status?: string }) => {
+        if (status === 'ACTIVE') {
+          return [
+            {
+              id: challengeId,
+              projectId: 1005,
+              status: 'ACTIVE',
+              phases: [
+                {
+                  id: phaseId,
+                  name: 'Review',
+                  isOpen: true,
+                  actualEndDate: null,
+                  scheduledEndDate: '2026-05-01T01:00:00.000Z',
+                },
+              ],
+            },
+          ];
+        }
+
+        return [];
+      },
+    );
+
+    await service.synchronizeChallenges();
+
+    expect(autopilotService.handleChallengeUpdate).toHaveBeenCalledWith({
+      id: challengeId,
+      projectId: 1005,
+      status: 'ACTIVE',
+      operator: AutopilotOperator.SYSTEM_SYNC,
+    });
+  });
 });

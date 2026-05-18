@@ -23,10 +23,11 @@ const parseNumber = (value: string | undefined, fallback: number): number => {
  *
  * Environment variables:
  * - `MEMBER_API_URL` (optional): Base URL of member-api-v6, such as `http://member-api:3000`.
- *   When absent, outbound member stats refresh and rerate calls are disabled.
+ * - `BUS_API_URL` (fallback): Public API gateway base URL used when `MEMBER_API_URL` is absent.
+ *   When both are absent, outbound member stats refresh and rerate calls are disabled.
  * - `MEMBER_API_TIMEOUT_MS` (optional, default `15000`): HTTP timeout in milliseconds for member-api calls.
  */
 export default registerAs('memberApi', () => ({
-  baseUrl: (process.env.MEMBER_API_URL || '').trim(),
+  baseUrl: (process.env.MEMBER_API_URL || process.env.BUS_API_URL || '').trim(),
   timeoutMs: parseNumber(process.env.MEMBER_API_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
 }));

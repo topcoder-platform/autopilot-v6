@@ -158,40 +158,7 @@ export class First2FinishService {
         `Iterative review passed for submission ${payload.submissionId} on challenge ${challenge.id} (score ${finalScore} / passing ${passingScore}).`,
       );
 
-      const submissionPhase = challenge.phases.find(
-        (p) => isSubmissionPhaseName(p.name) && p.isOpen,
-      );
-
-      if (submissionPhase) {
-        await this.schedulerService.advancePhase({
-          projectId: challenge.projectId,
-          challengeId: challenge.id,
-          phaseId: submissionPhase.id,
-          phaseTypeName: submissionPhase.name,
-          state: 'END',
-          operator: AutopilotOperator.SYSTEM,
-          projectStatus: challenge.status,
-        });
-      }
-
-      const openRegistrationPhases = challenge.phases.filter(
-        (phaseCandidate) =>
-          phaseCandidate.isOpen &&
-          phaseCandidate.name === REGISTRATION_PHASE_NAME,
-      );
-
-      for (const registrationPhase of openRegistrationPhases) {
-        await this.schedulerService.advancePhase({
-          projectId: challenge.projectId,
-          challengeId: challenge.id,
-          phaseId: registrationPhase.id,
-          phaseTypeName: registrationPhase.name,
-          state: 'END',
-          operator: AutopilotOperator.SYSTEM,
-          projectStatus: challenge.status,
-        });
-      }
-
+      await this.closeOpenSubmissionAndRegistrationPhases(challenge);
       await this.completeFirst2FinishChallenge(challenge, payload);
     } else {
       this.logger.log(
@@ -206,35 +173,62 @@ export class First2FinishService {
   private async completeFirst2FinishChallenge(
     challenge: IChallenge,
     payload: ReviewCompletedPayload,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    return this.completeFirst2FinishChallengeForSubmitter(
+      challenge,
+      payload.submitterMemberId,
+      payload.submitterHandle,
+      'iterative-review-pass',
+    );
+  }
+
+  /**
+   * Completes a First2Finish challenge for a known passing submitter.
+   * @param challenge Active challenge that should be completed.
+   * @param submitterMemberId Member id associated with the winning submission.
+   * @param fallbackHandle Handle supplied by the event or lookup source.
+   * @param reason Audit reason passed to the completion service.
+   * @returns True when completion was invoked; false when required submitter
+   * data was missing or the challenge is no longer active.
+   * @throws Error when challenge completion or downstream synchronous work fails.
+   *
+   * Used by both the primary review-completed Kafka path and the phase-close
+   * reconciliation path.
+   */
+  private async completeFirst2FinishChallengeForSubmitter(
+    challenge: IChallenge,
+    submitterMemberId: string | number | null | undefined,
+    fallbackHandle: string | null | undefined,
+    reason: string,
+  ): Promise<boolean> {
     if (!isActiveStatus(challenge.status)) {
       this.logger.debug(
         `Skipping completion for challenge ${challenge.id}; status ${challenge.status ?? 'UNKNOWN'} is not ACTIVE.`,
       );
-      return;
+      return false;
     }
 
-    const memberIdRaw = payload.submitterMemberId ?? '';
-    const numericMemberId = Number(memberIdRaw);
+    const memberId = String(submitterMemberId ?? '').trim();
+    const numericMemberId = Number(memberId);
 
-    if (!Number.isFinite(numericMemberId)) {
+    if (!memberId || !Number.isFinite(numericMemberId)) {
       this.logger.warn(
-        `Unable to complete challenge ${challenge.id} after passing iterative review; submitterMemberId is invalid (${payload.submitterMemberId}).`,
+        `Unable to complete challenge ${challenge.id} after passing iterative review; submitterMemberId is invalid (${submitterMemberId ?? 'missing'}).`,
       );
-      return;
+      return false;
     }
 
-    let handle = payload.submitterHandle?.trim();
+    let handle = fallbackHandle?.trim();
     try {
       const handleMap = await this.resourcesService.getMemberHandleMap(
         challenge.id,
-        [String(memberIdRaw)],
+        [memberId],
       );
-      handle = handleMap.get(String(memberIdRaw)) ?? handle;
+      handle = handleMap.get(memberId) ?? handle;
     } catch (error) {
       const err = error as Error;
       this.logger.warn(
-        `Failed to resolve handle for member ${memberIdRaw} on challenge ${challenge.id}; using provided payload handle.`,
+        `Failed to resolve handle for member ${memberId} on challenge ${challenge.id}; using provided payload handle.`,
         err.stack,
       );
     }
@@ -244,18 +238,87 @@ export class First2FinishService {
       [
         {
           userId: numericMemberId,
-          handle: handle && handle.length ? handle : String(memberIdRaw),
+          handle: handle && handle.length ? handle : memberId,
           placement: 1,
         },
       ],
       {
-        reason: 'iterative-review-pass',
+        reason,
       },
     );
+    return true;
+  }
+
+  /**
+   * Closes any open submission and registration phases before completing after a
+   * passing iterative review.
+   * @param challenge Challenge snapshot whose open phases should be ended.
+   * @returns Promise resolved after all relevant phase close requests finish.
+   * @throws Error when a phase close operation fails.
+   *
+   * Used by both primary and reconciled First2Finish completion paths so the
+   * challenge has no lingering open phases after a passing review.
+   */
+  private async closeOpenSubmissionAndRegistrationPhases(
+    challenge: IChallenge,
+  ): Promise<void> {
+    const submissionPhase = challenge.phases.find(
+      (phase) => isSubmissionPhaseName(phase.name) && phase.isOpen,
+    );
+
+    if (submissionPhase) {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: submissionPhase.id,
+        phaseTypeName: submissionPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+    }
+
+    const openRegistrationPhases = challenge.phases.filter(
+      (phaseCandidate) =>
+        phaseCandidate.isOpen &&
+        phaseCandidate.name === REGISTRATION_PHASE_NAME,
+    );
+
+    for (const registrationPhase of openRegistrationPhases) {
+      await this.schedulerService.advancePhase({
+        projectId: challenge.projectId,
+        challengeId: challenge.id,
+        phaseId: registrationPhase.id,
+        phaseTypeName: registrationPhase.name,
+        state: 'END',
+        operator: AutopilotOperator.SYSTEM,
+        projectStatus: challenge.status,
+      });
+    }
   }
 
   async handleIterativePhaseClosed(challengeId: string): Promise<void> {
     try {
+      const challenge =
+        await this.challengeApiService.getChallengeById(challengeId);
+
+      if (!isActiveStatus(challenge.status)) {
+        return;
+      }
+
+      const latestIterativePhase = this.getLatestIterativePhase(challenge);
+
+      if (latestIterativePhase && !latestIterativePhase.isOpen) {
+        const handled = await this.completeFromPassingIterativeReview(
+          challenge,
+          latestIterativePhase,
+        );
+
+        if (handled) {
+          return;
+        }
+      }
+
       await this.prepareNextIterativeReview(challengeId);
     } catch (error) {
       const err = error as Error;
@@ -264,6 +327,48 @@ export class First2FinishService {
         err.stack,
       );
     }
+  }
+
+  /**
+   * Completes an active challenge when a closed iterative phase already contains
+   * a passing completed review.
+   * @param challenge Active First2Finish challenge being reconciled.
+   * @param phase Closed Iterative Review phase to inspect.
+   * @returns True when a passing review was found and handled, even if
+   * completion could not run because submitter data was incomplete.
+   * @throws Error when review lookup, phase closure, or challenge completion
+   * operations fail.
+   *
+   * Used as a backup when the review-completed Kafka event was missed and the
+   * scheduler later closes the iterative phase.
+   */
+  private async completeFromPassingIterativeReview(
+    challenge: IChallenge,
+    phase: IPhase,
+  ): Promise<boolean> {
+    const passingReview =
+      await this.reviewService.getLatestPassingReviewForPhase(
+        challenge.id,
+        phase.id,
+      );
+
+    if (!passingReview) {
+      return false;
+    }
+
+    this.logger.log(
+      `Reconciling passed iterative review ${passingReview.id} for submission ${passingReview.submissionId} on challenge ${challenge.id} (score ${passingReview.score} / passing ${passingReview.passingScore}).`,
+    );
+
+    await this.closeOpenSubmissionAndRegistrationPhases(challenge);
+    await this.completeFirst2FinishChallengeForSubmitter(
+      challenge,
+      passingReview.submitterMemberId,
+      null,
+      'iterative-review-pass-reconciled',
+    );
+
+    return true;
   }
 
   private async processFirst2FinishSubmission(

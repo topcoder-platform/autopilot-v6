@@ -614,7 +614,9 @@ describe('PhaseReviewService', () => {
 
     await service.handlePhaseOpened(challenge.id, screeningPhase.id);
 
-    expect(reviewService.getAiFailedDecisionSubmissionIds).not.toHaveBeenCalled();
+    expect(
+      reviewService.getAiFailedDecisionSubmissionIds,
+    ).not.toHaveBeenCalled();
 
     const createdSubmissionIds =
       reviewService.createPendingReview.mock.calls.map(

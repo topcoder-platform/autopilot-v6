@@ -8,6 +8,11 @@ import {
   AutopilotOperator,
 } from '../autopilot/interfaces/autopilot.interface';
 import { IChallenge } from '../challenge/interfaces/challenge.interface';
+import {
+  APPROVAL_PHASE_NAMES,
+  REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
+} from '../autopilot/constants/review.constants';
 
 @Injectable()
 export class SyncService {
@@ -38,6 +43,7 @@ export class SyncService {
       let added = 0;
       let updated = 0;
       let removed = 0;
+      let openReviewReplayed = 0;
       let payableReplayed = 0;
 
       const activeChallenges =
@@ -103,7 +109,10 @@ export class SyncService {
           if (!scheduleDate) continue;
 
           const phaseKey = `${challenge.id}:${phase.id}`;
-          const jobId = this.schedulerService.buildJobId(challenge.id, phase.id);
+          const jobId = this.schedulerService.buildJobId(
+            challenge.id,
+            phase.id,
+          );
           activeJobIds.add(jobId);
 
           const scheduledJob = scheduledJobs.get(jobId);
@@ -141,6 +150,24 @@ export class SyncService {
             updated++;
           }
         }
+
+        if (this.hasOpenReviewPreparationPhase(challenge)) {
+          try {
+            await this.autopilotService.handleChallengeUpdate({
+              id: challenge.id,
+              projectId: challenge.projectId,
+              status: challenge.status,
+              operator: AutopilotOperator.SYSTEM_SYNC,
+            });
+            openReviewReplayed++;
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[OPEN REVIEW RECONCILIATION] Failed to replay challenge update for ${challenge.id}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
       }
 
       // 2. Remove obsolete schedules
@@ -170,12 +197,30 @@ export class SyncService {
 
       // New: Summary log
       this.logger.log(
-        `Challenge synchronization completed. Added: ${added}, Updated: ${updated}, Removed: ${removed}, Payable replayed: ${payableReplayed}.`,
+        `Challenge synchronization completed. Added: ${added}, Updated: ${updated}, Removed: ${removed}, Open review replayed: ${openReviewReplayed}, Payable replayed: ${payableReplayed}.`,
       );
     } catch (error) {
       const err = error as Error;
       this.logger.error('Challenge synchronization failed', err.stack);
     }
+  }
+
+  /**
+   * Detects open review-related phases that may need pending review recovery.
+   *
+   * @param challenge active challenge snapshot returned by Challenge API
+   * @returns true when an open Review, Screening, or Approval phase is present
+   * @throws This helper does not throw.
+   */
+  private hasOpenReviewPreparationPhase(challenge: IChallenge): boolean {
+    return (challenge.phases ?? []).some(
+      (phase) =>
+        phase.isOpen === true &&
+        !phase.actualEndDate &&
+        (REVIEW_PHASE_NAMES.has(phase.name) ||
+          SCREENING_PHASE_NAMES.has(phase.name) ||
+          APPROVAL_PHASE_NAMES.has(phase.name)),
+    );
   }
 
   private parseScheduledJobId(

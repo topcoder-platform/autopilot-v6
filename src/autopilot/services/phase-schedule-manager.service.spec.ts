@@ -8,6 +8,7 @@ import type { SchedulerService } from './scheduler.service';
 import type { PhaseReviewService } from './phase-review.service';
 import type { ReviewAssignmentService } from './review-assignment.service';
 import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
+import type { First2FinishService } from './first2finish.service';
 import { PhaseScheduleManager } from './phase-schedule-manager.service';
 
 describe('PhaseScheduleManager', () => {
@@ -15,12 +16,16 @@ describe('PhaseScheduleManager', () => {
   let schedulerService: {
     setPhaseChainCallback: jest.Mock;
     evaluateManualPhaseCompletion: jest.Mock;
-  };
-  let phaseReviewService: {
-    handlePhaseOpenedForChallenge: jest.Mock;
+    buildJobId: jest.Mock;
+    getScheduledTransition: jest.Mock;
+    schedulePhaseTransition: jest.Mock;
+    cancelScheduledTransition: jest.Mock;
   };
   let challengeApiService: {
     getChallengeById: jest.Mock;
+  };
+  let phaseReviewService: {
+    handlePhaseOpenedForChallenge: jest.Mock;
   };
   let reviewApiService: {
     createReviewOpportunity: jest.Mock;
@@ -35,19 +40,28 @@ describe('PhaseScheduleManager', () => {
   let financeApiService: {
     generateChallengePayments: jest.Mock;
   };
+  let first2FinishService: {
+    handleSubmissionByChallengeId: jest.Mock;
+  };
 
   beforeEach(() => {
     schedulerService = {
       setPhaseChainCallback: jest.fn(),
       evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
-    };
-
-    phaseReviewService = {
-      handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
+      buildJobId: jest.fn(
+        (challengeId: string, phaseId: string) => `${challengeId}|${phaseId}`,
+      ),
+      getScheduledTransition: jest.fn().mockReturnValue(undefined),
+      schedulePhaseTransition: jest.fn().mockResolvedValue('job-id'),
+      cancelScheduledTransition: jest.fn().mockResolvedValue(true),
     };
 
     challengeApiService = {
       getChallengeById: jest.fn(),
+    };
+
+    phaseReviewService = {
+      handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
     };
 
     reviewApiService = {
@@ -67,6 +81,10 @@ describe('PhaseScheduleManager', () => {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
     };
 
+    first2FinishService = {
+      handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
+    };
+
     service = new PhaseScheduleManager(
       schedulerService as unknown as SchedulerService,
       challengeApiService as unknown as ChallengeApiService,
@@ -79,6 +97,7 @@ describe('PhaseScheduleManager', () => {
       } as unknown as ConfigService,
       dbLogger as unknown as AutopilotDbLoggerService,
       financeApiService as unknown as FinanceApiService,
+      first2FinishService as unknown as First2FinishService,
     );
   });
 
@@ -105,6 +124,112 @@ describe('PhaseScheduleManager', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-1',
     );
+  });
+
+  it('delegates manual Marathon Match review phase opens from challenge-api updates', async () => {
+    const reviewPhase = {
+      id: 'review-phase-instance',
+      phaseId: 'review-phase',
+      name: 'Review',
+      description: null,
+      isOpen: true,
+      duration: 86400,
+      scheduledStartDate: '2026-04-30T00:00:00.000Z',
+      scheduledEndDate: '2026-05-01T00:00:00.000Z',
+      actualStartDate: '2026-04-30T01:00:00.000Z',
+      actualEndDate: null,
+      predecessor: 'submission-phase',
+      constraints: [],
+    };
+    const challenge = {
+      id: 'challenge-mm',
+      status: 'ACTIVE',
+      projectId: 1003,
+      type: 'Marathon Match',
+      phases: [reviewPhase],
+      reviewers: [
+        {
+          id: 'reviewer-config-1',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: reviewPhase.phaseId,
+          scorecardId: 'member-review-scorecard',
+        },
+      ],
+      prizeSets: [],
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-mm',
+      operator: AutopilotOperator.ADMIN,
+      projectId: 1003,
+      status: 'ACTIVE',
+    });
+
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledWith(challenge, reviewPhase.id);
+    expect(reviewService.updatePendingReviewScorecards).not.toHaveBeenCalled();
+  });
+
+  it('replays iterative assignment for already-open Iterative Review phases', async () => {
+    const iterativePhase = {
+      id: 'iterative-phase-instance',
+      phaseId: 'iterative-review-phase',
+      name: 'Iterative Review',
+      description: null,
+      isOpen: true,
+      duration: 86400,
+      scheduledStartDate: '2026-04-30T00:00:00.000Z',
+      scheduledEndDate: '2026-05-01T00:00:00.000Z',
+      actualStartDate: '2026-04-30T01:00:00.000Z',
+      actualEndDate: null,
+      predecessor: 'submission-phase',
+      constraints: [],
+    };
+    const challenge = {
+      id: 'challenge-topgear',
+      status: 'ACTIVE',
+      projectId: 1004,
+      type: 'Topgear Task',
+      phases: [iterativePhase],
+      reviewers: [],
+      prizeSets: [],
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-topgear',
+      operator: AutopilotOperator.SYSTEM_RECOVERY,
+      projectId: 1004,
+      status: 'ACTIVE',
+    });
+
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge.mock.calls,
+    ).toContainEqual([challenge, iterativePhase.id]);
+    expect(
+      first2FinishService.handleSubmissionByChallengeId.mock.calls,
+    ).toContainEqual([challenge.id]);
   });
 
   it('does not trigger finance generation for non-payable non-active statuses', async () => {
@@ -235,10 +360,12 @@ describe('PhaseScheduleManager', () => {
     await service.handleChallengeUpdate(updateMessage);
     await service.handleChallengeUpdate(updateMessage);
 
-    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(phaseReviewService.handlePhaseOpenedForChallenge).toHaveBeenCalledWith(
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'challenge-manual-open-dedupe' }),
       'phase-review-1',
     );

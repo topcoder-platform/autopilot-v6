@@ -6,10 +6,11 @@ WORKDIR /usr/src/app
 FROM base AS deps
 COPY package.json ./
 COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
 COPY patches ./patches
 COPY prisma ./prisma
-RUN npm install -g pnpm
-RUN pnpm install
+RUN npm install -g pnpm@10.33.2
+RUN pnpm install --frozen-lockfile
 
 # ---- Build Stage ----
 FROM deps AS build
@@ -19,7 +20,7 @@ RUN pnpm build
 
 # ---- Production Stage ----
 FROM base AS production
-ENV NODE_ENV production
+ENV NODE_ENV=production
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 EXPOSE 3000

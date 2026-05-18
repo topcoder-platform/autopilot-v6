@@ -11,6 +11,7 @@ import {
   REVIEW_PHASE_NAMES,
   getRoleNamesForPhase,
 } from '../constants/review.constants';
+import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import {
   getMemberReviewerConfigs,
   getRequiredReviewerCountForPhase,
@@ -242,6 +243,19 @@ export class ReviewAssignmentService {
         assigned: 0,
         phaseMissing: false,
         phaseOpen: true,
+      };
+    }
+
+    if (
+      isMarathonMatchChallenge(challenge.type) &&
+      REVIEW_PHASE_NAMES.has(phaseDetails.name)
+    ) {
+      return {
+        ready: true,
+        required: 0,
+        assigned: 0,
+        phaseMissing: false,
+        phaseOpen: false,
       };
     }
 

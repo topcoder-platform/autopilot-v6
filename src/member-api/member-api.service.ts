@@ -29,7 +29,7 @@ export class MemberApiService {
 
     if (!this.baseUrl) {
       this.logger.warn(
-        'MEMBER_API_URL is not configured. Automatic member stats refresh is disabled.',
+        'MEMBER_API_URL or BUS_API_URL is not configured. Automatic member stats refresh is disabled.',
       );
     }
   }
@@ -107,7 +107,7 @@ export class MemberApiService {
         source: MemberApiService.name,
         details: {
           handle,
-          note: 'MEMBER_API_URL not configured; skipping member stats refresh call.',
+          note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping member stats refresh call.',
         },
       });
       return false;
@@ -236,7 +236,7 @@ export class MemberApiService {
           handle,
           trackId,
           typeId,
-          note: 'MEMBER_API_URL not configured; skipping member stats rerate call.',
+          note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping member stats rerate call.',
         },
       });
       return false;
@@ -332,6 +332,129 @@ export class MemberApiService {
           responseHeaders: this.sanitizeHeaders(err?.response?.headers),
         },
       });
+      return false;
+    }
+  }
+
+  /**
+   * Triggers member-api to rerate every applicable rating for submitters on a completed challenge.
+   * @param challengeId Challenge identifier whose submitters should be rerated.
+   * @returns `true` when member-api accepts the request with a 2xx response, otherwise `false`.
+   * @throws Never. All transport and API errors are logged and converted to `false`.
+   *
+   * Usage:
+   * Called by `ChallengeCompletionService` after challenge results are synchronized so
+   * member-api can update native track/type ratings and configured named rating paths.
+   */
+  async rerateChallengeSubmitterRatings(challengeId: string): Promise<boolean> {
+    const url = this.buildUrl('/v6/members/stats/rerate-challenge');
+    const body = { challengeId };
+
+    if (!url) {
+      await this.dbLogger.logAction(
+        'memberApi.rerateChallengeSubmitterRatings',
+        {
+          challengeId,
+          status: 'INFO',
+          source: MemberApiService.name,
+          details: {
+            note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping challenge submitter rating rerate call.',
+          },
+        },
+      );
+      return false;
+    }
+
+    let token: string | undefined;
+    const requestLog = {
+      method: 'POST',
+      url,
+      body,
+      headers: {
+        Authorization: '[not available]',
+        'Content-Type': 'application/json',
+      },
+      timeoutMs: this.timeoutMs,
+    };
+
+    try {
+      token = await this.auth0Service.getAccessToken();
+      if (token) {
+        requestLog.headers.Authorization = 'Bearer [redacted]';
+      }
+
+      const axiosHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        axiosHeaders.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await firstValueFrom(
+        this.httpService.post<Record<string, unknown>>(url, body, {
+          headers: axiosHeaders,
+          timeout: this.timeoutMs,
+        }),
+      );
+
+      await this.dbLogger.logAction(
+        'memberApi.rerateChallengeSubmitterRatings',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: MemberApiService.name,
+          details: {
+            url,
+            status: response.status,
+            request: requestLog,
+            response: {
+              status: response.status,
+              data: response.data ?? null,
+              headers: this.sanitizeHeaders(
+                response.headers as Record<string, unknown> | undefined,
+              ),
+            },
+          },
+        },
+      );
+
+      this.logger.log(
+        `Triggered challenge submitter rating rerate for challenge ${challengeId} (${response.status}).`,
+      );
+      return true;
+    } catch (error) {
+      const err = error as {
+        message?: string;
+        stack?: string;
+        response?: {
+          status?: number;
+          data?: unknown;
+          headers?: Record<string, unknown>;
+        };
+      };
+      const message = err?.message || 'Unknown error';
+
+      this.logger.error(
+        `Failed to rerate challenge submitter ratings for challenge ${challengeId}: ${message}`,
+        err?.stack,
+      );
+
+      await this.dbLogger.logAction(
+        'memberApi.rerateChallengeSubmitterRatings',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: MemberApiService.name,
+          details: {
+            url,
+            request: requestLog,
+            error: message,
+            status: err?.response?.status,
+            response: err?.response?.data,
+            responseHeaders: this.sanitizeHeaders(err?.response?.headers),
+          },
+        },
+      );
       return false;
     }
   }

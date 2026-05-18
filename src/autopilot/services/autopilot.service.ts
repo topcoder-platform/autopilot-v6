@@ -42,6 +42,7 @@ import {
   isActiveStatus,
 } from '../utils/config.utils';
 import { selectScorecardId } from '../utils/reviewer.utils';
+import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 const SUBMISSION_NOTIFICATION_CREATE_TOPIC = 'submission.notification.create';
 const FINAL_FIX_PHASE_NAME = 'Final Fix';
 
@@ -368,11 +369,40 @@ export class AutopilotService {
         return;
       }
 
-      if (
-        !REVIEW_PHASE_NAMES.has(phase.name) &&
-        !SCREENING_PHASE_NAMES.has(phase.name)
-      ) {
+      const isReviewPhase = REVIEW_PHASE_NAMES.has(phase.name);
+      const isScreeningPhase = SCREENING_PHASE_NAMES.has(phase.name);
+      if (!isReviewPhase && !isScreeningPhase) {
         return;
+      }
+
+      if (isReviewPhase && isMarathonMatchChallenge(challenge.type)) {
+        const reviewReadiness =
+          await this.reviewService.getMarathonMatchReviewReadiness(
+            challengeId,
+            phase.id,
+          );
+
+        if (
+          reviewReadiness.expectedSubmissionCount > 0 &&
+          reviewReadiness.reviewedSubmissionCount <
+            reviewReadiness.expectedSubmissionCount
+        ) {
+          this.logger.debug(
+            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for review records on all latest submissions (${reviewReadiness.reviewedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} present).`,
+          );
+          return;
+        }
+
+        if (
+          reviewReadiness.expectedSubmissionCount > 0 &&
+          reviewReadiness.completedSubmissionCount <
+            reviewReadiness.expectedSubmissionCount
+        ) {
+          this.logger.debug(
+            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for system reviews to complete (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed).`,
+          );
+          return;
+        }
       }
 
       const pendingReviews = await this.reviewService.getPendingReviewCount(
@@ -389,7 +419,7 @@ export class AutopilotService {
 
       this.logger.log(
         `All reviews completed for phase ${phase.id} on challenge ${challengeId}. Closing ${
-          SCREENING_PHASE_NAMES.has(phase.name) ? 'Screening' : 'Review'
+          isScreeningPhase ? 'Screening' : 'Review'
         } phase early.`,
       );
 

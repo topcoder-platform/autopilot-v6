@@ -77,6 +77,21 @@ type KafkaServiceMock = {
   produce: MockedMethod<KafkaService['produce']>;
 };
 
+type SchedulerTestInternals = {
+  createPostMortemPendingReviews(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<void>;
+  handlePostMortemPhaseClosed(data: PhaseTransitionPayload): Promise<void>;
+  handleSubmissionPhaseClosed(data: PhaseTransitionPayload): Promise<boolean>;
+  verifyReviewerCoverage(
+    challengeId: string,
+    phaseId: string,
+    phaseName: string,
+    useMemberConfigs: boolean,
+  ): Promise<{ satisfied: boolean; expected: number; actual: number }>;
+};
+
 const createPayload = (
   overrides: Partial<PhaseTransitionPayload> = {},
 ): PhaseTransitionPayload => ({
@@ -332,9 +347,7 @@ describe('SchedulerService (review phase deferral)', () => {
     );
     expect(
       reviewService.getPendingAiDecisionsEscalationsCount,
-    ).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    ).toHaveBeenCalledWith(payload.challengeId);
     expect(scheduleSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -491,6 +504,80 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });
 
+  it('refreshes submissions when iterative review opens', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+      operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'opened iterative review',
+      updatedPhases: [
+        {
+          ...phaseDetails,
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await scheduler.advancePhase(payload);
+
+    expect(phaseReviewService.handlePhaseOpened.mock.calls).toContainEqual([
+      payload.challengeId,
+      payload.phaseId,
+    ]);
+    expect(
+      first2FinishService.handleSubmissionByChallengeId.mock.calls,
+    ).toContainEqual([payload.challengeId]);
+  });
+
+  it('does not recursively refresh when First2Finish opens a seeded iterative phase', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+      operator: AutopilotOperator.SYSTEM,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.advancePhase.mockResolvedValue({
+      success: true,
+      message: 'opened iterative review',
+      updatedPhases: [
+        {
+          ...phaseDetails,
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await scheduler.advancePhase(payload);
+
+    expect(phaseReviewService.handlePhaseOpened.mock.calls).toContainEqual([
+      payload.challengeId,
+      payload.phaseId,
+    ]);
+    expect(
+      first2FinishService.handleSubmissionByChallengeId.mock.calls,
+    ).toHaveLength(0);
+  });
+
   it('opens appeals immediately after closing review even when successors are not returned', async () => {
     const payload = createPayload();
     const phaseDetails = createPhase({
@@ -551,21 +638,21 @@ describe('SchedulerService (review phase deferral)', () => {
     });
 
     challengeApiService.getPhaseDetails.mockImplementation(
-      async (_challengeId, phaseId) => {
+      (_challengeId, phaseId) => {
         if (phaseId === reviewPhase.id) {
-          return reviewPhase;
+          return Promise.resolve(reviewPhase);
         }
         if (phaseId === appealsPhase.id) {
-          return appealsPhase;
+          return Promise.resolve(appealsPhase);
         }
-        return null;
+        return Promise.resolve(null);
       },
     );
 
     challengeApiService.advancePhase.mockImplementation(
-      async (_challengeId, phaseId, operation) => {
+      (_challengeId, phaseId, operation) => {
         if (phaseId === reviewPhase.id && operation === 'close') {
-          return {
+          return Promise.resolve({
             success: true,
             message: 'closed review',
             updatedPhases: [reviewPhase, appealsPhase],
@@ -573,22 +660,22 @@ describe('SchedulerService (review phase deferral)', () => {
               operation: 'open',
               phases: [appealsPhase],
             },
-          };
+          });
         }
 
         if (phaseId === appealsPhase.id && operation === 'open') {
-          return {
+          return Promise.resolve({
             success: true,
             message: 'opened appeals',
             updatedPhases: [appealsPhase],
-          };
+          });
         }
 
-        return {
+        return Promise.resolve({
           success: true,
           message: 'ok',
           updatedPhases: [],
-        };
+        });
       },
     );
 
@@ -660,9 +747,7 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(reviewService.getPendingReviewCount).toHaveBeenCalled();
     expect(
       reviewService.getPendingAiDecisionsEscalationsCount,
-    ).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    ).toHaveBeenCalledWith(payload.challengeId);
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,
@@ -1106,9 +1191,9 @@ describe('SchedulerService (review phase deferral)', () => {
 
     await scheduler.advancePhase(payload);
 
-    expect(first2FinishService.handleIterativePhaseClosed).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    expect(
+      first2FinishService.handleIterativePhaseClosed.mock.calls,
+    ).toContainEqual([payload.challengeId]);
   });
 
   it('skips iterative submission refresh when instructed', async () => {
@@ -1134,8 +1219,8 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(
-      first2FinishService.handleIterativePhaseClosed,
-    ).not.toHaveBeenCalled();
+      first2FinishService.handleIterativePhaseClosed.mock.calls,
+    ).toHaveLength(0);
   });
 
   it('assigns checkpoint winners after closing checkpoint review', async () => {
@@ -1151,6 +1236,26 @@ describe('SchedulerService (review phase deferral)', () => {
     });
 
     challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [phaseDetails],
+      reviewers: [
+        {
+          id: 'checkpoint-reviewer-config',
+          scorecardId: 'checkpoint-scorecard',
+          isMemberReview: true,
+          memberReviewerCount: 1,
+          phaseId: phaseDetails.phaseId,
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: null,
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
 
     const advancePhaseResponse: Awaited<
@@ -1180,8 +1285,8 @@ describe('SchedulerService (review phase deferral)', () => {
     await scheduler.advancePhase(payload);
 
     expect(
-      challengeCompletionService.assignCheckpointWinners,
-    ).toHaveBeenCalledWith(payload.challengeId, payload.phaseId);
+      challengeCompletionService.assignCheckpointWinners.mock.calls,
+    ).toContainEqual([payload.challengeId, payload.phaseId]);
   });
 
   it('defers closing appeals phases when pending appeal responses exist', async () => {
@@ -1445,8 +1550,9 @@ describe('SchedulerService (review phase deferral)', () => {
     };
     challengeApiService.advancePhase.mockResolvedValue(advancePhaseResponse);
 
+    const schedulerInternals = scheduler as unknown as SchedulerTestInternals;
     const coverageSpy = jest
-      .spyOn(scheduler as any, 'verifyReviewerCoverage')
+      .spyOn(schedulerInternals, 'verifyReviewerCoverage')
       .mockResolvedValue({ satisfied: true, expected: 0, actual: 0 });
     const scheduleSpy = jest
       .spyOn(scheduler, 'schedulePhaseTransition')
@@ -1462,9 +1568,9 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.challengeId,
       ['screening-scorecard'],
     );
-    expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    expect(
+      financeApiService.generateChallengePayments.mock.calls,
+    ).toContainEqual([payload.challengeId]);
     expect(challengeApiService.createPostMortemPhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,
@@ -1492,22 +1598,22 @@ describe('SchedulerService (review phase deferral)', () => {
         postMortemPhase,
       );
 
+      const schedulerInternals = scheduler as unknown as SchedulerTestInternals;
       const pendingReviewSpy = jest
-        .spyOn(scheduler as any, 'createPostMortemPendingReviews')
+        .spyOn(schedulerInternals, 'createPostMortemPendingReviews')
         .mockResolvedValue(undefined);
       const scheduleSpy = jest
         .spyOn(scheduler, 'schedulePhaseTransition')
         .mockResolvedValue('scheduled-job');
 
-      const result = await (scheduler as any).handleSubmissionPhaseClosed(
-        payload,
-      );
+      const result =
+        await schedulerInternals.handleSubmissionPhaseClosed(payload);
 
       expect(result).toBe(true);
-      expect(resourcesService.hasSubmitterResource).toHaveBeenCalledWith(
+      expect(resourcesService.hasSubmitterResource.mock.calls).toContainEqual([
         payload.challengeId,
         expect.any(Array),
-      );
+      ]);
       expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
         payload.challengeId,
         ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
@@ -1535,14 +1641,15 @@ describe('SchedulerService (review phase deferral)', () => {
         postMortemPhase,
       );
 
+      const schedulerInternals = scheduler as unknown as SchedulerTestInternals;
       const pendingReviewSpy = jest
-        .spyOn(scheduler as any, 'createPostMortemPendingReviews')
+        .spyOn(schedulerInternals, 'createPostMortemPendingReviews')
         .mockResolvedValue(undefined);
       const scheduleSpy = jest
         .spyOn(scheduler, 'schedulePhaseTransition')
         .mockResolvedValue('scheduled-job');
 
-      await (scheduler as any).handleSubmissionPhaseClosed(payload);
+      await schedulerInternals.handleSubmissionPhaseClosed(payload);
 
       expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
         payload.challengeId,
@@ -1569,7 +1676,8 @@ describe('SchedulerService (review phase deferral)', () => {
         status: ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
       } as unknown as IChallenge);
 
-      await (scheduler as any).handlePostMortemPhaseClosed(payload);
+      const schedulerInternals = scheduler as unknown as SchedulerTestInternals;
+      await schedulerInternals.handlePostMortemPhaseClosed(payload);
 
       expect(challengeApiService.cancelChallenge).not.toHaveBeenCalled();
     });

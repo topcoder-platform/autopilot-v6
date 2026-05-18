@@ -136,7 +136,8 @@ describe('ReviewService', () => {
         { id: 'submission-2', memberId: 'member-1', isLatest: true },
       ]);
 
-      const submissions = await service.getActiveContestSubmissions(challengeId);
+      const submissions =
+        await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
         { id: 'submission-1', memberId: 'member-1', isLatest: false },
@@ -152,8 +153,8 @@ describe('ReviewService', () => {
 
       expect(sqlText).toContain('ROW_NUMBER() OVER');
       expect(sqlText).toContain('COALESCE(s."memberId", s."id")');
-      expect(sqlText).toContain("s.\"status\" = 'ACTIVE'");
-      expect(sqlText).not.toContain("s.\"status\" = 'AI_FAILED_REVIEW'");
+      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
+      expect(sqlText).not.toContain('s."status" = \'AI_FAILED_REVIEW\'');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getActiveContestSubmissions',
@@ -172,7 +173,8 @@ describe('ReviewService', () => {
         { id: 'submission-2', memberId: null, isLatest: true },
       ]);
 
-      const submissions = await service.getActiveContestSubmissions(challengeId);
+      const submissions =
+        await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
         { id: 'submission-2', memberId: null, isLatest: true },
@@ -202,8 +204,8 @@ describe('ReviewService', () => {
         ? rawQuery.strings.join('')
         : '';
 
-      expect(sqlText).toContain("s.\"status\" = 'ACTIVE'");
-      expect(sqlText).toContain("s.\"status\" = 'AI_FAILED_REVIEW'");
+      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
+      expect(sqlText).toContain('s."status" = \'AI_FAILED_REVIEW\'');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getContestSubmissionsForLatestSelection',
@@ -337,6 +339,120 @@ describe('ReviewService', () => {
           rated: true,
           passedReview: true,
           validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+
+    it('marks reviewed submissions as passing when passing-score checks are ignored', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'low-score-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 12,
+          finalScore: 12,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [],
+          allowUnlimitedSubmissions: false,
+          ignorePassingScore: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          challengeId,
+          userId: '123',
+          submissionId: 'low-score-submission',
+          initialScore: 12,
+          finalScore: 12,
+          placement: 0,
+          rated: true,
+          passedReview: true,
+          validSubmission: true,
+          ratingOrder: 1,
+        }),
+      ]);
+    });
+
+    it('fills non-winner placements from score order when all submissions should be ranked', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'second-place-submission',
+          memberId: '123',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 12,
+          finalScore: 12,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'winner-submission',
+          memberId: '456',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 24,
+          finalScore: 24,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 456, placement: 1 }],
+          allowUnlimitedSubmissions: false,
+          rankAllSubmissions: true,
+          ignorePassingScore: true,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          userId: '123',
+          submissionId: 'second-place-submission',
+          placement: 2,
+          rated: true,
+          ratingOrder: 2,
+        }),
+        expect.objectContaining({
+          userId: '456',
+          submissionId: 'winner-submission',
+          placement: 1,
+          rated: true,
           ratingOrder: 1,
         }),
       ]);
@@ -649,6 +765,102 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getLatestPassingReviewForPhase', () => {
+    const phaseId = 'iterative-phase-1';
+
+    it('returns the best completed review that meets the scorecard passing score', async () => {
+      let capturedQuery: unknown;
+      prismaMock.$queryRaw.mockImplementationOnce((query: unknown) => {
+        capturedQuery = query;
+        return Promise.resolve([
+          {
+            id: 'review-1',
+            phaseId,
+            resourceId: 'resource-1',
+            submissionId: 'submission-1',
+            scorecardId: 'scorecard-1',
+            score: '92',
+            status: 'COMPLETED',
+            submitterMemberId: '4001',
+            passingScore: '80',
+          },
+        ]);
+      });
+
+      const result = await service.getLatestPassingReviewForPhase(
+        challengeId,
+        phaseId,
+      );
+
+      expect(result).toEqual({
+        id: 'review-1',
+        phaseId,
+        resourceId: 'resource-1',
+        submissionId: 'submission-1',
+        scorecardId: 'scorecard-1',
+        score: '92',
+        status: 'COMPLETED',
+        submitterMemberId: '4001',
+        passingScore: '80',
+      });
+
+      const rawQuery = capturedQuery as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('GREATEST');
+      expect(sqlText).toContain('"minimumPassingScore"');
+      expect(sqlText).toContain('"submittedDate" ASC');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getLatestPassingReviewForPhase',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: 'ReviewService',
+          details: {
+            phaseId,
+            found: true,
+            reviewId: 'review-1',
+            submissionId: 'submission-1',
+            score: '92',
+            passingScore: '80',
+          },
+        },
+      );
+    });
+
+    it('returns null when no completed passing review exists', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([]);
+
+      const result = await service.getLatestPassingReviewForPhase(
+        challengeId,
+        phaseId,
+      );
+
+      expect(result).toBeNull();
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getLatestPassingReviewForPhase',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: 'ReviewService',
+          details: {
+            phaseId,
+            found: false,
+            reviewId: null,
+            submissionId: null,
+            score: null,
+            passingScore: null,
+          },
+        },
+      );
+    });
+  });
+
   describe('markSubmissionsAsAiFailedReview', () => {
     it('returns 0 when submission ids are missing', async () => {
       const result = await service.markSubmissionsAsAiFailedReview(
@@ -697,9 +909,8 @@ describe('ReviewService', () => {
     it('returns pending AI escalation count when query succeeds', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '3' }]);
 
-      const result = await service.getPendingAiDecisionsEscalationsCount(
-        challengeId,
-      );
+      const result =
+        await service.getPendingAiDecisionsEscalationsCount(challengeId);
 
       expect(result).toBe(3);
       expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
@@ -942,6 +1153,47 @@ describe('ReviewService', () => {
             submissionCount: 1,
             passingCount: 1,
             rebuiltFromReviews: true,
+          }),
+        }),
+      );
+    });
+
+    it('preserves stored final summations when passing-score repair is disabled', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        buildReviewSummationRow({
+          aggregateScore: '24.03',
+          isPassing: true,
+          minimumPassingScore: '80',
+        }),
+      ]);
+
+      const summaries = await service.generateReviewSummaries(challengeId, {
+        preserveFinalSummations: true,
+      });
+
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+      expect(summaries).toEqual([
+        {
+          submissionId: 'submission-1',
+          legacySubmissionId: 'legacy-1',
+          memberId: '123456',
+          submittedDate: new Date('2024-10-21T10:00:00.000Z'),
+          aggregateScore: 24.03,
+          scorecardId: 'scorecard-1',
+          scorecardLegacyId: 'legacy-scorecard',
+          passingScore: 80,
+          isPassing: false,
+        },
+      ]);
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.generateReviewSummaries',
+        expect.objectContaining({
+          details: expect.objectContaining({
+            submissionCount: 1,
+            passingCount: 0,
+            rebuiltFromReviews: false,
           }),
         }),
       );

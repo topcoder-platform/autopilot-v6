@@ -107,6 +107,7 @@ This document maps the current stateful behavior in autopilot: why an action run
 - **Why**: all pending reviews for an open Review or Screening phase are gone.
 - **Code**: `AutopilotService.handleReviewCompleted`
 - **What it does**:
+  - for Marathon Match Review, first verifies every latest contest submission has a review record and completed system review
   - closes the phase early via `SchedulerService.advancePhase`
   - skips the normal “must have completed review count” recheck because the close was review-driven
 
@@ -309,6 +310,7 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 - **Why**: a new eligible submission needs one iterative review.
 - **Code**: `First2FinishService.processFirst2FinishSubmission`
 - **What it does**:
+  - is triggered by rapid submission events, AI Screening close, reviewer assignment, Iterative Review phase open, and open-phase recovery
   - finds the next eligible submission / reviewer pair
   - creates one pending Iterative Review
   - schedules Iterative Review closure
@@ -431,11 +433,11 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 
 ### Member stats refresh / rerate
 
-- **Why**: challenge completed with winners.
+- **Why**: challenge completed with submitter results.
 - **Code**: `ChallengeCompletionService.triggerStatsRefreshForWinners`
 - **What it does**:
   - refreshes winner stats in member-api
-  - rerates winners if the challenge metadata marks it rated and the track/type pair is supported
+  - asks member-api to rerate every submitter for the native challenge track/type rating and any configured named rating paths that match the challenge, such as AI
 
 ### Challenge-result synchronization
 
