@@ -13,6 +13,7 @@ import type { ReviewApiService } from '../../review/review-api.service';
 import type { ConfigService } from '@nestjs/config';
 import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
+import type { First2FinishService } from './first2finish.service';
 
 const createMockMethod = <T extends (...args: any[]) => any>() =>
   jest.fn<ReturnType<T>, Parameters<T>>();
@@ -134,6 +135,7 @@ describe('PhaseScheduleManager overdue phase handling', () => {
       {
         generateChallengePayments: jest.fn().mockResolvedValue(true),
       } as unknown as FinanceApiService,
+      {} as unknown as First2FinishService,
     );
 
     const processedCount = await (

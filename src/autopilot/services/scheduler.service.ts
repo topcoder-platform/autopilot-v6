@@ -1185,6 +1185,25 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
         if (
           operation === 'open' &&
+          phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
+          data.operator?.toString().toLowerCase() !==
+            String(AutopilotOperator.SYSTEM)
+        ) {
+          try {
+            await this.first2FinishService.handleSubmissionByChallengeId(
+              data.challengeId,
+            );
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `Failed to assign iterative review after opening phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
+        if (
+          operation === 'open' &&
           isAppealsResponsePhase &&
           isSchedulerInitiated
         ) {
