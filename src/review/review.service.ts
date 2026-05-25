@@ -2098,6 +2098,38 @@ export class ReviewService {
     }
   }
 
+  async getChallengeAiReviewMode(
+    challengeId: string,
+  ): Promise<string | null> {
+    if (!challengeId) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT "mode"::text
+      FROM ${ReviewService.AI_REVIEW_CONFIG_TABLE}
+      WHERE "challengeId" = ${challengeId}
+      ORDER BY "version" DESC
+      LIMIT 1
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<{ mode: string }[]>(query);
+      return rows.length > 0 ? rows[0].mode : null;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getChallengeAiReviewMode', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      return null;
+    }
+  }
+
   /**
    * Loads final per-submission review summaries, preferring finalized review
    * summations and rebuilding from committed reviews only when summations are

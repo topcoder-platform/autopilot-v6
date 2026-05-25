@@ -676,56 +676,63 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               return;
             }
           } else {
-            const coverage = await this.verifyReviewerCoverage(
-              data.challengeId,
-              data.phaseId,
-              phaseName,
-              true,
-            );
+            const isAiOnly =
+              (await this.reviewService.getChallengeAiReviewMode(
+                data.challengeId,
+              )) === 'AI_ONLY';
 
-            if (coverage.expected <= 0) {
-              await this.deferReviewPhaseClosure(
-                data,
-                undefined,
-                'no reviewers are defined for this phase',
+            if (!isAiOnly) {
+              const coverage = await this.verifyReviewerCoverage(
+                data.challengeId,
+                data.phaseId,
+                phaseName,
+                true,
               );
-              return;
-            }
 
-            if (!coverage.satisfied) {
-              await this.deferReviewPhaseClosure(
-                data,
-                undefined,
-                `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
-              );
-              return;
-            }
-
-            if (!data.skipReviewCompletionCheck) {
-              const completedReviews =
-                await this.reviewService.getCompletedReviewCountForPhase(
-                  data.phaseId,
-                );
-
-              if (completedReviews <= 0) {
+              if (coverage.expected <= 0) {
                 await this.deferReviewPhaseClosure(
                   data,
-                  completedReviews,
-                  'no completed reviews found',
+                  undefined,
+                  'no reviewers are defined for this phase',
                 );
                 return;
               }
-            }
 
-            const pendingReviews =
-              await this.reviewService.getPendingReviewCount(
-                data.phaseId,
-                data.challengeId,
-              );
+              if (!coverage.satisfied) {
+                await this.deferReviewPhaseClosure(
+                  data,
+                  undefined,
+                  `insufficient reviewer coverage (${coverage.actual}/${coverage.expected} assigned)`,
+                );
+                return;
+              }
 
-            if (pendingReviews > 0) {
-              await this.deferReviewPhaseClosure(data, pendingReviews);
-              return;
+              if (!data.skipReviewCompletionCheck) {
+                const completedReviews =
+                  await this.reviewService.getCompletedReviewCountForPhase(
+                    data.phaseId,
+                  );
+
+                if (completedReviews <= 0) {
+                  await this.deferReviewPhaseClosure(
+                    data,
+                    completedReviews,
+                    'no completed reviews found',
+                  );
+                  return;
+                }
+              }
+
+              const pendingReviews =
+                await this.reviewService.getPendingReviewCount(
+                  data.phaseId,
+                  data.challengeId,
+                );
+
+              if (pendingReviews > 0) {
+                await this.deferReviewPhaseClosure(data, pendingReviews);
+                return;
+              }
             }
           }
 
