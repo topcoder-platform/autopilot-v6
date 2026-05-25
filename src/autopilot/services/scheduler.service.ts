@@ -1190,6 +1190,33 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        if (operation === 'open' && isReviewPhase) {
+          try {
+            const aiMode = await this.reviewService.getChallengeAiReviewMode(
+              data.challengeId,
+            );
+            if (aiMode === 'AI_ONLY') {
+              this.logger.log(
+                `[AI ONLY] Review phase ${data.phaseId} opened for AI-only challenge ${data.challengeId}; closing immediately.`,
+              );
+              const closePayload: PhaseTransitionPayload = {
+                ...data,
+                state: 'END',
+                operator: AutopilotOperator.SYSTEM_SCHEDULER,
+                date: new Date().toISOString(),
+              };
+              await this.advancePhase(closePayload);
+              return;
+            }
+          } catch (error) {
+            const err = error as Error;
+            this.logger.error(
+              `[AI ONLY] Unable to auto-close review phase ${data.phaseId} for challenge ${data.challengeId}: ${err.message}`,
+              err.stack,
+            );
+          }
+        }
+
         if (
           operation === 'open' &&
           phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
