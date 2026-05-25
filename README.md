@@ -81,6 +81,7 @@ Open the `.env` file and configure the variables for your environment. It is cru
    # -------------------------------------
    # Member API Integration
    # -------------------------------------
+   # Optional when BUS_API_URL points to the public Topcoder API gateway.
    MEMBER_API_URL=http://member-api:3000
    MEMBER_API_TIMEOUT_MS=15000
 
@@ -290,7 +291,7 @@ The autopilot service uses a flexible logging strategy that adapts to different 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MEMBER_API_URL` | No | _(disabled)_ | Base URL of member-api-v6, e.g. `http://member-api:3000`; used after completion to refresh winner stats and rerate submitter ratings |
+| `MEMBER_API_URL` | No | `BUS_API_URL` | Base URL of member-api-v6, e.g. `http://member-api:3000`; when absent, autopilot uses `BUS_API_URL` as the public API gateway base for affected member stats refreshes and submitter rating rerates |
 | `MEMBER_API_TIMEOUT_MS` | No | `15000` | HTTP timeout for member-api calls |
 
 ### ECS Deployment Notes

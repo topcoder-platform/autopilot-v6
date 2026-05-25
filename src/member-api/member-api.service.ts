@@ -29,7 +29,7 @@ export class MemberApiService {
 
     if (!this.baseUrl) {
       this.logger.warn(
-        'MEMBER_API_URL is not configured. Automatic member stats refresh is disabled.',
+        'MEMBER_API_URL or BUS_API_URL is not configured. Automatic member stats refresh is disabled.',
       );
     }
   }
@@ -107,7 +107,7 @@ export class MemberApiService {
         source: MemberApiService.name,
         details: {
           handle,
-          note: 'MEMBER_API_URL not configured; skipping member stats refresh call.',
+          note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping member stats refresh call.',
         },
       });
       return false;
@@ -236,7 +236,7 @@ export class MemberApiService {
           handle,
           trackId,
           typeId,
-          note: 'MEMBER_API_URL not configured; skipping member stats rerate call.',
+          note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping member stats rerate call.',
         },
       });
       return false;
@@ -358,7 +358,7 @@ export class MemberApiService {
           status: 'INFO',
           source: MemberApiService.name,
           details: {
-            note: 'MEMBER_API_URL not configured; skipping challenge submitter rating rerate call.',
+            note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping challenge submitter rating rerate call.',
           },
         },
       );

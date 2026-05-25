@@ -79,6 +79,7 @@ export function isValidChallengeResultStatus(status: string | null): boolean {
  * @param candidates Per-submission review aggregates for the challenge.
  * @param placementWinners Placement winners from challenge completion data.
  * @param allowUnlimitedSubmissions Whether multiple reviewed submissions per member are allowed.
+ * @param rankAllSubmissions Whether score-ranked placements should be filled for non-winning submitters.
  * @param ratedChallenge Whether challenge metadata marks the challenge as rated.
  * @param actor Audit actor recorded on created/updated fields.
  * @param createdAt Timestamp used when creating new rows.
@@ -91,6 +92,7 @@ export function buildChallengeResultRecords(params: {
   candidates: ChallengeResultCandidate[];
   placementWinners: ChallengeResultPlacementWinner[];
   allowUnlimitedSubmissions: boolean;
+  rankAllSubmissions?: boolean;
   ratedChallenge: boolean;
   actor: string;
   createdAt: Date;
@@ -101,6 +103,7 @@ export function buildChallengeResultRecords(params: {
     candidates,
     placementWinners,
     allowUnlimitedSubmissions,
+    rankAllSubmissions,
     ratedChallenge,
     actor,
     createdAt,
@@ -153,6 +156,10 @@ export function buildChallengeResultRecords(params: {
     },
   );
 
+  if (rankAllSubmissions) {
+    applyScorePlacements(records, canonicalEntries);
+  }
+
   const ratedRecords = [...records]
     .filter((record) => record.rated)
     .sort(compareChallengeResultRecordsForRanking);
@@ -162,6 +169,47 @@ export function buildChallengeResultRecords(params: {
   });
 
   return records.sort((left, right) => left.userId.localeCompare(right.userId));
+}
+
+/**
+ * Fill missing placements from final score order while preserving explicit winner placements.
+ * @param records Persistable challenge result rows to update in place.
+ * @param canonicalEntries Canonical per-member candidates used to rank final standings.
+ * @returns Nothing. Records with no placement receive an ordinal score placement.
+ * @throws Never.
+ */
+function applyScorePlacements(
+  records: ChallengeResultRecord[],
+  canonicalEntries: CanonicalChallengeResultEntry[],
+): void {
+  const scorePlacementByUserId = buildScorePlacementByUserId(canonicalEntries);
+
+  for (const record of records) {
+    if (record.placement > 0) {
+      continue;
+    }
+
+    record.placement = scorePlacementByUserId.get(record.userId) ?? 0;
+  }
+}
+
+/**
+ * Build ordinal final standings from canonical per-member scores.
+ * @param canonicalEntries Canonical per-member candidates to rank.
+ * @returns Placement keyed by normalized user id.
+ * @throws Never.
+ */
+function buildScorePlacementByUserId(
+  canonicalEntries: CanonicalChallengeResultEntry[],
+): Map<string, number> {
+  const placementByUserId = new Map<string, number>();
+  const rankedEntries = [...canonicalEntries].sort(compareFinalStandingEntries);
+
+  rankedEntries.forEach((entry, index) => {
+    placementByUserId.set(entry.userId, index + 1);
+  });
+
+  return placementByUserId;
 }
 
 /**
@@ -322,6 +370,56 @@ function compareChallengeResultRecordsForRanking(
   }
 
   return left.submissionId.localeCompare(right.submissionId);
+}
+
+/**
+ * Compare canonical entries by final standing order.
+ * @param left First canonical entry.
+ * @param right Second canonical entry.
+ * @returns Sort order with the higher-ranked entry first.
+ * @throws Never.
+ */
+function compareFinalStandingEntries(
+  left: CanonicalChallengeResultEntry,
+  right: CanonicalChallengeResultEntry,
+): number {
+  if (right.candidate.finalScore !== left.candidate.finalScore) {
+    return right.candidate.finalScore - left.candidate.finalScore;
+  }
+
+  if (right.candidate.initialScore !== left.candidate.initialScore) {
+    return right.candidate.initialScore - left.candidate.initialScore;
+  }
+
+  const submittedDateDiff =
+    getTimestamp(left.candidate.submittedDate) -
+    getTimestamp(right.candidate.submittedDate);
+  if (submittedDateDiff !== 0) {
+    return submittedDateDiff;
+  }
+
+  const createdAtDiff =
+    getTimestamp(left.candidate.createdAt) -
+    getTimestamp(right.candidate.createdAt);
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+
+  const updatedAtDiff =
+    getTimestamp(left.candidate.updatedAt) -
+    getTimestamp(right.candidate.updatedAt);
+  if (updatedAtDiff !== 0) {
+    return updatedAtDiff;
+  }
+
+  const submissionDiff = left.candidate.submissionId.localeCompare(
+    right.candidate.submissionId,
+  );
+  if (submissionDiff !== 0) {
+    return submissionDiff;
+  }
+
+  return left.userId.localeCompare(right.userId);
 }
 
 /**

@@ -310,6 +310,7 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 - **Why**: a new eligible submission needs one iterative review.
 - **Code**: `First2FinishService.processFirst2FinishSubmission`
 - **What it does**:
+  - is triggered by rapid submission events, AI Screening close, reviewer assignment, Iterative Review phase open, and open-phase recovery
   - finds the next eligible submission / reviewer pair
   - creates one pending Iterative Review
   - schedules Iterative Review closure

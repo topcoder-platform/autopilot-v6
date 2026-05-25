@@ -8,6 +8,7 @@ import type { SchedulerService } from './scheduler.service';
 import type { PhaseReviewService } from './phase-review.service';
 import type { ReviewAssignmentService } from './review-assignment.service';
 import type { AutopilotDbLoggerService } from './autopilot-db-logger.service';
+import type { First2FinishService } from './first2finish.service';
 import { PhaseScheduleManager } from './phase-schedule-manager.service';
 
 describe('PhaseScheduleManager', () => {
@@ -38,6 +39,10 @@ describe('PhaseScheduleManager', () => {
   };
   let financeApiService: {
     generateChallengePayments: jest.Mock;
+  };
+  let first2FinishService: {
+    handleIterativePhaseOpened: jest.Mock;
+    handleSubmissionByChallengeId: jest.Mock;
   };
 
   beforeEach(() => {
@@ -77,6 +82,11 @@ describe('PhaseScheduleManager', () => {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
     };
 
+    first2FinishService = {
+      handleIterativePhaseOpened: jest.fn().mockResolvedValue(undefined),
+      handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
+    };
+
     service = new PhaseScheduleManager(
       schedulerService as unknown as SchedulerService,
       challengeApiService as unknown as ChallengeApiService,
@@ -89,6 +99,7 @@ describe('PhaseScheduleManager', () => {
       } as unknown as ConfigService,
       dbLogger as unknown as AutopilotDbLoggerService,
       financeApiService as unknown as FinanceApiService,
+      first2FinishService as unknown as First2FinishService,
     );
   });
 
@@ -171,6 +182,59 @@ describe('PhaseScheduleManager', () => {
       phaseReviewService.handlePhaseOpenedForChallenge,
     ).toHaveBeenCalledWith(challenge, reviewPhase.id);
     expect(reviewService.updatePendingReviewScorecards).not.toHaveBeenCalled();
+  });
+
+  it('replays iterative assignment for already-open Iterative Review phases', async () => {
+    const iterativePhase = {
+      id: 'iterative-phase-instance',
+      phaseId: 'iterative-review-phase',
+      name: 'Iterative Review',
+      description: null,
+      isOpen: true,
+      duration: 86400,
+      scheduledStartDate: '2026-04-30T00:00:00.000Z',
+      scheduledEndDate: '2026-05-01T00:00:00.000Z',
+      actualStartDate: '2026-04-30T01:00:00.000Z',
+      actualEndDate: null,
+      predecessor: 'submission-phase',
+      constraints: [],
+    };
+    const challenge = {
+      id: 'challenge-topgear',
+      status: 'ACTIVE',
+      projectId: 1004,
+      type: 'Topgear Task',
+      phases: [iterativePhase],
+      reviewers: [],
+      prizeSets: [],
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    jest
+      .spyOn(
+        service as unknown as {
+          createReviewOpportunitiesForChallenge: () => Promise<void>;
+        },
+        'createReviewOpportunitiesForChallenge',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-topgear',
+      operator: AutopilotOperator.SYSTEM_RECOVERY,
+      projectId: 1004,
+      status: 'ACTIVE',
+    });
+
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge.mock.calls,
+    ).toContainEqual([challenge, iterativePhase.id]);
+    expect(
+      first2FinishService.handleIterativePhaseOpened.mock.calls,
+    ).toContainEqual([challenge.id, iterativePhase.id]);
+    expect(
+      first2FinishService.handleSubmissionByChallengeId.mock.calls,
+    ).toHaveLength(0);
   });
 
   it('does not trigger finance generation for non-payable non-active statuses', async () => {

@@ -41,6 +41,7 @@ import {
 import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { FinanceApiService } from '../../finance/finance-api.service';
+import { First2FinishService } from './first2finish.service';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -65,6 +66,7 @@ export class PhaseScheduleManager {
     private readonly configService: ConfigService,
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly financeApiService: FinanceApiService,
+    private readonly first2FinishService: First2FinishService,
   ) {
     this.schedulerService.setPhaseChainCallback(
       (
@@ -476,6 +478,12 @@ export class PhaseScheduleManager {
               challengeDetails,
               phase.id,
             );
+            if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
+              await this.first2FinishService.handleIterativePhaseOpened(
+                challengeDetails.id,
+                phase.id,
+              );
+            }
             this.processedOpenPhaseFingerprints.set(phaseKey, phaseFingerprint);
             processedCount += 1;
             this.logger.log(

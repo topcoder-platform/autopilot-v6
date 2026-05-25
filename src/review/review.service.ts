@@ -50,6 +50,18 @@ interface ReviewDetailRecord {
   status: string | null;
 }
 
+export interface PassingReviewDetailRecord {
+  id: string;
+  phaseId: string | null;
+  resourceId: string;
+  submissionId: string;
+  scorecardId: string | null;
+  score: number | string | null;
+  status: string | null;
+  submitterMemberId: string | null;
+  passingScore: number | string | null;
+}
+
 interface ScorecardRecord {
   minimumPassingScore: number | string | null;
 }
@@ -2713,6 +2725,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
@@ -2731,6 +2744,7 @@ export class ReviewService {
       candidates,
       placementWinners: options.placementWinners,
       allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      rankAllSubmissions: options.rankAllSubmissions,
       ratedChallenge: options.ratedChallenge,
       actor: options.actor,
       createdAt,
@@ -2751,6 +2765,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
       actor: string;
@@ -2947,6 +2962,98 @@ export class ReviewService {
         source: ReviewService.name,
         details: {
           reviewId,
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Finds the best completed review in a phase whose score meets the review
+   * scorecard passing threshold.
+   * @param challengeId Challenge that owns the submission under review.
+   * @param phaseId Phase instance whose completed reviews should be searched.
+   * @returns The highest scoring passing review, including submitter member id,
+   * or null when no passing review exists.
+   * @throws Error when the review database lookup fails.
+   *
+   * Used by First2Finish iterative-review reconciliation when the Kafka
+   * review-completed event was missed but the phase later closes successfully.
+   */
+  async getLatestPassingReviewForPhase(
+    challengeId: string,
+    phaseId: string,
+  ): Promise<PassingReviewDetailRecord | null> {
+    if (!challengeId || !phaseId) {
+      return null;
+    }
+
+    const query = Prisma.sql`
+      SELECT
+        r."id",
+        r."phaseId",
+        r."resourceId",
+        r."submissionId",
+        r."scorecardId",
+        GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) AS "score",
+        r."status"::text AS "status",
+        s."memberId" AS "submitterMemberId",
+        COALESCE(sc."minimumPassingScore", sc."minScore", 50) AS "passingScore"
+      FROM ${ReviewService.REVIEW_TABLE} r
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = r."submissionId"
+      LEFT JOIN ${ReviewService.SCORECARD_TABLE} sc
+        ON sc."id" = r."scorecardId"
+      WHERE s."challengeId" = ${challengeId}
+        AND r."phaseId" = ${phaseId}
+        AND r."submissionId" IS NOT NULL
+        AND UPPER(COALESCE((r."status")::text, 'PENDING')) = 'COMPLETED'
+        AND GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) >= COALESCE(sc."minimumPassingScore", sc."minScore", 50)
+      ORDER BY
+        GREATEST(
+          COALESCE(r."finalScore", 0),
+          COALESCE(r."initialScore", 0)
+        ) DESC,
+        s."submittedDate" ASC NULLS LAST,
+        r."createdAt" ASC NULLS LAST,
+        r."id" ASC
+      LIMIT 1
+    `;
+
+    try {
+      const [record] =
+        await this.prisma.$queryRaw<PassingReviewDetailRecord[]>(query);
+
+      void this.dbLogger.logAction('review.getLatestPassingReviewForPhase', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          phaseId,
+          found: Boolean(record),
+          reviewId: record?.id ?? null,
+          submissionId: record?.submissionId ?? null,
+          score: record?.score ?? null,
+          passingScore: record?.passingScore ?? null,
+        },
+      });
+
+      return record ?? null;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getLatestPassingReviewForPhase', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          phaseId,
           error: err.message,
         },
       });
