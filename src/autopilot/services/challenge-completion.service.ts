@@ -12,7 +12,7 @@ import {
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
-import { POST_MORTEM_REVIEWER_ROLE_NAME } from '../constants/review.constants';
+import { POST_MORTEM_REVIEWER_ROLE_NAME, AI_REVIEW_PHASE_NAME } from '../constants/review.constants';
 import { KafkaService } from '../../kafka/kafka.service';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
@@ -554,6 +554,13 @@ export class ChallengeCompletionService {
     await this.reviewSummationApiService.finalizeSummations(challengeId);
 
     const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
+    const isAiOnly = (challenge.phases ?? []).some(
+      (p) => p.name === AI_REVIEW_PHASE_NAME,
+    );
+
+    if (isAiOnly) {
+      return this.finalizeAiOnlyChallenge(challengeId, challenge);
+    }
 
     if (isMarathonMatch) {
       const marathonMatchConfig =
@@ -695,6 +702,129 @@ export class ChallengeCompletionService {
     );
     this.logger.log(
       `Marked challenge ${challengeId} as COMPLETED with ${placementWinners.length} winner(s) and ${passedReviewWinners.length} passed review record(s).`,
+    );
+    return true;
+  }
+
+  /**
+   * Finalizes an AI_ONLY challenge using AI decision scores instead of human
+   * review summations.  Ranking is by `totalScore` descending; ties break on
+   * submission timestamp (earlier wins), then submission id lexicographically.
+   * Only submissions whose latest AI decision is PASSED or HUMAN_OVERRIDE are
+   * eligible to win a placement prize.
+   */
+  private async finalizeAiOnlyChallenge(
+    challengeId: string,
+    challenge: IChallenge,
+  ): Promise<boolean> {
+    const summaries =
+      await this.reviewService.getAiDecisionSummaries(challengeId);
+
+    if (!summaries.length) {
+      if ((challenge.numOfSubmissions ?? 0) === 0) {
+        this.logger.log(
+          `AI_ONLY challenge ${challengeId} has no submissions; marking as CANCELLED_ZERO_SUBMISSIONS.`,
+        );
+        await this.challengeApiService.cancelChallenge(
+          challengeId,
+          ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+        );
+        await this.ensureCancelledPostMortem(challengeId);
+        return true;
+      }
+
+      this.logger.warn(
+        `AI decision data not yet available for challenge ${challengeId}; will retry finalization later.`,
+      );
+      return false;
+    }
+
+    const passingSummaries = summaries.filter((s) => s.isPassing);
+
+    if (!passingSummaries.length) {
+      this.logger.log(
+        `No passing AI decisions for challenge ${challengeId}; marking as CANCELLED_FAILED_REVIEW.`,
+      );
+      await this.challengeApiService.cancelChallenge(
+        challengeId,
+        ChallengeStatusEnum.CANCELLED_FAILED_REVIEW,
+      );
+      await this.ensureCancelledPostMortem(challengeId);
+      void this.financeApiService.generateChallengePayments(challengeId);
+      return true;
+    }
+
+    const sortedSummaries = [...passingSummaries].sort((a, b) => {
+      if (b.aggregateScore !== a.aggregateScore) {
+        return b.aggregateScore - a.aggregateScore;
+      }
+      const timeDiff =
+        this.getSubmissionTimestamp(a.submittedDate) -
+        this.getSubmissionTimestamp(b.submittedDate);
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return a.submissionId.localeCompare(b.submissionId);
+    });
+
+    const memberIds = Array.from(
+      new Set(
+        sortedSummaries
+          .map((s) => s.memberId?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+
+    const handleMap = await this.resourcesService.getMemberHandleMap(
+      challengeId,
+      memberIds,
+    );
+
+    const placementPrizeLimit = this.countPlacementPrizes(
+      challenge.prizeSets ?? [],
+    );
+    const placementWinnerLimit =
+      placementPrizeLimit > 0 ? placementPrizeLimit : sortedSummaries.length;
+    const placementSummaries = sortedSummaries.slice(0, placementWinnerLimit);
+    const passedReviewSummaries = sortedSummaries.slice(placementWinnerLimit);
+
+    const placementWinners = placementSummaries
+      .map((summary, index) =>
+        this.buildWinnerRecord(
+          challengeId,
+          summary,
+          handleMap,
+          index + 1,
+          PrizeSetTypeEnum.PLACEMENT,
+        ),
+      )
+      .filter((winner): winner is IChallengeWinner => winner !== null);
+
+    const passedReviewWinners = passedReviewSummaries
+      .map((summary, index) =>
+        this.buildWinnerRecord(
+          challengeId,
+          summary,
+          handleMap,
+          index + 1,
+          PrizeSetTypeEnum.PASSED_REVIEW,
+        ),
+      )
+      .filter((winner): winner is IChallengeWinner => winner !== null);
+
+    const winners = [...placementWinners, ...passedReviewWinners];
+
+    await this.challengeApiService.completeChallenge(challengeId, winners);
+    await this.syncChallengeResults(challengeId, challenge, placementWinners);
+    void this.financeApiService.generateChallengePayments(challengeId);
+    void this.triggerStatsRefreshForWinners(challengeId, placementWinners);
+    await this.publishChallengeCompletionUpdate(
+      challengeId,
+      placementWinners,
+      challenge,
+    );
+    this.logger.log(
+      `[AI_ONLY] Marked challenge ${challengeId} as COMPLETED with ${placementWinners.length} winner(s) and ${passedReviewWinners.length} passed review record(s) based on AI decision scores.`,
     );
     return true;
   }
