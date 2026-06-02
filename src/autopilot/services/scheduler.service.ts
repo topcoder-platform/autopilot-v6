@@ -893,48 +893,63 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Block closing Approval until all approval scorecards are submitted
+      // Block closing Approval until all approval scorecards are submitted.
+      // For AI_ONLY challenges (challenges with an AI Review phase) the Approval phase
+      // is a manager-review window with no human reviewer scorecards — skip the
+      // coverage/completion checks and allow the phase to close on its scheduled time.
       if (operation === 'close' && isApprovalPhase) {
         try {
-          const coverage = await this.verifyReviewerCoverage(
-            data.challengeId,
-            data.phaseId,
-            phaseName,
-            true,
+          const approvalChallenge =
+            await this.challengeApiService.getChallengeById(data.challengeId);
+          const isAiOnlyChallenge = (approvalChallenge.phases ?? []).some(
+            (p) => p.name === AI_REVIEW_PHASE_NAME,
           );
 
-          if (!coverage.satisfied) {
-            await this.deferApprovalPhaseClosure(
-              data,
-              undefined,
-              `insufficient approval coverage (${coverage.actual}/${coverage.expected} assigned)`,
-            );
-            return;
-          }
-
-          const pendingApproval =
-            await this.reviewService.getPendingReviewCount(
-              data.phaseId,
+          if (!isAiOnlyChallenge) {
+            const coverage = await this.verifyReviewerCoverage(
               data.challengeId,
-            );
-
-          if (pendingApproval > 0) {
-            await this.deferApprovalPhaseClosure(data, pendingApproval);
-            return;
-          }
-
-          // If there are zero pending reviews, ensure at least one approval review exists
-          const completedCount =
-            await this.reviewService.getCompletedReviewCountForPhase(
               data.phaseId,
+              phaseName,
+              true,
             );
-          if (completedCount === 0) {
-            await this.deferApprovalPhaseClosure(
-              data,
-              0,
-              'no completed approval reviews detected',
+
+            if (!coverage.satisfied) {
+              await this.deferApprovalPhaseClosure(
+                data,
+                undefined,
+                `insufficient approval coverage (${coverage.actual}/${coverage.expected} assigned)`,
+              );
+              return;
+            }
+
+            const pendingApproval =
+              await this.reviewService.getPendingReviewCount(
+                data.phaseId,
+                data.challengeId,
+              );
+
+            if (pendingApproval > 0) {
+              await this.deferApprovalPhaseClosure(data, pendingApproval);
+              return;
+            }
+
+            // If there are zero pending reviews, ensure at least one approval review exists
+            const completedCount =
+              await this.reviewService.getCompletedReviewCountForPhase(
+                data.phaseId,
+              );
+            if (completedCount === 0) {
+              await this.deferApprovalPhaseClosure(
+                data,
+                0,
+                'no completed approval reviews detected',
+              );
+              return;
+            }
+          } else {
+            this.logger.log(
+              `[APPROVAL] AI_ONLY challenge ${data.challengeId}: skipping human reviewer checks for Approval phase ${data.phaseId}; closing on schedule.`,
             );
-            return;
           }
         } catch (error) {
           const err = error as Error;

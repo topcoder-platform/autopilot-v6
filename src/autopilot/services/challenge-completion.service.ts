@@ -12,7 +12,11 @@ import {
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
-import { POST_MORTEM_REVIEWER_ROLE_NAME, AI_REVIEW_PHASE_NAME } from '../constants/review.constants';
+import {
+  POST_MORTEM_REVIEWER_ROLE_NAME,
+  AI_REVIEW_PHASE_NAME,
+  APPROVAL_PHASE_NAMES,
+} from '../constants/review.constants';
 import { KafkaService } from '../../kafka/kafka.service';
 import { KAFKA_TOPICS } from '../../kafka/constants/topics';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
@@ -551,8 +555,6 @@ export class ChallengeCompletionService {
       return true;
     }
 
-    await this.reviewSummationApiService.finalizeSummations(challengeId);
-
     const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
     const isAiOnly = (challenge.phases ?? []).some(
       (p) => p.name === AI_REVIEW_PHASE_NAME,
@@ -562,6 +564,7 @@ export class ChallengeCompletionService {
       return this.finalizeAiOnlyChallenge(challengeId, challenge);
     }
 
+    await this.reviewSummationApiService.finalizeSummations(challengeId);
     if (isMarathonMatch) {
       const marathonMatchConfig =
         await this.marathonMatchApiService.getConfig(challengeId);
@@ -717,6 +720,23 @@ export class ChallengeCompletionService {
     challengeId: string,
     challenge: IChallenge,
   ): Promise<boolean> {
+    // If the challenge has an Approval phase that hasn't closed yet, defer
+    // finalization.  Winners must only be determined after the Approval phase
+    // closes so that any manager score overrides applied during the approval
+    // window are reflected in the final rankings.
+    const approvalPhase = (challenge.phases ?? []).find((p) =>
+      APPROVAL_PHASE_NAMES.has(p.name ?? ''),
+    );
+    if (
+      approvalPhase &&
+      (approvalPhase.isOpen || !approvalPhase.actualEndDate)
+    ) {
+      this.logger.log(
+        `[AI_ONLY] Challenge ${challengeId} has an open or incomplete Approval phase; deferring finalization until it closes.`,
+      );
+      return false;
+    }
+
     const summaries =
       await this.reviewService.getAiDecisionSummaries(challengeId);
 
