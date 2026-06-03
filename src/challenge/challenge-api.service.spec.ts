@@ -598,6 +598,183 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     });
   });
 
+  describe('AI Review phase closure blocking', () => {
+    const buildAiReviewChallenge = (phaseIsOpen: boolean) => ({
+      id: 'challenge-ai-review',
+      name: 'AI Review Challenge',
+      description: null,
+      descriptionFormat: 'markdown',
+      projectId: 789,
+      typeId: 'type-ai',
+      trackId: 'track-ai',
+      timelineTemplateId: 'timeline-ai',
+      currentPhaseNames: phaseIsOpen ? ['AI Review'] : [],
+      tags: [],
+      groups: [],
+      submissionStartDate: fixedNow,
+      submissionEndDate: fixedNow,
+      registrationStartDate: fixedNow,
+      registrationEndDate: fixedNow,
+      startDate: fixedNow,
+      endDate: null,
+      legacyId: null,
+      status: ChallengeStatusEnum.ACTIVE,
+      createdBy: 'tester',
+      updatedBy: 'tester',
+      metadata: {},
+      phases: [
+        {
+          id: 'ai-review-phase',
+          phaseId: 'template-ai-review',
+          name: 'AI Review',
+          description: null,
+          isOpen: phaseIsOpen,
+          predecessor: null,
+          duration: 7200,
+          scheduledStartDate: fixedNow,
+          scheduledEndDate: new Date(fixedNow.getTime() + 7200 * 1000),
+          actualStartDate: phaseIsOpen ? fixedNow : null,
+          actualEndDate: null,
+          constraints: [],
+          createdAt: fixedNow,
+          createdBy: 'tester',
+          updatedAt: fixedNow,
+          updatedBy: 'tester',
+        },
+      ],
+      reviewers: [],
+      winners: [],
+      track: { name: 'DEVELOP' },
+      type: { name: 'Standard' },
+      legacyRecord: null,
+      discussions: [],
+      events: [],
+      prizeSets: [],
+      terms: [],
+      skills: [],
+      attachments: [],
+      overview: {},
+      numOfSubmissions: 1,
+      numOfCheckpointSubmissions: 0,
+      numOfRegistrants: 1,
+      createdAt: fixedNow,
+    });
+
+    it('blocks closing AI Review phase when pending AI decisions exist', async () => {
+      const challengeRecord = buildAiReviewChallenge(true);
+      challengeFindUnique.mockResolvedValueOnce(challengeRecord as any);
+
+      // Mock pending AI decisions count query
+      prisma.$queryRaw = jest.fn().mockResolvedValueOnce([{ count: 3 }]);
+
+      const result = await service.advancePhase(
+        'challenge-ai-review',
+        'ai-review-phase',
+        'close',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Cannot close AI Review phase');
+      expect(result.message).toContain('3 pending AI decision(s)');
+      expect(dbLogger.logAction).toHaveBeenCalledWith(
+        'challenge.advancePhase',
+        expect.objectContaining({
+          status: 'INFO',
+          details: expect.objectContaining({
+            pendingAiDecisions: 3,
+          }),
+        }),
+      );
+    });
+
+    it('allows closing AI Review phase when no pending AI decisions', async () => {
+      const challengeRecord = buildAiReviewChallenge(true);
+      challengeFindUnique
+        .mockResolvedValueOnce(challengeRecord as any)
+        .mockResolvedValueOnce(challengeRecord as any);
+
+      // Mock no pending AI decisions
+      prisma.$queryRaw = jest.fn().mockResolvedValueOnce([{ count: 0 }]);
+
+      const result = await service.advancePhase(
+        'challenge-ai-review',
+        'ai-review-phase',
+        'close',
+      );
+
+      expect(result.success).toBe(true);
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('does not check pending AI decisions when opening AI Review phase', async () => {
+      const challengeRecord = buildAiReviewChallenge(false);
+      challengeFindUnique
+        .mockResolvedValueOnce(challengeRecord as any)
+        .mockResolvedValueOnce(challengeRecord as any);
+
+      const queryRawSpy = jest.fn();
+      prisma.$queryRaw = queryRawSpy;
+
+      await service.advancePhase(
+        'challenge-ai-review',
+        'ai-review-phase',
+        'open',
+      );
+
+      // Should not call $queryRaw for pending AI decisions when opening
+      expect(queryRawSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not check pending AI decisions for non-AI Review phases', async () => {
+      const reviewPhase = {
+        id: 'regular-review-phase',
+        phaseId: 'template-review',
+        name: 'Review',
+        description: null,
+        isOpen: true,
+        predecessor: null,
+        duration: 7200,
+        scheduledStartDate: fixedNow,
+        scheduledEndDate: new Date(fixedNow.getTime() + 7200 * 1000),
+        actualStartDate: fixedNow,
+        actualEndDate: null,
+        constraints: [],
+        createdAt: fixedNow,
+        createdBy: 'tester',
+        updatedAt: fixedNow,
+        updatedBy: 'tester',
+      };
+
+      const challengeRecord = {
+        id: 'challenge-regular-review',
+        name: 'Regular Review Challenge',
+        status: ChallengeStatusEnum.ACTIVE,
+        phases: [reviewPhase],
+        currentPhaseNames: ['Review'],
+        reviewers: [],
+        winners: [],
+        track: { name: 'DEVELOP' },
+        type: { name: 'Standard' },
+      };
+
+      challengeFindUnique
+        .mockResolvedValueOnce(challengeRecord as any)
+        .mockResolvedValueOnce(challengeRecord as any);
+
+      const queryRawSpy = jest.fn();
+      prisma.$queryRaw = queryRawSpy;
+
+      await service.advancePhase(
+        'challenge-regular-review',
+        'regular-review-phase',
+        'close',
+      );
+
+      // Should not call $queryRaw for pending AI decisions on non-AI Review phases
+      expect(queryRawSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('createPostMortemPhasePreserving', () => {
     const buildPhase = (overrides: Partial<any> = {}) => {
       const scheduledStart = new Date('2025-09-25T00:00:00.000Z');

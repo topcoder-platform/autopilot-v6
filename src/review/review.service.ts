@@ -3324,6 +3324,54 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Counts AI review decisions in PENDING status for active contest submissions.
+   * Used to block AI Review phase closure until all decisions are finalized.
+   */
+  async getPendingAiDecisionsCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} aid
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = aid."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND UPPER((aid."status")::text) = 'PENDING'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pendingAiDecisions: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
+      throw err;
+    }
+  }
+
   async getInProgressAiWorkflowRunCount(
     challengeId: string,
     aiWorkflowIds: string[],

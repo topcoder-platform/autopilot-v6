@@ -811,6 +811,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Block closing AI Review (AI_ONLY mode) until all configured AI workflows are completed
+      // and all AI decisions are finalized (not PENDING)
       if (operation === 'close' && isAiReviewPhase) {
         try {
           const challenge = await this.challengeApiService.getChallengeById(
@@ -829,6 +830,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               data,
               inProgressAiWorkflows,
               `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
+            );
+            return;
+          }
+
+          // Also check for pending AI decisions
+          const pendingAiDecisions =
+            await this.reviewService.getPendingAiDecisionsCount(
+              data.challengeId,
+            );
+
+          if (pendingAiDecisions > 0) {
+            await this.deferAiScreeningPhaseClosure(
+              data,
+              pendingAiDecisions,
+              `${pendingAiDecisions} pending AI decision(s) detected`,
             );
             return;
           }
