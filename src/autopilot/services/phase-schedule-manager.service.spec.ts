@@ -1,6 +1,8 @@
 import type { ConfigService } from '@nestjs/config';
+import { PrizeSetTypeEnum } from '@prisma/client';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
 import type { FinanceApiService } from '../../finance/finance-api.service';
+import type { MemberApiService } from '../../member-api/member-api.service';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
 import type { ReviewApiService } from '../../review/review-api.service';
 import type { ReviewService } from '../../review/review.service';
@@ -39,6 +41,9 @@ describe('PhaseScheduleManager', () => {
   };
   let financeApiService: {
     generateChallengePayments: jest.Mock;
+  };
+  let memberApiService: {
+    syncChallengePoints: jest.Mock;
   };
   let first2FinishService: {
     handleIterativePhaseOpened: jest.Mock;
@@ -82,6 +87,10 @@ describe('PhaseScheduleManager', () => {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
     };
 
+    memberApiService = {
+      syncChallengePoints: jest.fn().mockResolvedValue(true),
+    };
+
     first2FinishService = {
       handleIterativePhaseOpened: jest.fn().mockResolvedValue(undefined),
       handleSubmissionByChallengeId: jest.fn().mockResolvedValue(undefined),
@@ -100,6 +109,7 @@ describe('PhaseScheduleManager', () => {
       dbLogger as unknown as AutopilotDbLoggerService,
       financeApiService as unknown as FinanceApiService,
       first2FinishService as unknown as First2FinishService,
+      memberApiService as unknown as MemberApiService,
     );
   });
 
@@ -125,6 +135,48 @@ describe('PhaseScheduleManager', () => {
     );
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-1',
+    );
+  });
+
+  it('syncs challenge points once when a point-prize challenge transitions to COMPLETED', async () => {
+    const message = {
+      id: 'challenge-points-1',
+      operator: AutopilotOperator.SYSTEM,
+      projectId: 1000,
+      status: 'COMPLETED',
+    };
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: message.id,
+      name: 'AI Points Challenge',
+      status: 'COMPLETED',
+      phases: [],
+      prizeSets: [
+        {
+          type: PrizeSetTypeEnum.PLACEMENT,
+          prizes: [
+            { type: 'POINT', value: 500 },
+            { type: 'POINT', value: 250 },
+          ],
+        },
+      ],
+      winners: [
+        { userId: 101, placement: 1, type: PrizeSetTypeEnum.PLACEMENT },
+        { userId: 102, placement: 2, type: PrizeSetTypeEnum.PLACEMENT },
+      ],
+    });
+
+    await service.handleChallengeUpdate(message);
+    await service.handleChallengeUpdate(message);
+
+    expect(memberApiService.syncChallengePoints).toHaveBeenCalledTimes(1);
+    expect(memberApiService.syncChallengePoints).toHaveBeenCalledWith(
+      message.id,
+      'AI Points Challenge',
+      [
+        { userId: 101, placement: 1, points: 500 },
+        { userId: 102, placement: 2, points: 250 },
+      ],
     );
   });
 
