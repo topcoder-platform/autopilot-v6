@@ -18,7 +18,6 @@ import {
   isPostMortemPhaseName,
   AI_REVIEW_PHASE_NAME,
 } from '../autopilot/constants/review.constants';
-import { ReviewPrismaService } from 'src/review/review-prisma.service';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -82,7 +81,6 @@ export class ChallengeApiService {
 
   constructor(
     private readonly prisma: ChallengePrismaService,
-    private readonly reviewPrisma: ReviewPrismaService,
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly configService: ConfigService,
   ) {
@@ -1845,8 +1843,8 @@ export class ChallengeApiService {
   ): Promise<number> {
     const query = Prisma.sql`
       SELECT COUNT(*)::int AS count
-      FROM "aiReviewDecision" aid
-      INNER JOIN "submission" s
+      FROM reviews."aiReviewDecision" aid
+      INNER JOIN reviews."submission" s
         ON s."id" = aid."submissionId"
       WHERE s."challengeId" = ${challengeId}
         AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
@@ -1859,7 +1857,7 @@ export class ChallengeApiService {
 
     try {
       const [record] =
-        await this.reviewPrisma.$queryRaw<{ count: number }[]>(query);
+        await this.prisma.$queryRaw<{ count: number }[]>(query);
       const rawCount = Number(record?.count ?? 0);
       return Number.isFinite(rawCount) ? rawCount : 0;
     } catch (error) {
