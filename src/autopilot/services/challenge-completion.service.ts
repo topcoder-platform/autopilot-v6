@@ -24,6 +24,10 @@ import {
   isRatedChallenge,
   parseMetadataBoolean,
 } from '../utils/challenge-metadata.utils';
+import {
+  buildChallengePointAwards,
+  hasPointPlacementPrizes,
+} from '../utils/challenge-points.utils';
 
 /**
  * Completes challenges, derives winners, and coordinates downstream finance and
@@ -79,6 +83,41 @@ export class ChallengeCompletionService {
       const err = error as Error;
       this.logger.error(
         `Failed to trigger member stats refresh for challenge ${challengeId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  /**
+   * Starts an idempotent member-api challenge-points sync for point-based placement prizes.
+   * @param challenge Challenge snapshot containing prize and name data.
+   * @param winners Winner rows to map to placement point values.
+   * @returns Nothing. The outbound call is started without blocking completion.
+   * @throws Never. Errors are logged and swallowed so completion remains idempotent.
+   *
+   * Usage:
+   * Invoked immediately after finance payment generation is triggered so profile
+   * point totals are stored in member-api alongside wallet point payouts.
+   */
+  private triggerChallengePointsSync(
+    challenge: IChallenge,
+    winners: IChallengeWinner[],
+  ): void {
+    try {
+      if (!hasPointPlacementPrizes(challenge)) {
+        return;
+      }
+
+      const points = buildChallengePointAwards(challenge, winners);
+      void this.memberApiService.syncChallengePoints(
+        challenge.id,
+        challenge.name,
+        points,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to trigger challenge points sync for challenge ${challenge.id}: ${err.message}`,
         err.stack,
       );
     }
@@ -535,6 +574,7 @@ export class ChallengeCompletionService {
             winner.type === undefined ||
             winner.type === PrizeSetTypeEnum.PLACEMENT,
         );
+        this.triggerChallengePointsSync(challenge, placementWinners);
         void this.syncChallengeResults(
           challengeId,
           challenge,
@@ -683,6 +723,7 @@ export class ChallengeCompletionService {
     await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
+    this.triggerChallengePointsSync(challenge, placementWinners);
     // Trigger aggregate refreshes for MM finishers and submitter rating rerates.
     void this.triggerStatsRefreshForWinners(
       challengeId,
@@ -714,6 +755,7 @@ export class ChallengeCompletionService {
     await this.syncChallengeResults(challengeId, challenge, placementWinners);
     // Trigger finance payments generation after marking the challenge as completed
     void this.financeApiService.generateChallengePayments(challengeId);
+    this.triggerChallengePointsSync(challenge, placementWinners);
     // Trigger winner aggregate refreshes and submitter rating rerates.
     void this.triggerStatsRefreshForWinners(challengeId, winners);
     await this.publishChallengeCompletionUpdate(

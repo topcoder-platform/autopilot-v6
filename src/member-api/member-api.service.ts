@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { Auth0Service } from '../auth/auth0.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
+import type { ChallengePointAward } from '../autopilot/utils/challenge-points.utils';
 
 /**
  * Wraps outbound member-api calls used to refresh and rerate member statistics
@@ -455,6 +456,129 @@ export class MemberApiService {
           },
         },
       );
+      return false;
+    }
+  }
+
+  /**
+   * Replaces member-api challenge-point rows for one completed point-based challenge.
+   * @param challengeId Challenge identifier whose point rows should be replaced.
+   * @param challengeName Challenge title displayed in member profile breakdowns.
+   * @param points Point awards by user and placement.
+   * @returns `true` when member-api accepts the request with a 2xx response, otherwise `false`.
+   * @throws Never. All transport and API errors are logged and converted to `false`.
+   *
+   * Usage:
+   * Called by autopilot completion and challenge-update flows after finance payment
+   * generation is triggered, keeping member-api's profile point summary aligned with
+   * point-based prize payouts.
+   */
+  async syncChallengePoints(
+    challengeId: string,
+    challengeName: string,
+    points: ChallengePointAward[],
+  ): Promise<boolean> {
+    const url = this.buildUrl(
+      `/v6/members/challenge-points/${encodeURIComponent(challengeId)}`,
+    );
+    const body = { challengeName, points };
+
+    if (!url) {
+      await this.dbLogger.logAction('memberApi.syncChallengePoints', {
+        challengeId,
+        status: 'INFO',
+        source: MemberApiService.name,
+        details: {
+          pointsCount: points.length,
+          note: 'MEMBER_API_URL or BUS_API_URL not configured; skipping challenge points sync call.',
+        },
+      });
+      return false;
+    }
+
+    const requestLog = {
+      method: 'PUT',
+      url,
+      body,
+      headers: {
+        Authorization: '[not available]',
+        'Content-Type': 'application/json',
+      },
+      timeoutMs: this.timeoutMs,
+    };
+
+    try {
+      const token = await this.auth0Service.getAccessToken();
+      if (token) {
+        requestLog.headers.Authorization = 'Bearer [redacted]';
+      }
+
+      const axiosHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        axiosHeaders.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await firstValueFrom(
+        this.httpService.put<Record<string, unknown>>(url, body, {
+          headers: axiosHeaders,
+          timeout: this.timeoutMs,
+        }),
+      );
+
+      await this.dbLogger.logAction('memberApi.syncChallengePoints', {
+        challengeId,
+        status: 'SUCCESS',
+        source: MemberApiService.name,
+        details: {
+          url,
+          status: response.status,
+          request: requestLog,
+          response: {
+            status: response.status,
+            data: response.data ?? null,
+            headers: this.sanitizeHeaders(
+              response.headers as Record<string, unknown> | undefined,
+            ),
+          },
+        },
+      });
+
+      this.logger.log(
+        `Synced ${points.length} challenge point award(s) for challenge ${challengeId} (${response.status}).`,
+      );
+      return true;
+    } catch (error) {
+      const err = error as {
+        message?: string;
+        stack?: string;
+        response?: {
+          status?: number;
+          data?: unknown;
+          headers?: Record<string, unknown>;
+        };
+      };
+      const message = err?.message || 'Unknown error';
+
+      this.logger.error(
+        `Failed to sync challenge points for challenge ${challengeId}: ${message}`,
+        err?.stack,
+      );
+
+      await this.dbLogger.logAction('memberApi.syncChallengePoints', {
+        challengeId,
+        status: 'ERROR',
+        source: MemberApiService.name,
+        details: {
+          url,
+          request: requestLog,
+          error: message,
+          status: err?.response?.status,
+          response: err?.response?.data,
+          responseHeaders: this.sanitizeHeaders(err?.response?.headers),
+        },
+      });
       return false;
     }
   }
