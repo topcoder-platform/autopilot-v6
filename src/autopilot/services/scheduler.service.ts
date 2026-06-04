@@ -23,6 +23,7 @@ import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
+  AI_REVIEW_PHASE_NAME,
   AI_SCREENING_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
@@ -513,6 +514,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const isAiScreeningPhase =
         phaseName === AI_SCREENING_PHASE_NAME ||
         data.phaseTypeName === AI_SCREENING_PHASE_NAME;
+      const isAiReviewPhase =
+        phaseName === AI_REVIEW_PHASE_NAME ||
+        data.phaseTypeName === AI_REVIEW_PHASE_NAME;
       const isApprovalPhase =
         APPROVAL_PHASE_NAMES.has(phaseName) ||
         APPROVAL_PHASE_NAMES.has(data.phaseTypeName);
@@ -794,6 +798,44 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           const err = error as Error;
           this.logger.error(
             `[AI SCREENING LATE] Unable to verify AI workflow readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferAiScreeningPhaseClosure(
+            data,
+            undefined,
+            'unable to verify AI workflow readiness',
+          );
+          return;
+        }
+      }
+
+      // Block closing AI Review (AI_ONLY mode) until all configured AI workflows are completed
+      if (operation === 'close' && isAiReviewPhase) {
+        try {
+          const challenge = await this.challengeApiService.getChallengeById(
+            data.challengeId,
+          );
+          const aiWorkflowIds = this.getAiWorkflowIds(challenge);
+
+          const inProgressAiWorkflows =
+            await this.reviewService.getInProgressAiWorkflowRunCount(
+              data.challengeId,
+              aiWorkflowIds,
+            );
+
+          if (inProgressAiWorkflows > 0) {
+            await this.deferAiScreeningPhaseClosure(
+              data,
+              inProgressAiWorkflows,
+              `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
+            );
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI REVIEW LATE] Unable to verify AI workflow readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
             err.stack,
           );
 
@@ -1142,6 +1184,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
               err.stack,
             );
           }
+        }
+
+        if (operation === 'close' && isAiReviewPhase) {
+          this.aiScreeningCloseRetryAttempts.delete(
+            this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId),
+          );
         }
 
         if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {

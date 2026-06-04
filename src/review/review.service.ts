@@ -975,6 +975,101 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Returns AI decision summaries for all active contest submissions in a challenge.
+   * Used by `ChallengeCompletionService` to finalize AI_ONLY challenges in place of
+   * human review summations.
+   *
+   * Picks the latest decision per submission (ordered by config version then decision
+   * timestamp), filters out PENDING entries, and marks a submission as passing when
+   * its decision status is PASSED or HUMAN_OVERRIDE.
+   */
+  async getAiDecisionSummaries(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      WITH ranked_decisions AS (
+        SELECT
+          d."submissionId",
+          d."totalScore",
+          UPPER((d."status")::text) AS "status",
+          ROW_NUMBER() OVER (
+            PARTITION BY d."submissionId"
+            ORDER BY
+              c."version" DESC,
+              COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+              d."id" DESC
+          ) AS "rn"
+        FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+        INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+          ON c."id" = d."configId"
+        WHERE c."challengeId" = ${challengeId}
+          AND UPPER((d."status")::text) != 'PENDING'
+      )
+      SELECT
+        s."id"                   AS "submissionId",
+        s."legacySubmissionId"   AS "legacySubmissionId",
+        s."memberId"             AS "memberId",
+        s."submittedDate"        AS "submittedDate",
+        COALESCE(rd."totalScore", 0) AS "totalScore",
+        rd."status"              AS "status"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ranked_decisions rd ON rd."submissionId" = s."id"
+      WHERE s."challengeId" = ${challengeId}
+        AND rd."rn" = 1
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND UPPER(COALESCE((s."status")::text, '')) NOT IN ('DELETED', 'FAILED_SCREENING', 'AI_FAILED_REVIEW')
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<
+        {
+          submissionId: string;
+          legacySubmissionId: string | null;
+          memberId: string | null;
+          submittedDate: Date | null;
+          totalScore: string | number;
+          status: string;
+        }[]
+      >(query);
+
+      return rows.map((row) => {
+        const rawScore = Number(row.totalScore);
+        const aggregateScore = Number.isFinite(rawScore) ? rawScore : 0;
+        const isPassing =
+          row.status === 'PASSED' || row.status === 'HUMAN_OVERRIDE';
+
+        return {
+          submissionId: row.submissionId,
+          legacySubmissionId: row.legacySubmissionId ?? null,
+          memberId: row.memberId ?? null,
+          submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+          aggregateScore,
+          scorecardId: null,
+          scorecardLegacyId: null,
+          passingScore: 0,
+          isPassing,
+        };
+      });
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getAiDecisionSummaries', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
   async hasAiDecisionForSubmission(
     challengeId: string,
     submissionId: string,
