@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { ChallengePrismaService } from './challenge-prisma.service';
+import { ReviewService } from '../review/review.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import {
   IPhase,
@@ -81,6 +82,7 @@ export class ChallengeApiService {
 
   constructor(
     private readonly prisma: ChallengePrismaService,
+    private readonly reviewService: ReviewService,
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly configService: ConfigService,
   ) {
@@ -372,7 +374,7 @@ export class ChallengeApiService {
       const isAiReviewPhase = targetPhase.name === AI_REVIEW_PHASE_NAME;
       if (operation === 'close' && isAiReviewPhase) {
         const pendingAiDecisions =
-          await this.getPendingAiDecisionsCount(challengeId);
+          await this.reviewService.getPendingAiDecisionsCount(challengeId);
         if (pendingAiDecisions > 0) {
           const result: PhaseAdvanceResponseDto = {
             success: false,
@@ -1830,42 +1832,6 @@ export class ChallengeApiService {
         source: ChallengeApiService.name,
         details: { status, error: err.message },
       });
-      throw err;
-    }
-  }
-
-  /**
-   * Counts AI review decisions in PENDING status for active contest submissions.
-   * Used to block AI Review phase closure until all decisions are finalized.
-   */
-  private async getPendingAiDecisionsCount(
-    challengeId: string,
-  ): Promise<number> {
-    const query = Prisma.sql`
-      SELECT COUNT(*)::int AS count
-      FROM reviews."aiReviewDecision" aid
-      INNER JOIN reviews."submission" s
-        ON s."id" = aid."submissionId"
-      WHERE s."challengeId" = ${challengeId}
-        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
-        AND (
-          s."type" IS NULL
-          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
-        )
-        AND UPPER((aid."status")::text) = 'PENDING'
-    `;
-
-    try {
-      const [record] =
-        await this.prisma.$queryRaw<{ count: number }[]>(query);
-      const rawCount = Number(record?.count ?? 0);
-      return Number.isFinite(rawCount) ? rawCount : 0;
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `Failed to count pending AI decisions for challenge ${challengeId}: ${err.message}`,
-        err.stack,
-      );
       throw err;
     }
   }
