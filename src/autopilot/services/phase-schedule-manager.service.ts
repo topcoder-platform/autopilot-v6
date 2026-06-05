@@ -356,6 +356,10 @@ export class PhaseScheduleManager {
         challengeDetails,
         previousStatus,
       );
+      this.triggerChallengeRatingRerateForCompletedStatus(
+        challengeDetails,
+        previousStatus,
+      );
 
       if (!isActiveStatus(challengeDetails.status)) {
         this.updateCachedStatus(message.id, challengeDetails.status);
@@ -387,6 +391,10 @@ export class PhaseScheduleManager {
             challengeDetails.status,
           );
           this.triggerChallengePointsSyncForPayableStatus(
+            challengeDetails,
+            previousStatus,
+          );
+          this.triggerChallengeRatingRerateForCompletedStatus(
             challengeDetails,
             previousStatus,
           );
@@ -616,6 +624,47 @@ export class PhaseScheduleManager {
       const err = error as Error;
       this.logger.error(
         `[POINTS] Failed to trigger challenge points sync for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
+  /**
+   * Starts member-api rating recalculation when a challenge becomes completed.
+   * @param challenge Challenge snapshot containing status and id.
+   * @param previousStatus Last cached challenge status, if known.
+   * @returns Nothing. The outbound call is started without blocking update handling.
+   * @throws Never. Errors are logged and swallowed so update handling remains idempotent.
+   *
+   * Usage:
+   * Invoked from challenge update handling for completions that are observed
+   * outside `ChallengeCompletionService`, such as manually completed challenges.
+   * Member-api determines whether the challenge is rated and which native or
+   * named rating dimensions should be recalculated.
+   */
+  private triggerChallengeRatingRerateForCompletedStatus(
+    challenge: IChallenge,
+    previousStatus: string | null,
+  ): void {
+    const currentStatus = challenge.status?.toUpperCase();
+    if (currentStatus !== ChallengeStatusEnum.COMPLETED) {
+      return;
+    }
+
+    if (previousStatus && previousStatus.toUpperCase() === currentStatus) {
+      return;
+    }
+
+    if (!this.memberApiService) {
+      return;
+    }
+
+    try {
+      void this.memberApiService.rerateChallengeSubmitterRatings(challenge.id);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[RATINGS] Failed to trigger challenge submitter rating rerate for challenge ${challenge.id}: ${err.message}`,
         err.stack,
       );
     }
