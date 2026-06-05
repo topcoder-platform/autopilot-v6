@@ -997,6 +997,7 @@ export class ReviewService {
           d."submissionId",
           d."totalScore",
           UPPER((d."status")::text) AS "status",
+          c."minPassingThreshold",
           ROW_NUMBER() OVER (
             PARTITION BY d."submissionId"
             ORDER BY
@@ -1016,7 +1017,8 @@ export class ReviewService {
         s."memberId"             AS "memberId",
         s."submittedDate"        AS "submittedDate",
         COALESCE(rd."totalScore", 0) AS "totalScore",
-        rd."status"              AS "status"
+        rd."status"              AS "status",
+        rd."minPassingThreshold" AS "minPassingThreshold"
       FROM ${ReviewService.SUBMISSION_TABLE} s
       INNER JOIN ranked_decisions rd ON rd."submissionId" = s."id"
       WHERE s."challengeId" = ${challengeId}
@@ -1037,14 +1039,27 @@ export class ReviewService {
           submittedDate: Date | null;
           totalScore: string | number;
           status: string;
+          minPassingThreshold: string | number | null;
         }[]
       >(query);
 
       return rows.map((row) => {
         const rawScore = Number(row.totalScore);
         const aggregateScore = Number.isFinite(rawScore) ? rawScore : 0;
-        const isPassing =
-          row.status === 'PASSED' || row.status === 'HUMAN_OVERRIDE';
+        const minPassingThreshold = Number(row.minPassingThreshold);
+        const hasValidThreshold = Number.isFinite(minPassingThreshold);
+
+        let isPassing: boolean;
+        if (row.status === 'PASSED') {
+          isPassing = true;
+        } else if (row.status === 'HUMAN_OVERRIDE') {
+          // For HUMAN_OVERRIDE, check score against minPassingThreshold
+          isPassing = hasValidThreshold
+            ? aggregateScore >= minPassingThreshold
+            : true;
+        } else {
+          isPassing = false;
+        }
 
         return {
           submissionId: row.submissionId,
@@ -1054,7 +1069,7 @@ export class ReviewService {
           aggregateScore,
           scorecardId: null,
           scorecardLegacyId: null,
-          passingScore: 0,
+          passingScore: hasValidThreshold ? minPassingThreshold : 0,
           isPassing,
         };
       });
@@ -3305,6 +3320,54 @@ export class ReviewService {
           },
         },
       );
+      throw err;
+    }
+  }
+
+  /**
+   * Counts AI review decisions in PENDING status for active contest submissions.
+   * Used to block AI Review phase closure until all decisions are finalized.
+   */
+  async getPendingAiDecisionsCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} aid
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = aid."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND UPPER((aid."status")::text) = 'PENDING'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pendingAiDecisions: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
       throw err;
     }
   }
