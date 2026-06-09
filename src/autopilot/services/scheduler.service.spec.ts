@@ -1177,6 +1177,50 @@ describe('SchedulerService (review phase deferral)', () => {
       'close',
     );
   });
+
+  it('reconciles iterative review when END transition is replayed after the phase is already closed', async () => {
+    const payload = createPayload({
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleIterativePhaseClosed.mock.calls,
+    ).toContainEqual([payload.challengeId]);
+  });
+
+  it('skips closed iterative review replay reconciliation when refresh is disabled', async () => {
+    const payload = createPayload({
+      phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,
+      skipIterativePhaseRefresh: true,
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: ITERATIVE_REVIEW_PHASE_NAME,
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+    expect(
+      first2FinishService.handleIterativePhaseClosed.mock.calls,
+    ).toHaveLength(0);
+  });
+
   it('refreshes submissions when iterative review closes', async () => {
     const payload = createPayload({
       phaseTypeName: ITERATIVE_REVIEW_PHASE_NAME,

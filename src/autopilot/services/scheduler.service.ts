@@ -545,6 +545,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `Phase ${data.phaseId} is already closed, skipping close operation`,
         );
+        if (
+          phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
+          !data.skipIterativePhaseRefresh
+        ) {
+          await this.reconcileClosedIterativeReviewPhase(data);
+        }
         return;
       }
 
@@ -1234,17 +1240,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
           !data.skipIterativePhaseRefresh
         ) {
-          try {
-            await this.first2FinishService.handleIterativePhaseClosed(
-              data.challengeId,
-            );
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to refresh iterative submissions for challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
-              err.stack,
-            );
-          }
+          await this.reconcileClosedIterativeReviewPhase(data);
         }
 
         if (operation === 'open') {
@@ -1617,6 +1613,31 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       `[MANUAL COMPLETION] Detected that all phases are closed for challenge ${challenge.id}. Last phase closed: ${phaseLabel}. Triggering finalization.`,
     );
     await this.attemptChallengeFinalization(challenge.id);
+  }
+
+  /**
+   * Reconciles First2Finish work after an Iterative Review phase is closed.
+   * @param data Phase transition payload containing the challenge and phase ids.
+   * @returns Resolves after reconciliation is attempted.
+   *
+   * Used by both successful close transitions and replayed END transitions that
+   * find the phase already closed. Errors from First2Finish reconciliation are
+   * logged and not rethrown so phase-transition processing remains idempotent.
+   */
+  private async reconcileClosedIterativeReviewPhase(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    try {
+      await this.first2FinishService.handleIterativePhaseClosed(
+        data.challengeId,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to refresh iterative submissions for challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   private async attemptChallengeFinalization(

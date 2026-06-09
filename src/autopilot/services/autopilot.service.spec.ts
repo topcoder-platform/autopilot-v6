@@ -9,6 +9,7 @@ import type {
   SubmissionAggregatePayload,
 } from '../interfaces/autopilot.interface';
 import {
+  ITERATIVE_REVIEW_PHASE_NAME,
   POST_MORTEM_PHASE_NAME,
   POST_MORTEM_PHASE_ALTERNATE_NAME,
 } from '../constants/review.constants';
@@ -34,6 +35,7 @@ type First2FinishServiceMock = Pick<
   | 'handleSubmissionByChallengeId'
   | 'handleIterativeReviewerAdded'
   | 'handleIterativeReviewCompletion'
+  | 'handleIterativePhaseClosed'
   | 'isFirst2FinishChallenge'
   | 'isChallengeActive'
 >;
@@ -90,11 +92,14 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       createMockMethod<
         First2FinishService['handleIterativeReviewCompletion']
       >();
+    const handleIterativePhaseClosed =
+      createMockMethod<First2FinishService['handleIterativePhaseClosed']>();
 
     first2FinishService = {
       handleSubmissionByChallengeId,
       handleIterativeReviewerAdded,
       handleIterativeReviewCompletion,
+      handleIterativePhaseClosed,
       isFirst2FinishChallenge: jest.fn().mockReturnValue(true),
       isChallengeActive: jest.fn().mockReturnValue(true),
     } as unknown as First2FinishServiceMock;
@@ -452,6 +457,41 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         reviewedSubmissionCount: 0,
         completedSubmissionCount: 0,
       });
+    });
+
+    it('reconciles a closed iterative review phase when review completion is replayed', async () => {
+      const reviewPhase = buildReviewPhase(ITERATIVE_REVIEW_PHASE_NAME);
+      const closedReviewPhase = {
+        ...reviewPhase,
+        isOpen: false,
+        actualEndDate: new Date().toISOString(),
+      };
+      challengeApiService.getChallengeById.mockResolvedValue(
+        buildReviewChallenge(closedReviewPhase),
+      );
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: closedReviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: 100,
+        status: 'COMPLETED',
+      });
+
+      await autopilotService.handleReviewCompleted(
+        buildPayload({ phaseId: closedReviewPhase.id }),
+      );
+
+      expect(
+        first2FinishService.handleIterativePhaseClosed,
+      ).toHaveBeenCalledWith('challenge-1');
+      expect(
+        first2FinishService.handleIterativeReviewCompletion,
+      ).not.toHaveBeenCalled();
+      expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
     });
 
     it('does not close the review phase while reviews are still pending', async () => {

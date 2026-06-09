@@ -279,6 +279,16 @@ export class AutopilotService {
       }
 
       if (!phase.isOpen) {
+        if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
+          this.logger.log(
+            `Reconciling closed iterative review phase ${phase.id} for challenge ${challengeId} after review completion event.`,
+          );
+          await this.first2FinishService.handleIterativePhaseClosed(
+            challenge.id,
+          );
+          return;
+        }
+
         this.logger.debug(
           `Phase ${phase.id} already closed for challenge ${challengeId}; ignoring review completion event.`,
         );
