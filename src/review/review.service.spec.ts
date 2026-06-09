@@ -219,6 +219,44 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getInProgressAiWorkflowRunCount', () => {
+    it('counts only in-progress AI workflow runs for latest submissions', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '4' }]);
+
+      const count = await service.getInProgressAiWorkflowRunCount(
+        challengeId,
+        ['workflow-ai-1', 'workflow-ai-2'],
+      );
+
+      expect(count).toBe(4);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('WITH latest_submissions AS');
+      expect(sqlText).toContain('ROW_NUMBER() OVER (');
+      expect(sqlText).toContain('PARTITION BY COALESCE(s."memberId", s."id")');
+      expect(sqlText).toContain('awr."workflowId" IN');
+      expect(sqlText).toContain('UPPER((awr."status")::text) IN');
+
+      expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
+        'review.getInProgressAiWorkflowRunCount',
+        expect.objectContaining({
+          status: 'SUCCESS',
+          details: expect.objectContaining({
+            workflowCount: 2,
+            inProgressCount: 4,
+            latestSubmissionsOnly: true,
+          }),
+        }),
+      );
+    });
+  });
+
   describe('buildChallengeResultRecordsForChallenge', () => {
     it('prefers the latest submission when submissions are limited', async () => {
       prismaMock.$queryRaw.mockResolvedValue([
