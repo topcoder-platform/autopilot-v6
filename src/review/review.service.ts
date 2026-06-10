@@ -3233,12 +3233,38 @@ export class ReviewService {
     const inProgressStatuses = ['INIT', 'QUEUED', 'DISPATCHED', 'IN_PROGRESS'];
 
     const query = Prisma.sql`
+      WITH latest_submissions AS (
+        SELECT latest."id"
+        FROM (
+          SELECT
+            s."id",
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) AS row_num
+          FROM ${ReviewService.SUBMISSION_TABLE} s
+          WHERE s."challengeId" = ${challengeId}
+            AND (
+              s."status" IS NULL
+              OR s."status" = 'ACTIVE'
+              OR s."status" = 'AI_FAILED_REVIEW'
+            )
+            AND (
+              s."type" IS NULL
+              OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+            )
+        ) latest
+        WHERE latest.row_num = 1
+      )
       SELECT COUNT(*)::int AS count
       FROM ${ReviewService.AI_WORKFLOW_RUN_TABLE} awr
-      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
-        ON s."id" = awr."submissionId"
-      WHERE s."challengeId" = ${challengeId}
-        AND awr."workflowId" IN (${Prisma.join(normalizedWorkflowIds)})
+      INNER JOIN latest_submissions ls
+        ON ls."id" = awr."submissionId"
+      WHERE awr."workflowId" IN (${Prisma.join(normalizedWorkflowIds)})
         AND UPPER((awr."status")::text) IN (${Prisma.join(inProgressStatuses)})
     `;
 
@@ -3254,6 +3280,7 @@ export class ReviewService {
         details: {
           workflowCount: normalizedWorkflowIds.length,
           inProgressCount: count,
+          latestSubmissionsOnly: true,
         },
       });
 
