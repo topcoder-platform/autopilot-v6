@@ -108,6 +108,7 @@ describe('ReviewService createPendingReview', () => {
 
     expect(sqlText).toContain('UPDATE');
     expect(sqlText).toContain('"scorecardId"');
+    expect(sqlText).toContain('"typeId"');
 
     const createPendingReviewLog = logActionMock.mock.calls.find(
       ([action]) => action === 'review.createPendingReview',
@@ -121,6 +122,36 @@ describe('ReviewService createPendingReview', () => {
         pendingReviewIds: ['review-existing'],
       },
     });
+  });
+
+  it('populates the review type when creating a pending assignment', async () => {
+    queryRawMock.mockResolvedValueOnce([{ id: 'review-created' }]);
+
+    const result = await service.createPendingReview(
+      submissionId,
+      resourceId,
+      phaseId,
+      'scorecard-review',
+      challengeId,
+    );
+
+    expect(result).toEqual({
+      created: true,
+      reviewId: 'review-created',
+    });
+    expect(queryRawMock).toHaveBeenCalledTimes(1);
+
+    const queryRawCalls = queryRawMock.mock.calls as unknown as Array<
+      [RawSqlQuery]
+    >;
+    const insertQuery = queryRawCalls[0]?.[0];
+    const sqlText = Array.isArray(insertQuery?.strings)
+      ? insertQuery.strings.join('')
+      : '';
+
+    expect(sqlText).toContain('"typeId"');
+    expect(sqlText).toContain('review_type."isActive" = true');
+    expect(sqlText).toContain("WHEN 'REVIEW' THEN 'review'");
   });
 
   it('does not create another pending assignment when the same review is already completed', async () => {

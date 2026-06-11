@@ -1602,7 +1602,8 @@ export class ReviewService {
    * @param submissionId Submission to review, or null for challenge-level reviews.
    * @param resourceId Reviewer resource that owns the assignment.
    * @param phaseId Phase instance that owns the assignment.
-   * @param scorecardId Scorecard the pending assignment should use.
+   * @param scorecardId Scorecard the pending assignment should use. The
+   * assignment's review type is derived from this scorecard when possible.
    * @param challengeId Challenge used for audit logging.
    * @returns Whether a row was created and the reusable non-completed review ID,
    * if one should be dispatched.
@@ -1615,12 +1616,36 @@ export class ReviewService {
     scorecardId: string,
     challengeId: string,
   ): Promise<{ created: boolean; reviewId: string | null }> {
+    const resolvedReviewTypeId = Prisma.sql`
+      (
+        SELECT review_type."id"
+        FROM ${ReviewService.SCORECARD_TABLE} scorecard
+        INNER JOIN ${ReviewService.REVIEW_TYPE_TABLE} review_type
+          ON review_type."isActive" = true
+          AND regexp_replace(LOWER(review_type."name"), '[^a-z0-9]', '', 'g') =
+            CASE (scorecard."type")::text
+              WHEN 'SCREENING' THEN 'screening'
+              WHEN 'CHECKPOINT_SCREENING' THEN 'checkpointscreening'
+              WHEN 'REVIEW' THEN 'review'
+              WHEN 'CHECKPOINT_REVIEW' THEN 'checkpointreview'
+              WHEN 'ITERATIVE_REVIEW' THEN 'iterativereview'
+              WHEN 'APPROVAL' THEN 'approval'
+              WHEN 'SPECIFICATION_REVIEW' THEN 'specificationreview'
+              WHEN 'POST_MORTEM' THEN 'postmortem'
+              ELSE ''
+            END
+        WHERE scorecard."id" = ${scorecardId}
+        ORDER BY review_type."id"
+        LIMIT 1
+      )
+    `;
     const insert = Prisma.sql`
       INSERT INTO ${ReviewService.REVIEW_TABLE} (
         "resourceId",
         "phaseId",
         "submissionId",
         "scorecardId",
+        "typeId",
         "status",
         "createdAt",
         "updatedAt"
@@ -1630,6 +1655,7 @@ export class ReviewService {
         ${phaseId},
         ${submissionId},
         ${scorecardId},
+        ${resolvedReviewTypeId},
         'PENDING',
         NOW(),
         NOW()
@@ -1676,12 +1702,14 @@ export class ReviewService {
               id: string;
               scorecardId: string | null;
               status: string | null;
+              typeId: string | null;
             }>
           >(Prisma.sql`
             SELECT
               existing."id",
               existing."scorecardId" AS "scorecardId",
-              existing."status"::text AS "status"
+              existing."status"::text AS "status",
+              existing."typeId" AS "typeId"
             FROM ${ReviewService.REVIEW_TABLE} existing
             WHERE existing."resourceId" = ${resourceId}
               AND existing."phaseId" = ${phaseId}
@@ -1706,11 +1734,16 @@ export class ReviewService {
           );
           const reusableReview = reusableReviews[0] ?? null;
 
-          if (reusableReview && reusableReview.scorecardId !== scorecardId) {
+          if (
+            reusableReview &&
+            (reusableReview.scorecardId !== scorecardId ||
+              !reusableReview.typeId)
+          ) {
             await tx.$executeRaw(Prisma.sql`
               UPDATE ${ReviewService.REVIEW_TABLE}
               SET
                 "scorecardId" = ${scorecardId},
+                "typeId" = COALESCE(${resolvedReviewTypeId}, "typeId"),
                 "updatedAt" = NOW()
               WHERE "id" = ${reusableReview.id}
                 AND (

@@ -223,10 +223,10 @@ describe('ReviewService', () => {
     it('counts only in-progress AI workflow runs for latest submissions', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([{ count: '4' }]);
 
-      const count = await service.getInProgressAiWorkflowRunCount(
-        challengeId,
-        ['workflow-ai-1', 'workflow-ai-2'],
-      );
+      const count = await service.getInProgressAiWorkflowRunCount(challengeId, [
+        'workflow-ai-1',
+        'workflow-ai-2',
+      ]);
 
       expect(count).toBe(4);
 
