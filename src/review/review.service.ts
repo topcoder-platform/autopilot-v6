@@ -38,6 +38,7 @@ interface MarathonMatchReviewReadinessRecord {
   expectedSubmissionCount: number | string;
   reviewedSubmissionCount: number | string;
   completedSubmissionCount: number | string;
+  finalScoreSubmissionCount: number | string;
 }
 
 interface ReviewDetailRecord {
@@ -140,6 +141,7 @@ export interface MarathonMatchReviewReadiness {
   expectedSubmissionCount: number;
   reviewedSubmissionCount: number;
   completedSubmissionCount: number;
+  finalScoreSubmissionCount: number;
 }
 
 @Injectable()
@@ -1494,9 +1496,11 @@ export class ReviewService {
    * @param challengeId Challenge containing the latest contest submissions.
    * @param phaseId Review phase that should contain one completed system review
    * for each latest submission.
-   * @returns Counts for expected latest submissions, latest submissions with any
-   * review record in the phase, and latest submissions with at least one
-   * completed review in the phase.
+   * @returns Counts for expected latest submissions, submissions with a review
+   * record, submissions with a completed review, and submissions with a terminal
+   * final score. Marathon Match closeout uses terminal final scores because
+   * failed SYSTEM runs can leave review rows non-completed while still producing
+   * final scoreboard data.
    * @throws Error when the readiness query fails.
    */
   async getMarathonMatchReviewReadiness(
@@ -1508,6 +1512,7 @@ export class ReviewService {
         expectedSubmissionCount: 0,
         reviewedSubmissionCount: 0,
         completedSubmissionCount: 0,
+        finalScoreSubmissionCount: 0,
       };
     }
 
@@ -1547,16 +1552,41 @@ export class ReviewService {
           ON r."submissionId" = ls."id"
          AND r."phaseId" = ${phaseId}
         GROUP BY ls."id"
+      ),
+      submission_score_status AS (
+        SELECT
+          ls."id" AS "submissionId",
+          COUNT(rs."id") FILTER (
+            WHERE rs."isFinal" = true
+              AND rs."aggregateScore" IS NOT NULL
+              AND UPPER(COALESCE(rs."metadata"::jsonb ->> 'testStatus', '')) <> 'IN PROGRESS'
+              AND (
+                NULLIF(rs."metadata"::jsonb ->> 'testProgress', '') IS NULL
+                OR (
+                  (rs."metadata"::jsonb ->> 'testProgress') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                  AND (rs."metadata"::jsonb ->> 'testProgress')::numeric >= 1
+                )
+              )
+          )::int AS "finalScoreCount"
+        FROM latest_submissions ls
+        LEFT JOIN ${ReviewService.REVIEW_SUMMATION_TABLE} rs
+          ON rs."submissionId" = ls."id"
+        GROUP BY ls."id"
       )
       SELECT
         COUNT(*)::int AS "expectedSubmissionCount",
         COUNT(*) FILTER (
-          WHERE "reviewCount" > 0
+          WHERE srs."reviewCount" > 0
         )::int AS "reviewedSubmissionCount",
         COUNT(*) FILTER (
-          WHERE "completedReviewCount" > 0
-        )::int AS "completedSubmissionCount"
-      FROM submission_review_status
+          WHERE srs."completedReviewCount" > 0
+        )::int AS "completedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE sss."finalScoreCount" > 0
+        )::int AS "finalScoreSubmissionCount"
+      FROM submission_review_status srs
+      INNER JOIN submission_score_status sss
+        ON sss."submissionId" = srs."submissionId"
     `;
 
     try {
@@ -1568,6 +1598,9 @@ export class ReviewService {
         expectedSubmissionCount: Number(record?.expectedSubmissionCount ?? 0),
         reviewedSubmissionCount: Number(record?.reviewedSubmissionCount ?? 0),
         completedSubmissionCount: Number(record?.completedSubmissionCount ?? 0),
+        finalScoreSubmissionCount: Number(
+          record?.finalScoreSubmissionCount ?? 0,
+        ),
       };
 
       void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {

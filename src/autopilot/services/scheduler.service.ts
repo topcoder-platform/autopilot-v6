@@ -656,32 +656,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
             if (
               reviewReadiness.expectedSubmissionCount > 0 &&
-              reviewReadiness.completedSubmissionCount <
+              reviewReadiness.finalScoreSubmissionCount <
                 reviewReadiness.expectedSubmissionCount
             ) {
-              const incompleteReviewCount =
+              const missingFinalScoreCount =
                 reviewReadiness.expectedSubmissionCount -
-                reviewReadiness.completedSubmissionCount;
+                reviewReadiness.finalScoreSubmissionCount;
 
               await this.deferReviewPhaseClosure(
                 data,
-                incompleteReviewCount,
-                `waiting for Marathon Match system reviews to complete for all latest submissions (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed)`,
-              );
-              return;
-            }
-
-            const pendingReviews =
-              await this.reviewService.getPendingReviewCount(
-                data.phaseId,
-                data.challengeId,
-              );
-
-            if (pendingReviews > 0) {
-              await this.deferReviewPhaseClosure(
-                data,
-                pendingReviews,
-                'waiting for Marathon Match system reviews to complete',
+                missingFinalScoreCount,
+                `waiting for Marathon Match final scores for all latest submissions (${reviewReadiness.finalScoreSubmissionCount}/${reviewReadiness.expectedSubmissionCount} scored)`,
               );
               return;
             }

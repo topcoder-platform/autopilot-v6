@@ -702,6 +702,7 @@ describe('ReviewService', () => {
         expectedSubmissionCount: 0,
         reviewedSubmissionCount: 0,
         completedSubmissionCount: 0,
+        finalScoreSubmissionCount: 0,
       });
       expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
       expect(dbLoggerMock.logAction).not.toHaveBeenCalled();
@@ -713,6 +714,7 @@ describe('ReviewService', () => {
           expectedSubmissionCount: '3',
           reviewedSubmissionCount: '2',
           completedSubmissionCount: '1',
+          finalScoreSubmissionCount: '2',
         },
       ]);
 
@@ -725,6 +727,7 @@ describe('ReviewService', () => {
         expectedSubmissionCount: 3,
         reviewedSubmissionCount: 2,
         completedSubmissionCount: 1,
+        finalScoreSubmissionCount: 2,
       });
       expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
 
@@ -738,6 +741,9 @@ describe('ReviewService', () => {
       expect(sqlText).toContain('ROW_NUMBER() OVER');
       expect(sqlText).toContain('latest_submissions');
       expect(sqlText).toContain('completedSubmissionCount');
+      expect(sqlText).toContain('submission_score_status');
+      expect(sqlText).toContain('finalScoreSubmissionCount');
+      expect(sqlText).toContain('IN PROGRESS');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getMarathonMatchReviewReadiness',
@@ -748,6 +754,7 @@ describe('ReviewService', () => {
             expectedSubmissionCount: 3,
             reviewedSubmissionCount: 2,
             completedSubmissionCount: 1,
+            finalScoreSubmissionCount: 2,
           }),
         }),
       );

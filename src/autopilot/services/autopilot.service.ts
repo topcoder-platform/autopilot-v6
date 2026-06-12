@@ -386,7 +386,10 @@ export class AutopilotService {
         return;
       }
 
-      if (isReviewPhase && isMarathonMatchChallenge(challenge.type)) {
+      const isMarathonMatchReviewPhase =
+        isReviewPhase && isMarathonMatchChallenge(challenge.type);
+
+      if (isMarathonMatchReviewPhase) {
         const reviewReadiness =
           await this.reviewService.getMarathonMatchReviewReadiness(
             challengeId,
@@ -406,26 +409,28 @@ export class AutopilotService {
 
         if (
           reviewReadiness.expectedSubmissionCount > 0 &&
-          reviewReadiness.completedSubmissionCount <
+          reviewReadiness.finalScoreSubmissionCount <
             reviewReadiness.expectedSubmissionCount
         ) {
           this.logger.debug(
-            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for system reviews to complete (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed).`,
+            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for final scores (${reviewReadiness.finalScoreSubmissionCount}/${reviewReadiness.expectedSubmissionCount} scored).`,
           );
           return;
         }
       }
 
-      const pendingReviews = await this.reviewService.getPendingReviewCount(
-        phase.id,
-        challengeId,
-      );
-
-      if (pendingReviews > 0) {
-        this.logger.debug(
-          `Review phase ${phase.id} for challenge ${challengeId} still has ${pendingReviews} review(s) in progress.`,
+      if (!isMarathonMatchReviewPhase) {
+        const pendingReviews = await this.reviewService.getPendingReviewCount(
+          phase.id,
+          challengeId,
         );
-        return;
+
+        if (pendingReviews > 0) {
+          this.logger.debug(
+            `Review phase ${phase.id} for challenge ${challengeId} still has ${pendingReviews} review(s) in progress.`,
+          );
+          return;
+        }
       }
 
       this.logger.log(

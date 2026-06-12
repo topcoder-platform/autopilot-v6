@@ -456,6 +456,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         expectedSubmissionCount: 0,
         reviewedSubmissionCount: 0,
         completedSubmissionCount: 0,
+        finalScoreSubmissionCount: 0,
       });
     });
 
@@ -520,38 +521,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       expect(schedulerService.advancePhase).not.toHaveBeenCalled();
     });
 
-    it('does not close Marathon Match Review until every latest submission has a completed system review', async () => {
-      const reviewPhase = buildReviewPhase('Review');
-      challengeApiService.getChallengeById.mockResolvedValue({
-        ...buildReviewChallenge(reviewPhase),
-        type: 'Marathon Match',
-      });
-
-      reviewService.getReviewById.mockResolvedValue({
-        id: 'review-1',
-        phaseId: reviewPhase.id,
-        resourceId: 'resource-1',
-        submissionId: 'sub-1',
-        scorecardId: 'scorecard-1',
-        score: null,
-        status: 'COMPLETED',
-      });
-      reviewService.getMarathonMatchReviewReadiness.mockResolvedValueOnce({
-        expectedSubmissionCount: 2,
-        reviewedSubmissionCount: 2,
-        completedSubmissionCount: 1,
-      });
-
-      await autopilotService.handleReviewCompleted(buildPayload());
-
-      expect(
-        reviewService.getMarathonMatchReviewReadiness,
-      ).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
-      expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
-      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
-    });
-
-    it('closes Marathon Match Review when all latest system reviews are completed', async () => {
+    it('does not close Marathon Match Review until every latest submission has a final score', async () => {
       const reviewPhase = buildReviewPhase('Review');
       challengeApiService.getChallengeById.mockResolvedValue({
         ...buildReviewChallenge(reviewPhase),
@@ -571,6 +541,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
         expectedSubmissionCount: 2,
         reviewedSubmissionCount: 2,
         completedSubmissionCount: 2,
+        finalScoreSubmissionCount: 1,
       });
 
       await autopilotService.handleReviewCompleted(buildPayload());
@@ -578,10 +549,40 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       expect(
         reviewService.getMarathonMatchReviewReadiness,
       ).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
-      expect(reviewService.getPendingReviewCount).toHaveBeenCalledWith(
-        reviewPhase.id,
-        'challenge-1',
-      );
+      expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    });
+
+    it('closes Marathon Match Review when all latest submissions have final scores', async () => {
+      const reviewPhase = buildReviewPhase('Review');
+      challengeApiService.getChallengeById.mockResolvedValue({
+        ...buildReviewChallenge(reviewPhase),
+        type: 'Marathon Match',
+      });
+
+      reviewService.getReviewById.mockResolvedValue({
+        id: 'review-1',
+        phaseId: reviewPhase.id,
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        scorecardId: 'scorecard-1',
+        score: null,
+        status: 'COMPLETED',
+      });
+      reviewService.getMarathonMatchReviewReadiness.mockResolvedValueOnce({
+        expectedSubmissionCount: 2,
+        reviewedSubmissionCount: 2,
+        completedSubmissionCount: 1,
+        finalScoreSubmissionCount: 2,
+      });
+      reviewService.getPendingReviewCount.mockResolvedValueOnce(1);
+
+      await autopilotService.handleReviewCompleted(buildPayload());
+
+      expect(
+        reviewService.getMarathonMatchReviewReadiness,
+      ).toHaveBeenCalledWith('challenge-1', reviewPhase.id);
+      expect(reviewService.getPendingReviewCount).not.toHaveBeenCalled();
       expect(schedulerService.advancePhase).toHaveBeenCalledWith(
         expect.objectContaining({
           challengeId: 'challenge-1',
