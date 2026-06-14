@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { ChallengePrismaService } from './challenge-prisma.service';
+import { ReviewService } from '../review/review.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import {
   IPhase,
@@ -16,6 +17,7 @@ import {
   ITERATIVE_REVIEW_PHASE_NAME,
   POST_MORTEM_PHASE_NAMES,
   isPostMortemPhaseName,
+  AI_REVIEW_PHASE_NAME,
 } from '../autopilot/constants/review.constants';
 
 // DTO for filtering challenges
@@ -80,6 +82,7 @@ export class ChallengeApiService {
 
   constructor(
     private readonly prisma: ChallengePrismaService,
+    private readonly reviewService: ReviewService,
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly configService: ConfigService,
   ) {
@@ -365,6 +368,29 @@ export class ChallengeApiService {
           details: { phaseId, operation, result },
         });
         return result;
+      }
+
+      // Block closing AI Review phase if there are pending AI decisions
+      const isAiReviewPhase = targetPhase.name === AI_REVIEW_PHASE_NAME;
+      if (operation === 'close' && isAiReviewPhase) {
+        const pendingAiDecisions =
+          await this.reviewService.getPendingAiDecisionsCount(challengeId);
+        if (pendingAiDecisions > 0) {
+          const result: PhaseAdvanceResponseDto = {
+            success: false,
+            message: `Cannot close AI Review phase: ${pendingAiDecisions} pending AI decision(s) not yet completed`,
+          };
+          void this.dbLogger.logAction('challenge.advancePhase', {
+            challengeId,
+            status: 'INFO',
+            source: ChallengeApiService.name,
+            details: { phaseId, operation, pendingAiDecisions, result },
+          });
+          this.logger.warn(
+            `Blocked closing AI Review phase ${phaseId} for challenge ${challengeId}: ${pendingAiDecisions} pending AI decision(s)`,
+          );
+          return result;
+        }
       }
 
       const now = new Date();

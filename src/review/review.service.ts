@@ -38,6 +38,7 @@ interface MarathonMatchReviewReadinessRecord {
   expectedSubmissionCount: number | string;
   reviewedSubmissionCount: number | string;
   completedSubmissionCount: number | string;
+  finalScoreSubmissionCount: number | string;
 }
 
 interface ReviewDetailRecord {
@@ -140,6 +141,7 @@ export interface MarathonMatchReviewReadiness {
   expectedSubmissionCount: number;
   reviewedSubmissionCount: number;
   completedSubmissionCount: number;
+  finalScoreSubmissionCount: number;
 }
 
 @Injectable()
@@ -975,6 +977,116 @@ export class ReviewService {
     }
   }
 
+  /**
+   * Returns AI decision summaries for all active contest submissions in a challenge.
+   * Used by `ChallengeCompletionService` to finalize AI_ONLY challenges in place of
+   * human review summations.
+   *
+   * Picks the latest decision per submission (ordered by config version then decision
+   * timestamp), filters out PENDING entries, and marks a submission as passing when
+   * its decision status is PASSED or HUMAN_OVERRIDE.
+   */
+  async getAiDecisionSummaries(
+    challengeId: string,
+  ): Promise<SubmissionSummary[]> {
+    if (!challengeId) {
+      return [];
+    }
+
+    const query = Prisma.sql`
+      WITH ranked_decisions AS (
+        SELECT
+          d."submissionId",
+          d."totalScore",
+          UPPER((d."status")::text) AS "status",
+          c."minPassingThreshold",
+          ROW_NUMBER() OVER (
+            PARTITION BY d."submissionId"
+            ORDER BY
+              c."version" DESC,
+              COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
+              d."id" DESC
+          ) AS "rn"
+        FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+        INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+          ON c."id" = d."configId"
+        WHERE c."challengeId" = ${challengeId}
+          AND UPPER((d."status")::text) != 'PENDING'
+      )
+      SELECT
+        s."id"                   AS "submissionId",
+        s."legacySubmissionId"   AS "legacySubmissionId",
+        s."memberId"             AS "memberId",
+        s."submittedDate"        AS "submittedDate",
+        COALESCE(rd."totalScore", 0) AS "totalScore",
+        rd."status"              AS "status",
+        rd."minPassingThreshold" AS "minPassingThreshold"
+      FROM ${ReviewService.SUBMISSION_TABLE} s
+      INNER JOIN ranked_decisions rd ON rd."submissionId" = s."id"
+      WHERE s."challengeId" = ${challengeId}
+        AND rd."rn" = 1
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND UPPER(COALESCE((s."status")::text, '')) NOT IN ('DELETED', 'FAILED_SCREENING', 'AI_FAILED_REVIEW')
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<
+        {
+          submissionId: string;
+          legacySubmissionId: string | null;
+          memberId: string | null;
+          submittedDate: Date | null;
+          totalScore: string | number;
+          status: string;
+          minPassingThreshold: string | number | null;
+        }[]
+      >(query);
+
+      return rows.map((row) => {
+        const rawScore = Number(row.totalScore);
+        const aggregateScore = Number.isFinite(rawScore) ? rawScore : 0;
+        const minPassingThreshold = Number(row.minPassingThreshold);
+        const hasValidThreshold = Number.isFinite(minPassingThreshold);
+
+        let isPassing: boolean;
+        if (row.status === 'PASSED') {
+          isPassing = true;
+        } else if (row.status === 'HUMAN_OVERRIDE') {
+          // For HUMAN_OVERRIDE, check score against minPassingThreshold
+          isPassing = hasValidThreshold
+            ? aggregateScore >= minPassingThreshold
+            : true;
+        } else {
+          isPassing = false;
+        }
+
+        return {
+          submissionId: row.submissionId,
+          legacySubmissionId: row.legacySubmissionId ?? null,
+          memberId: row.memberId ?? null,
+          submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
+          aggregateScore,
+          scorecardId: null,
+          scorecardLegacyId: null,
+          passingScore: hasValidThreshold ? minPassingThreshold : 0,
+          isPassing,
+        };
+      });
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getAiDecisionSummaries', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      throw err;
+    }
+  }
+
   async hasAiDecisionForSubmission(
     challengeId: string,
     submissionId: string,
@@ -1384,9 +1496,11 @@ export class ReviewService {
    * @param challengeId Challenge containing the latest contest submissions.
    * @param phaseId Review phase that should contain one completed system review
    * for each latest submission.
-   * @returns Counts for expected latest submissions, latest submissions with any
-   * review record in the phase, and latest submissions with at least one
-   * completed review in the phase.
+   * @returns Counts for expected latest submissions, submissions with a review
+   * record, submissions with a completed review, and submissions with a terminal
+   * final score. Marathon Match closeout uses terminal final scores because
+   * failed SYSTEM runs can leave review rows non-completed while still producing
+   * final scoreboard data.
    * @throws Error when the readiness query fails.
    */
   async getMarathonMatchReviewReadiness(
@@ -1398,6 +1512,7 @@ export class ReviewService {
         expectedSubmissionCount: 0,
         reviewedSubmissionCount: 0,
         completedSubmissionCount: 0,
+        finalScoreSubmissionCount: 0,
       };
     }
 
@@ -1437,16 +1552,41 @@ export class ReviewService {
           ON r."submissionId" = ls."id"
          AND r."phaseId" = ${phaseId}
         GROUP BY ls."id"
+      ),
+      submission_score_status AS (
+        SELECT
+          ls."id" AS "submissionId",
+          COUNT(rs."id") FILTER (
+            WHERE rs."isFinal" = true
+              AND rs."aggregateScore" IS NOT NULL
+              AND UPPER(COALESCE(rs."metadata"::jsonb ->> 'testStatus', '')) <> 'IN PROGRESS'
+              AND (
+                NULLIF(rs."metadata"::jsonb ->> 'testProgress', '') IS NULL
+                OR (
+                  (rs."metadata"::jsonb ->> 'testProgress') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                  AND (rs."metadata"::jsonb ->> 'testProgress')::numeric >= 1
+                )
+              )
+          )::int AS "finalScoreCount"
+        FROM latest_submissions ls
+        LEFT JOIN ${ReviewService.REVIEW_SUMMATION_TABLE} rs
+          ON rs."submissionId" = ls."id"
+        GROUP BY ls."id"
       )
       SELECT
         COUNT(*)::int AS "expectedSubmissionCount",
         COUNT(*) FILTER (
-          WHERE "reviewCount" > 0
+          WHERE srs."reviewCount" > 0
         )::int AS "reviewedSubmissionCount",
         COUNT(*) FILTER (
-          WHERE "completedReviewCount" > 0
-        )::int AS "completedSubmissionCount"
-      FROM submission_review_status
+          WHERE srs."completedReviewCount" > 0
+        )::int AS "completedSubmissionCount",
+        COUNT(*) FILTER (
+          WHERE sss."finalScoreCount" > 0
+        )::int AS "finalScoreSubmissionCount"
+      FROM submission_review_status srs
+      INNER JOIN submission_score_status sss
+        ON sss."submissionId" = srs."submissionId"
     `;
 
     try {
@@ -1458,6 +1598,9 @@ export class ReviewService {
         expectedSubmissionCount: Number(record?.expectedSubmissionCount ?? 0),
         reviewedSubmissionCount: Number(record?.reviewedSubmissionCount ?? 0),
         completedSubmissionCount: Number(record?.completedSubmissionCount ?? 0),
+        finalScoreSubmissionCount: Number(
+          record?.finalScoreSubmissionCount ?? 0,
+        ),
       };
 
       void this.dbLogger.logAction('review.getMarathonMatchReviewReadiness', {
@@ -1492,7 +1635,8 @@ export class ReviewService {
    * @param submissionId Submission to review, or null for challenge-level reviews.
    * @param resourceId Reviewer resource that owns the assignment.
    * @param phaseId Phase instance that owns the assignment.
-   * @param scorecardId Scorecard the pending assignment should use.
+   * @param scorecardId Scorecard the pending assignment should use. The
+   * assignment's review type is derived from this scorecard when possible.
    * @param challengeId Challenge used for audit logging.
    * @returns Whether a row was created and the reusable non-completed review ID,
    * if one should be dispatched.
@@ -1505,12 +1649,36 @@ export class ReviewService {
     scorecardId: string,
     challengeId: string,
   ): Promise<{ created: boolean; reviewId: string | null }> {
+    const resolvedReviewTypeId = Prisma.sql`
+      (
+        SELECT review_type."id"
+        FROM ${ReviewService.SCORECARD_TABLE} scorecard
+        INNER JOIN ${ReviewService.REVIEW_TYPE_TABLE} review_type
+          ON review_type."isActive" = true
+          AND regexp_replace(LOWER(review_type."name"), '[^a-z0-9]', '', 'g') =
+            CASE (scorecard."type")::text
+              WHEN 'SCREENING' THEN 'screening'
+              WHEN 'CHECKPOINT_SCREENING' THEN 'checkpointscreening'
+              WHEN 'REVIEW' THEN 'review'
+              WHEN 'CHECKPOINT_REVIEW' THEN 'checkpointreview'
+              WHEN 'ITERATIVE_REVIEW' THEN 'iterativereview'
+              WHEN 'APPROVAL' THEN 'approval'
+              WHEN 'SPECIFICATION_REVIEW' THEN 'specificationreview'
+              WHEN 'POST_MORTEM' THEN 'postmortem'
+              ELSE ''
+            END
+        WHERE scorecard."id" = ${scorecardId}
+        ORDER BY review_type."id"
+        LIMIT 1
+      )
+    `;
     const insert = Prisma.sql`
       INSERT INTO ${ReviewService.REVIEW_TABLE} (
         "resourceId",
         "phaseId",
         "submissionId",
         "scorecardId",
+        "typeId",
         "status",
         "createdAt",
         "updatedAt"
@@ -1520,6 +1688,7 @@ export class ReviewService {
         ${phaseId},
         ${submissionId},
         ${scorecardId},
+        ${resolvedReviewTypeId},
         'PENDING',
         NOW(),
         NOW()
@@ -1566,12 +1735,14 @@ export class ReviewService {
               id: string;
               scorecardId: string | null;
               status: string | null;
+              typeId: string | null;
             }>
           >(Prisma.sql`
             SELECT
               existing."id",
               existing."scorecardId" AS "scorecardId",
-              existing."status"::text AS "status"
+              existing."status"::text AS "status",
+              existing."typeId" AS "typeId"
             FROM ${ReviewService.REVIEW_TABLE} existing
             WHERE existing."resourceId" = ${resourceId}
               AND existing."phaseId" = ${phaseId}
@@ -1596,11 +1767,16 @@ export class ReviewService {
           );
           const reusableReview = reusableReviews[0] ?? null;
 
-          if (reusableReview && reusableReview.scorecardId !== scorecardId) {
+          if (
+            reusableReview &&
+            (reusableReview.scorecardId !== scorecardId ||
+              !reusableReview.typeId)
+          ) {
             await tx.$executeRaw(Prisma.sql`
               UPDATE ${ReviewService.REVIEW_TABLE}
               SET
                 "scorecardId" = ${scorecardId},
+                "typeId" = COALESCE(${resolvedReviewTypeId}, "typeId"),
                 "updatedAt" = NOW()
               WHERE "id" = ${reusableReview.id}
                 AND (
@@ -3210,6 +3386,54 @@ export class ReviewService {
           },
         },
       );
+      throw err;
+    }
+  }
+
+  /**
+   * Counts AI review decisions in PENDING status for active contest submissions.
+   * Used to block AI Review phase closure until all decisions are finalized.
+   */
+  async getPendingAiDecisionsCount(challengeId: string): Promise<number> {
+    const query = Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} aid
+      INNER JOIN ${ReviewService.SUBMISSION_TABLE} s
+        ON s."id" = aid."submissionId"
+      WHERE s."challengeId" = ${challengeId}
+        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
+        AND (
+          s."type" IS NULL
+          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+        )
+        AND UPPER((aid."status")::text) = 'PENDING'
+    `;
+
+    try {
+      const [record] = await this.prisma.$queryRaw<PendingCountRecord[]>(query);
+      const rawCount = Number(record?.count ?? 0);
+      const count = Number.isFinite(rawCount) ? rawCount : 0;
+
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: {
+          pendingAiDecisions: count,
+        },
+      });
+
+      return count;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.getPendingAiDecisionsCount', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: {
+          error: err.message,
+        },
+      });
       throw err;
     }
   }

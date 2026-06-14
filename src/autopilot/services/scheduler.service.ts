@@ -23,6 +23,7 @@ import { Job, Queue, RedisOptions, Worker } from 'bullmq';
 import { ChallengeStatusEnum } from '@prisma/client';
 import { ReviewService } from '../../review/review.service';
 import {
+  AI_REVIEW_PHASE_NAME,
   AI_SCREENING_PHASE_NAME,
   POST_MORTEM_REVIEWER_ROLE_NAME,
   REGISTRATION_PHASE_NAME,
@@ -513,6 +514,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const isAiScreeningPhase =
         phaseName === AI_SCREENING_PHASE_NAME ||
         data.phaseTypeName === AI_SCREENING_PHASE_NAME;
+      const isAiReviewPhase =
+        phaseName === AI_REVIEW_PHASE_NAME ||
+        data.phaseTypeName === AI_REVIEW_PHASE_NAME;
       const isApprovalPhase =
         APPROVAL_PHASE_NAMES.has(phaseName) ||
         APPROVAL_PHASE_NAMES.has(data.phaseTypeName);
@@ -541,6 +545,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `Phase ${data.phaseId} is already closed, skipping close operation`,
         );
+        if (
+          phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
+          !data.skipIterativePhaseRefresh
+        ) {
+          await this.reconcileClosedIterativeReviewPhase(data);
+        }
         return;
       }
 
@@ -646,32 +656,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
             if (
               reviewReadiness.expectedSubmissionCount > 0 &&
-              reviewReadiness.completedSubmissionCount <
+              reviewReadiness.finalScoreSubmissionCount <
                 reviewReadiness.expectedSubmissionCount
             ) {
-              const incompleteReviewCount =
+              const missingFinalScoreCount =
                 reviewReadiness.expectedSubmissionCount -
-                reviewReadiness.completedSubmissionCount;
+                reviewReadiness.finalScoreSubmissionCount;
 
               await this.deferReviewPhaseClosure(
                 data,
-                incompleteReviewCount,
-                `waiting for Marathon Match system reviews to complete for all latest submissions (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed)`,
-              );
-              return;
-            }
-
-            const pendingReviews =
-              await this.reviewService.getPendingReviewCount(
-                data.phaseId,
-                data.challengeId,
-              );
-
-            if (pendingReviews > 0) {
-              await this.deferReviewPhaseClosure(
-                data,
-                pendingReviews,
-                'waiting for Marathon Match system reviews to complete',
+                missingFinalScoreCount,
+                `waiting for Marathon Match final scores for all latest submissions (${reviewReadiness.finalScoreSubmissionCount}/${reviewReadiness.expectedSubmissionCount} scored)`,
               );
               return;
             }
@@ -806,6 +801,60 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // Block closing AI Review (AI_ONLY mode) until all configured AI workflows are completed
+      // and all AI decisions are finalized (not PENDING)
+      if (operation === 'close' && isAiReviewPhase) {
+        try {
+          const challenge = await this.challengeApiService.getChallengeById(
+            data.challengeId,
+          );
+          const aiWorkflowIds = this.getAiWorkflowIds(challenge);
+
+          const inProgressAiWorkflows =
+            await this.reviewService.getInProgressAiWorkflowRunCount(
+              data.challengeId,
+              aiWorkflowIds,
+            );
+
+          if (inProgressAiWorkflows > 0) {
+            await this.deferAiScreeningPhaseClosure(
+              data,
+              inProgressAiWorkflows,
+              `${inProgressAiWorkflows} in-progress AI workflow run(s) detected`,
+            );
+            return;
+          }
+
+          // Also check for pending AI decisions
+          const pendingAiDecisions =
+            await this.reviewService.getPendingAiDecisionsCount(
+              data.challengeId,
+            );
+
+          if (pendingAiDecisions > 0) {
+            await this.deferAiScreeningPhaseClosure(
+              data,
+              pendingAiDecisions,
+              `${pendingAiDecisions} pending AI decision(s) detected`,
+            );
+            return;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI REVIEW LATE] Unable to verify AI workflow readiness for phase ${data.phaseId} on challenge ${data.challengeId}: ${err.message}`,
+            err.stack,
+          );
+
+          await this.deferAiScreeningPhaseClosure(
+            data,
+            undefined,
+            'unable to verify AI workflow readiness',
+          );
+          return;
+        }
+      }
+
       // Block closing Screening until all screening scorecards are submitted
       if (operation === 'close' && isScreeningPhase) {
         try {
@@ -851,48 +900,63 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Block closing Approval until all approval scorecards are submitted
+      // Block closing Approval until all approval scorecards are submitted.
+      // For AI_ONLY challenges (challenges with an AI Review phase) the Approval phase
+      // is a manager-review window with no human reviewer scorecards — skip the
+      // coverage/completion checks and allow the phase to close on its scheduled time.
       if (operation === 'close' && isApprovalPhase) {
         try {
-          const coverage = await this.verifyReviewerCoverage(
-            data.challengeId,
-            data.phaseId,
-            phaseName,
-            true,
+          const approvalChallenge =
+            await this.challengeApiService.getChallengeById(data.challengeId);
+          const isAiOnlyChallenge = (approvalChallenge.phases ?? []).some(
+            (p) => p.name === AI_REVIEW_PHASE_NAME,
           );
 
-          if (!coverage.satisfied) {
-            await this.deferApprovalPhaseClosure(
-              data,
-              undefined,
-              `insufficient approval coverage (${coverage.actual}/${coverage.expected} assigned)`,
-            );
-            return;
-          }
-
-          const pendingApproval =
-            await this.reviewService.getPendingReviewCount(
-              data.phaseId,
+          if (!isAiOnlyChallenge) {
+            const coverage = await this.verifyReviewerCoverage(
               data.challengeId,
-            );
-
-          if (pendingApproval > 0) {
-            await this.deferApprovalPhaseClosure(data, pendingApproval);
-            return;
-          }
-
-          // If there are zero pending reviews, ensure at least one approval review exists
-          const completedCount =
-            await this.reviewService.getCompletedReviewCountForPhase(
               data.phaseId,
+              phaseName,
+              true,
             );
-          if (completedCount === 0) {
-            await this.deferApprovalPhaseClosure(
-              data,
-              0,
-              'no completed approval reviews detected',
+
+            if (!coverage.satisfied) {
+              await this.deferApprovalPhaseClosure(
+                data,
+                undefined,
+                `insufficient approval coverage (${coverage.actual}/${coverage.expected} assigned)`,
+              );
+              return;
+            }
+
+            const pendingApproval =
+              await this.reviewService.getPendingReviewCount(
+                data.phaseId,
+                data.challengeId,
+              );
+
+            if (pendingApproval > 0) {
+              await this.deferApprovalPhaseClosure(data, pendingApproval);
+              return;
+            }
+
+            // If there are zero pending reviews, ensure at least one approval review exists
+            const completedCount =
+              await this.reviewService.getCompletedReviewCountForPhase(
+                data.phaseId,
+              );
+            if (completedCount === 0) {
+              await this.deferApprovalPhaseClosure(
+                data,
+                0,
+                'no completed approval reviews detected',
+              );
+              return;
+            }
+          } else {
+            this.logger.log(
+              `[APPROVAL] AI_ONLY challenge ${data.challengeId}: skipping human reviewer checks for Approval phase ${data.phaseId}; closing on schedule.`,
             );
-            return;
           }
         } catch (error) {
           const err = error as Error;
@@ -1144,6 +1208,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
+        if (operation === 'close' && isAiReviewPhase) {
+          this.aiScreeningCloseRetryAttempts.delete(
+            this.buildAiScreeningPhaseKey(data.challengeId, data.phaseId),
+          );
+        }
+
         if (operation === 'close' && phaseName === REGISTRATION_PHASE_NAME) {
           this.registrationCloseRetryAttempts.delete(
             this.buildRegistrationPhaseKey(data.challengeId, data.phaseId),
@@ -1155,17 +1225,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           phaseName === ITERATIVE_REVIEW_PHASE_NAME &&
           !data.skipIterativePhaseRefresh
         ) {
-          try {
-            await this.first2FinishService.handleIterativePhaseClosed(
-              data.challengeId,
-            );
-          } catch (error) {
-            const err = error as Error;
-            this.logger.error(
-              `Failed to refresh iterative submissions for challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
-              err.stack,
-            );
-          }
+          await this.reconcileClosedIterativeReviewPhase(data);
         }
 
         if (operation === 'open') {
@@ -1538,6 +1598,31 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       `[MANUAL COMPLETION] Detected that all phases are closed for challenge ${challenge.id}. Last phase closed: ${phaseLabel}. Triggering finalization.`,
     );
     await this.attemptChallengeFinalization(challenge.id);
+  }
+
+  /**
+   * Reconciles First2Finish work after an Iterative Review phase is closed.
+   * @param data Phase transition payload containing the challenge and phase ids.
+   * @returns Resolves after reconciliation is attempted.
+   *
+   * Used by both successful close transitions and replayed END transitions that
+   * find the phase already closed. Errors from First2Finish reconciliation are
+   * logged and not rethrown so phase-transition processing remains idempotent.
+   */
+  private async reconcileClosedIterativeReviewPhase(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    try {
+      await this.first2FinishService.handleIterativePhaseClosed(
+        data.challengeId,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to refresh iterative submissions for challenge ${data.challengeId} after closing phase ${data.phaseId}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   private async attemptChallengeFinalization(

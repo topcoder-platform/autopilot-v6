@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
 import {
   IChallenge,
@@ -42,6 +43,11 @@ import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { FinanceApiService } from '../../finance/finance-api.service';
 import { First2FinishService } from './first2finish.service';
+import { MemberApiService } from '../../member-api/member-api.service';
+import {
+  buildChallengePointAwards,
+  hasPointPlacementPrizes,
+} from '../utils/challenge-points.utils';
 
 @Injectable()
 export class PhaseScheduleManager {
@@ -67,6 +73,7 @@ export class PhaseScheduleManager {
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly financeApiService: FinanceApiService,
     private readonly first2FinishService: First2FinishService,
+    private readonly memberApiService?: MemberApiService,
   ) {
     this.schedulerService.setPhaseChainCallback(
       (
@@ -345,6 +352,10 @@ export class PhaseScheduleManager {
         previousStatus,
         challengeDetails.status,
       );
+      this.triggerChallengePointsSyncForPayableStatus(
+        challengeDetails,
+        previousStatus,
+      );
 
       if (!isActiveStatus(challengeDetails.status)) {
         this.updateCachedStatus(message.id, challengeDetails.status);
@@ -374,6 +385,10 @@ export class PhaseScheduleManager {
             message.id,
             previousStatus,
             challengeDetails.status,
+          );
+          this.triggerChallengePointsSyncForPayableStatus(
+            challengeDetails,
+            previousStatus,
           );
           this.updateCachedStatus(message.id, challengeDetails.status);
           this.logger.log(
@@ -559,6 +574,51 @@ export class PhaseScheduleManager {
       `[FINANCE] Challenge ${challengeId} transitioned to ${currentStatus}; triggering payment generation.`,
     );
     void this.financeApiService.generateChallengePayments(challengeId);
+  }
+
+  /**
+   * Starts member-api challenge-point synchronization when a points challenge becomes completed.
+   * @param challenge Challenge snapshot containing status, prizes, and winners.
+   * @param previousStatus Last cached challenge status, if known.
+   * @returns Nothing. The outbound call is started without blocking update handling.
+   * @throws Never. Errors are logged and swallowed so update handling remains idempotent.
+   */
+  private triggerChallengePointsSyncForPayableStatus(
+    challenge: IChallenge,
+    previousStatus: string | null,
+  ): void {
+    const currentStatus = challenge.status?.toUpperCase();
+    if (currentStatus !== ChallengeStatusEnum.COMPLETED) {
+      return;
+    }
+
+    if (previousStatus && previousStatus.toUpperCase() === currentStatus) {
+      return;
+    }
+
+    if (!this.memberApiService || !hasPointPlacementPrizes(challenge)) {
+      return;
+    }
+
+    try {
+      const placementWinners = (challenge.winners ?? []).filter(
+        (winner) =>
+          winner.type === undefined ||
+          winner.type === PrizeSetTypeEnum.PLACEMENT,
+      );
+      const points = buildChallengePointAwards(challenge, placementWinners);
+      void this.memberApiService.syncChallengePoints(
+        challenge.id,
+        challenge.name,
+        points,
+      );
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `[POINTS] Failed to trigger challenge points sync for challenge ${challenge.id}: ${err.message}`,
+        err.stack,
+      );
+    }
   }
 
   private buildOpenPhaseProcessingKey(

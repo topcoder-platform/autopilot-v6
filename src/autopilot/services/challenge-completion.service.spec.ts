@@ -80,6 +80,9 @@ describe('ChallengeCompletionService', () => {
     rerateChallengeSubmitterRatings: jest.MockedFunction<
       MemberApiService['rerateChallengeSubmitterRatings']
     >;
+    syncChallengePoints: jest.MockedFunction<
+      MemberApiService['syncChallengePoints']
+    >;
   };
   let kafkaService: {
     produce: jest.MockedFunction<KafkaService['produce']>;
@@ -263,6 +266,18 @@ describe('ChallengeCompletionService', () => {
     })),
   });
 
+  const buildPointPlacementPrizeSet = (
+    values: number[],
+  ): IChallengePrizeSet => ({
+    type: PrizeSetTypeEnum.PLACEMENT,
+    description: null,
+    prizes: values.map((value) => ({
+      type: 'POINT',
+      value,
+      description: null,
+    })),
+  });
+
   const buildCheckpointPrizeSet = (count: number): IChallengePrizeSet => ({
     type: PrizeSetTypeEnum.CHECKPOINT,
     description: 'Checkpoint Prizes',
@@ -367,6 +382,7 @@ describe('ChallengeCompletionService', () => {
       refreshMemberStats: jest.fn().mockResolvedValue(true),
       rerateMemberStats: jest.fn().mockResolvedValue(true),
       rerateChallengeSubmitterRatings: jest.fn().mockResolvedValue(true),
+      syncChallengePoints: jest.fn().mockResolvedValue(true),
     } as unknown as {
       refreshMemberStats: jest.MockedFunction<
         MemberApiService['refreshMemberStats']
@@ -376,6 +392,9 @@ describe('ChallengeCompletionService', () => {
       >;
       rerateChallengeSubmitterRatings: jest.MockedFunction<
         MemberApiService['rerateChallengeSubmitterRatings']
+      >;
+      syncChallengePoints: jest.MockedFunction<
+        MemberApiService['syncChallengePoints']
       >;
     };
 
@@ -875,6 +894,28 @@ describe('ChallengeCompletionService', () => {
       memberApiService.rerateChallengeSubmitterRatings,
     ).toHaveBeenCalledWith(challenge.id);
     expect(memberApiService.rerateMemberStats).not.toHaveBeenCalled();
+  });
+
+  it('syncs member challenge points for point-based placement prizes', async () => {
+    const challenge = buildChallenge({
+      prizeSets: [buildPointPlacementPrizeSet([500, 250])],
+      numOfSubmissions: 3,
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    const result = await service.finalizeChallenge(challenge.id);
+
+    expect(result).toBe(true);
+    expect(memberApiService.syncChallengePoints).toHaveBeenCalledTimes(1);
+    expect(memberApiService.syncChallengePoints).toHaveBeenCalledWith(
+      challenge.id,
+      challenge.name,
+      [
+        { userId: 101, placement: 1, points: 500 },
+        { userId: 102, placement: 2, points: 250 },
+      ],
+    );
   });
 
   it('delegates challenge rerate for track and type pairs not known by autopilot', async () => {

@@ -33,6 +33,7 @@ import {
   SCREENING_PHASE_NAMES,
   APPROVAL_PHASE_NAMES,
   PHASE_ROLE_MAP,
+  AI_REVIEW_PHASE_NAME,
   AI_SCREENING_PHASE_NAME,
 } from '../constants/review.constants';
 import { ReviewService } from '../../review/review.service';
@@ -278,6 +279,16 @@ export class AutopilotService {
       }
 
       if (!phase.isOpen) {
+        if (phase.name === ITERATIVE_REVIEW_PHASE_NAME) {
+          this.logger.log(
+            `Reconciling closed iterative review phase ${phase.id} for challenge ${challengeId} after review completion event.`,
+          );
+          await this.first2FinishService.handleIterativePhaseClosed(
+            challenge.id,
+          );
+          return;
+        }
+
         this.logger.debug(
           `Phase ${phase.id} already closed for challenge ${challengeId}; ignoring review completion event.`,
         );
@@ -375,7 +386,10 @@ export class AutopilotService {
         return;
       }
 
-      if (isReviewPhase && isMarathonMatchChallenge(challenge.type)) {
+      const isMarathonMatchReviewPhase =
+        isReviewPhase && isMarathonMatchChallenge(challenge.type);
+
+      if (isMarathonMatchReviewPhase) {
         const reviewReadiness =
           await this.reviewService.getMarathonMatchReviewReadiness(
             challengeId,
@@ -395,26 +409,28 @@ export class AutopilotService {
 
         if (
           reviewReadiness.expectedSubmissionCount > 0 &&
-          reviewReadiness.completedSubmissionCount <
+          reviewReadiness.finalScoreSubmissionCount <
             reviewReadiness.expectedSubmissionCount
         ) {
           this.logger.debug(
-            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for system reviews to complete (${reviewReadiness.completedSubmissionCount}/${reviewReadiness.expectedSubmissionCount} completed).`,
+            `Marathon Match review phase ${phase.id} for challenge ${challengeId} is waiting for final scores (${reviewReadiness.finalScoreSubmissionCount}/${reviewReadiness.expectedSubmissionCount} scored).`,
           );
           return;
         }
       }
 
-      const pendingReviews = await this.reviewService.getPendingReviewCount(
-        phase.id,
-        challengeId,
-      );
-
-      if (pendingReviews > 0) {
-        this.logger.debug(
-          `Review phase ${phase.id} for challenge ${challengeId} still has ${pendingReviews} review(s) in progress.`,
+      if (!isMarathonMatchReviewPhase) {
+        const pendingReviews = await this.reviewService.getPendingReviewCount(
+          phase.id,
+          challengeId,
         );
-        return;
+
+        if (pendingReviews > 0) {
+          this.logger.debug(
+            `Review phase ${phase.id} for challenge ${challengeId} still has ${pendingReviews} review(s) in progress.`,
+          );
+          return;
+        }
       }
 
       this.logger.log(
@@ -790,17 +806,22 @@ export class AutopilotService {
       const aiScreeningPhase = challenge.phases.find(
         (p) => p.name === AI_SCREENING_PHASE_NAME,
       );
+      // For AI_ONLY challenges there is no AI Screening phase — the AI Review phase
+      // serves the equivalent role and should be closed when all workflows complete.
+      const aiActivePhase =
+        aiScreeningPhase ??
+        challenge.phases.find((p) => p.name === AI_REVIEW_PHASE_NAME);
 
-      if (!aiScreeningPhase) {
+      if (!aiActivePhase) {
         this.logger.debug(
-          `No AI Screening phase found for challenge ${challengeId}; ignoring AI workflow completion`,
+          `No AI Screening or AI Review phase found for challenge ${challengeId}; ignoring AI workflow completion`,
         );
         return;
       }
 
-      if (!aiScreeningPhase.isOpen) {
+      if (!aiActivePhase.isOpen) {
         this.logger.debug(
-          `AI Screening phase ${aiScreeningPhase.id} already closed for challenge ${challengeId}; ignoring AI workflow completion event`,
+          `AI phase ${aiActivePhase.id} (${aiActivePhase.name}) already closed for challenge ${challengeId}; ignoring AI workflow completion event`,
         );
         return;
       }
@@ -839,25 +860,25 @@ export class AutopilotService {
 
         if (inProgressAiWorkflows > 0) {
           this.logger.debug(
-            `AI Screening phase ${aiScreeningPhase.id} for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
+            `AI phase ${aiActivePhase.id} (${aiActivePhase.name}) for challenge ${challengeId} still has ${inProgressAiWorkflows} in-progress AI workflow(s). Not closing phase.`,
           );
           return;
         }
 
         this.logger.log(
-          `All AI workflows completed for phase ${aiScreeningPhase.id} on challenge ${challengeId}. Closing AI Screening phase early.`,
+          `All AI workflows completed for phase ${aiActivePhase.id} (${aiActivePhase.name}) on challenge ${challengeId}. Closing phase early.`,
         );
       } else {
         this.logger.log(
-          `AI workflow completed for F2F challenge ${challengeId}, submission ${payload.submissionId}. Closing AI Screening phase.`,
+          `AI workflow completed for F2F challenge ${challengeId}, submission ${payload.submissionId}. Closing ${aiActivePhase.name} phase.`,
         );
       }
 
       await this.schedulerService.advancePhase({
         projectId: challenge.projectId,
         challengeId: challenge.id,
-        phaseId: aiScreeningPhase.id,
-        phaseTypeName: aiScreeningPhase.name,
+        phaseId: aiActivePhase.id,
+        phaseTypeName: aiActivePhase.name,
         state: 'END',
         operator: AutopilotOperator.SYSTEM,
         projectStatus: challenge.status,
