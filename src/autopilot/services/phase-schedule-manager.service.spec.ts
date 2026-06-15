@@ -18,6 +18,7 @@ describe('PhaseScheduleManager', () => {
   let schedulerService: {
     setPhaseChainCallback: jest.Mock;
     evaluateManualPhaseCompletion: jest.Mock;
+    advancePhase: jest.Mock;
     buildJobId: jest.Mock;
     getScheduledTransition: jest.Mock;
     schedulePhaseTransition: jest.Mock;
@@ -34,6 +35,7 @@ describe('PhaseScheduleManager', () => {
     getReviewOpportunitiesByChallengeId: jest.Mock;
   };
   let reviewService: {
+    getMarathonMatchReviewReadiness: jest.Mock;
     updatePendingReviewScorecards: jest.Mock;
   };
   let dbLogger: {
@@ -54,6 +56,7 @@ describe('PhaseScheduleManager', () => {
     schedulerService = {
       setPhaseChainCallback: jest.fn(),
       evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+      advancePhase: jest.fn().mockResolvedValue(undefined),
       buildJobId: jest.fn(
         (challengeId: string, phaseId: string) => `${challengeId}|${phaseId}`,
       ),
@@ -76,6 +79,12 @@ describe('PhaseScheduleManager', () => {
     };
 
     reviewService = {
+      getMarathonMatchReviewReadiness: jest.fn().mockResolvedValue({
+        expectedSubmissionCount: 0,
+        reviewedSubmissionCount: 0,
+        completedSubmissionCount: 0,
+        finalScoreSubmissionCount: 0,
+      }),
       updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
     };
 
@@ -234,6 +243,77 @@ describe('PhaseScheduleManager', () => {
       phaseReviewService.handlePhaseOpenedForChallenge,
     ).toHaveBeenCalledWith(challenge, reviewPhase.id);
     expect(reviewService.updatePendingReviewScorecards).not.toHaveBeenCalled();
+  });
+
+  it('closes ready Marathon Match review phases during active challenge reconciliation', async () => {
+    const openReviewPhase = {
+      id: 'review-phase-instance',
+      phaseId: 'review-phase',
+      name: 'Review',
+      description: null,
+      isOpen: true,
+      duration: 86400,
+      scheduledStartDate: '2026-04-30T00:00:00.000Z',
+      scheduledEndDate: '2026-05-01T00:00:00.000Z',
+      actualStartDate: '2026-04-30T01:00:00.000Z',
+      actualEndDate: null,
+      predecessor: 'submission-phase',
+      constraints: [],
+    };
+    const closedReviewPhase = {
+      ...openReviewPhase,
+      isOpen: false,
+      actualEndDate: '2026-04-30T02:00:00.000Z',
+    };
+    const challenge = {
+      id: 'challenge-mm-ready',
+      status: 'ACTIVE',
+      projectId: 1003,
+      type: 'Marathon Match',
+      phases: [openReviewPhase],
+      reviewers: [],
+      prizeSets: [],
+    };
+
+    challengeApiService.getChallengeById
+      .mockResolvedValueOnce(challenge)
+      .mockResolvedValueOnce({
+        ...challenge,
+        phases: [closedReviewPhase],
+      });
+    reviewService.getMarathonMatchReviewReadiness.mockResolvedValueOnce({
+      expectedSubmissionCount: 4,
+      reviewedSubmissionCount: 4,
+      completedSubmissionCount: 2,
+      finalScoreSubmissionCount: 4,
+    });
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-mm-ready',
+      operator: AutopilotOperator.SYSTEM_SYNC,
+      projectId: 1003,
+      status: 'ACTIVE',
+    });
+
+    expect(reviewService.getMarathonMatchReviewReadiness).toHaveBeenCalledWith(
+      'challenge-mm-ready',
+      openReviewPhase.id,
+    );
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-mm-ready',
+        phaseId: openReviewPhase.id,
+        phaseTypeName: openReviewPhase.name,
+        projectId: 1003,
+        projectStatus: 'ACTIVE',
+        operator: AutopilotOperator.SYSTEM_SYNC,
+        state: 'END',
+        skipReviewCompletionCheck: true,
+      }),
+    );
+    expect(
+      phaseReviewService.handlePhaseOpenedForChallenge,
+    ).not.toHaveBeenCalled();
   });
 
   it('replays iterative assignment for already-open Iterative Review phases', async () => {

@@ -112,6 +112,86 @@ export class PhaseScheduleManager {
     this.processedOpenPhaseFingerprints = new Map<string, string>();
   }
 
+  /**
+   * Closes open Marathon Match Review phases once all latest submissions have
+   * terminal SYSTEM scores. This is used during challenge-update reconciliation
+   * because failed SYSTEM runs can satisfy final-score readiness without
+   * producing a fresh review completion event for Autopilot.
+   * @param challenge Active challenge snapshot to reconcile.
+   * @returns Number of Review phases submitted for closure.
+   */
+  private async closeReadyMarathonMatchReviewPhases(
+    challenge: IChallenge,
+  ): Promise<number> {
+    if (
+      !isActiveStatus(challenge.status) ||
+      !isMarathonMatchChallenge(challenge.type)
+    ) {
+      return 0;
+    }
+
+    const openReviewPhases = (challenge.phases ?? []).filter(
+      (phase) => phase.isOpen === true && REVIEW_PHASE_NAMES.has(phase.name),
+    );
+
+    let closedCount = 0;
+
+    for (const phase of openReviewPhases) {
+      try {
+        const readiness =
+          await this.reviewService.getMarathonMatchReviewReadiness(
+            challenge.id,
+            phase.id,
+          );
+
+        if (
+          readiness.expectedSubmissionCount <= 0 ||
+          readiness.reviewedSubmissionCount < readiness.expectedSubmissionCount
+        ) {
+          this.logger.debug(
+            `[MARATHON MATCH] Review phase ${phase.id} for challenge ${challenge.id} is not ready to close; review records ${readiness.reviewedSubmissionCount}/${readiness.expectedSubmissionCount}.`,
+          );
+          continue;
+        }
+
+        if (
+          readiness.finalScoreSubmissionCount <
+          readiness.expectedSubmissionCount
+        ) {
+          this.logger.debug(
+            `[MARATHON MATCH] Review phase ${phase.id} for challenge ${challenge.id} is waiting for final SYSTEM scores ${readiness.finalScoreSubmissionCount}/${readiness.expectedSubmissionCount}.`,
+          );
+          continue;
+        }
+
+        this.logger.log(
+          `[MARATHON MATCH] Closing Review phase ${phase.id} for challenge ${challenge.id}; all latest submissions have final SYSTEM scores (${readiness.finalScoreSubmissionCount}/${readiness.expectedSubmissionCount}).`,
+        );
+
+        await this.schedulerService.advancePhase({
+          projectId: challenge.projectId,
+          challengeId: challenge.id,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'END',
+          operator: AutopilotOperator.SYSTEM_SYNC,
+          projectStatus: challenge.status,
+          skipReviewCompletionCheck: true,
+        });
+
+        closedCount += 1;
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[MARATHON MATCH] Failed to reconcile Review phase ${phase.id} for challenge ${challenge.id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    return closedCount;
+  }
+
   async schedulePhaseTransition(
     phaseData: PhaseTransitionPayload,
   ): Promise<string> {
@@ -393,6 +473,36 @@ export class PhaseScheduleManager {
           this.updateCachedStatus(message.id, challengeDetails.status);
           this.logger.log(
             `Skipping challenge ${message.id} update after immediate processing; status is now ${challengeDetails.status}.`,
+          );
+          return;
+        }
+      }
+
+      const marathonMatchReviewClosures =
+        await this.closeReadyMarathonMatchReviewPhases(challengeDetails);
+
+      if (marathonMatchReviewClosures > 0) {
+        this.logger.log(
+          `Closed ${marathonMatchReviewClosures} ready Marathon Match review phase(s) for challenge ${message.id}; refreshing challenge snapshot before rescheduling.`,
+        );
+
+        challengeDetails = await this.challengeApiService.getChallengeById(
+          message.id,
+        );
+
+        if (!isActiveStatus(challengeDetails.status)) {
+          this.triggerFinanceGenerationForPayableStatus(
+            message.id,
+            previousStatus,
+            challengeDetails.status,
+          );
+          this.triggerChallengePointsSyncForPayableStatus(
+            challengeDetails,
+            previousStatus,
+          );
+          this.updateCachedStatus(message.id, challengeDetails.status);
+          this.logger.log(
+            `Skipping challenge ${message.id} update after Marathon Match review closure; status is now ${challengeDetails.status}.`,
           );
           return;
         }
