@@ -1561,7 +1561,8 @@ export class ReviewService {
               AND rs."aggregateScore" IS NOT NULL
               AND UPPER(COALESCE(rs."metadata"::jsonb ->> 'testStatus', '')) <> 'IN PROGRESS'
               AND (
-                NULLIF(rs."metadata"::jsonb ->> 'testProgress', '') IS NULL
+                UPPER(COALESCE(rs."metadata"::jsonb ->> 'testStatus', '')) = 'FAILED'
+                OR NULLIF(rs."metadata"::jsonb ->> 'testProgress', '') IS NULL
                 OR (
                   (rs."metadata"::jsonb ->> 'testProgress') ~ '^-?[0-9]+(\\.[0-9]+)?$'
                   AND (rs."metadata"::jsonb ->> 'testProgress')::numeric >= 1
