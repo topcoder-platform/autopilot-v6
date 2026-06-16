@@ -1,40 +1,54 @@
+import {
+  AutopilotDbLoggerService,
+  type AutopilotDbLogPayload,
+} from '../autopilot/services/autopilot-db-logger.service';
+import { ReviewPrismaService } from './review-prisma.service';
 import { ReviewService } from './review.service';
+
+type QueryRawMock = jest.Mock<Promise<unknown[]>, [unknown]>;
+type ExecuteRawMock = jest.Mock<Promise<number>, [unknown?]>;
+type TransactionCallback = (tx: {
+  $executeRaw: ExecuteRawMock;
+}) => Promise<unknown>;
+type TransactionMock = jest.Mock<Promise<unknown>, [TransactionCallback]>;
+type LogActionMock = jest.Mock<Promise<void>, [string, AutopilotDbLogPayload?]>;
+
+const objectContaining = (sample: Record<string, unknown>): unknown =>
+  expect.objectContaining(sample) as unknown;
 
 describe('ReviewService', () => {
   const challengeId = 'challenge-1';
 
   let prismaMock: {
-    $queryRaw: jest.Mock;
-    $executeRaw: jest.Mock;
-    $transaction: jest.Mock;
+    $queryRaw: QueryRawMock;
+    $executeRaw: ExecuteRawMock;
+    $transaction: TransactionMock;
   };
-  let dbLoggerMock: { logAction: jest.Mock };
+  let dbLoggerMock: { logAction: LogActionMock };
   let service: ReviewService;
 
   beforeEach(() => {
-    const executeRawMock = jest.fn().mockResolvedValue(0);
+    const executeRawMock: ExecuteRawMock = jest
+      .fn<Promise<number>, [unknown?]>()
+      .mockResolvedValue(0);
     prismaMock = {
-      $queryRaw: jest.fn(),
+      $queryRaw: jest.fn<Promise<unknown[]>, [unknown]>(),
       $executeRaw: executeRawMock,
       $transaction: jest
-        .fn()
+        .fn<Promise<unknown>, [TransactionCallback]>()
         .mockImplementation(
-          async (
-            callback: (tx: {
-              $executeRaw: typeof executeRawMock;
-            }) => Promise<unknown>,
-          ) => {
+          async (callback: TransactionCallback): Promise<unknown> => {
             return callback({ $executeRaw: executeRawMock });
           },
         ),
     };
     dbLoggerMock = {
-      logAction: jest.fn(),
+      logAction: jest.fn<Promise<void>, [string, AutopilotDbLogPayload?]>(),
     };
 
     service = new ReviewService(
-      prismaMock as unknown as any,
-      dbLoggerMock as unknown as any,
+      prismaMock as unknown as ReviewPrismaService,
+      dbLoggerMock as unknown as AutopilotDbLoggerService,
     );
   });
 
@@ -68,8 +82,8 @@ describe('ReviewService', () => {
       ]);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getTopFinalReviewScores',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             dataSource: 'reviewSummation',
             winnersCount: 1,
           }),
@@ -119,8 +133,8 @@ describe('ReviewService', () => {
       ]);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getTopFinalReviewScores',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             dataSource: 'reviewSummaries',
             winnersCount: 1,
           }),
@@ -158,9 +172,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getActiveContestSubmissions',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             submissionCount: 2,
           }),
         }),
@@ -209,9 +223,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getContestSubmissionsForLatestSelection',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             submissionCount: 2,
           }),
         }),
@@ -245,9 +259,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getInProgressAiWorkflowRunCount',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             workflowCount: 2,
             inProgressCount: 4,
             latestSubmissionsOnly: true,
@@ -305,7 +319,7 @@ describe('ReviewService', () => {
       );
 
       expect(records).toEqual([
-        expect.objectContaining({
+        objectContaining({
           challengeId,
           userId: '123',
           submissionId: 'latest-submission',
@@ -367,7 +381,7 @@ describe('ReviewService', () => {
       );
 
       expect(records).toEqual([
-        expect.objectContaining({
+        objectContaining({
           challengeId,
           userId: '123',
           submissionId: 'best-submission',
@@ -415,7 +429,7 @@ describe('ReviewService', () => {
       );
 
       expect(records).toEqual([
-        expect.objectContaining({
+        objectContaining({
           challengeId,
           userId: '123',
           submissionId: 'low-score-submission',
@@ -479,14 +493,14 @@ describe('ReviewService', () => {
       );
 
       expect(records).toEqual([
-        expect.objectContaining({
+        objectContaining({
           userId: '123',
           submissionId: 'second-place-submission',
           placement: 2,
           rated: true,
           ratingOrder: 2,
         }),
-        expect.objectContaining({
+        objectContaining({
           userId: '456',
           submissionId: 'winner-submission',
           placement: 1,
@@ -539,8 +553,8 @@ describe('ReviewService', () => {
       expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(2);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.syncChallengeResults',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             rowsBuilt: 1,
             rowsUpserted: 1,
             staleRowsDeleted: 2,
@@ -610,8 +624,8 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getCheckpointPassedSubmissionIds',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             screeningScorecardId,
             submissionCount: 1,
           }),
@@ -655,8 +669,8 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getFailedScreeningSubmissionIds',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             screeningScorecardCount: 1,
             failedSubmissionCount: 1,
           }),
@@ -679,9 +693,9 @@ describe('ReviewService', () => {
       expect(result).toEqual(new Set(['failed-1', 'failed-2']));
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getFailedScreeningSubmissionIds',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             failedSubmissionCount: 2,
           }),
         }),
@@ -744,12 +758,14 @@ describe('ReviewService', () => {
       expect(sqlText).toContain('submission_score_status');
       expect(sqlText).toContain('finalScoreSubmissionCount');
       expect(sqlText).toContain('IN PROGRESS');
+      expect(sqlText).toContain("= 'FAILED'");
+      expect(sqlText).toContain("testProgress')::numeric >= 1");
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getMarathonMatchReviewReadiness',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             phaseId,
             expectedSubmissionCount: 3,
             reviewedSubmissionCount: 2,
@@ -799,9 +815,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getAiFailedDecisionSubmissionIds',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             evaluatedSubmissionCount: 3,
             aiFailedSubmissionCount: 2,
           }),
@@ -939,9 +955,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.markSubmissionsAsAiFailedReview',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             submissionCount: 2,
             updatedCount: 2,
           }),
@@ -974,9 +990,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getPendingAiDecisionsEscalationsCount',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             pendingAiDecisionsEscalations: 3,
           }),
         }),
@@ -992,9 +1008,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getPendingAiDecisionsEscalationsCount',
-        expect.objectContaining({
+        objectContaining({
           status: 'ERROR',
-          details: expect.objectContaining({
+          details: objectContaining({
             error: 'query failed',
           }),
         }),
@@ -1031,9 +1047,9 @@ describe('ReviewService', () => {
       expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.updatePendingReviewScorecards',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             phaseId,
             scorecardId,
             updatedCount: 3,
@@ -1057,9 +1073,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.updatePendingReviewScorecards',
-        expect.objectContaining({
+        objectContaining({
           status: 'ERROR',
-          details: expect.objectContaining({
+          details: objectContaining({
             phaseId,
             scorecardId,
             error: 'database unavailable',
@@ -1098,9 +1114,9 @@ describe('ReviewService', () => {
       expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.reassignPendingReviewsToResource',
-        expect.objectContaining({
+        objectContaining({
           status: 'SUCCESS',
-          details: expect.objectContaining({
+          details: objectContaining({
             phaseId,
             resourceId,
             reassignedCount: 2,
@@ -1123,9 +1139,9 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.reassignPendingReviewsToResource',
-        expect.objectContaining({
+        objectContaining({
           status: 'ERROR',
-          details: expect.objectContaining({
+          details: objectContaining({
             phaseId,
             resourceId,
             error: 'update failed',
@@ -1193,8 +1209,8 @@ describe('ReviewService', () => {
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.generateReviewSummaries',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             submissionCount: 1,
             passingCount: 1,
             rebuiltFromReviews: true,
@@ -1234,8 +1250,8 @@ describe('ReviewService', () => {
       ]);
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.generateReviewSummaries',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             submissionCount: 1,
             passingCount: 0,
             rebuiltFromReviews: false,
@@ -1275,8 +1291,8 @@ describe('ReviewService', () => {
       expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.generateReviewSummaries',
-        expect.objectContaining({
-          details: expect.objectContaining({
+        objectContaining({
+          details: objectContaining({
             submissionCount: 1,
             passingCount: 0,
             rebuiltFromReviews: false,
