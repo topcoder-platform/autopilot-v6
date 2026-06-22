@@ -45,6 +45,7 @@ describe('PhaseScheduleManager', () => {
     generateChallengePayments: jest.Mock;
   };
   let memberApiService: {
+    rerateChallengeSubmitterRatings: jest.Mock;
     syncChallengePoints: jest.Mock;
   };
   let first2FinishService: {
@@ -97,6 +98,7 @@ describe('PhaseScheduleManager', () => {
     };
 
     memberApiService = {
+      rerateChallengeSubmitterRatings: jest.fn().mockResolvedValue(true),
       syncChallengePoints: jest.fn().mockResolvedValue(true),
     };
 
@@ -145,6 +147,12 @@ describe('PhaseScheduleManager', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-1',
     );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith('challenge-1');
   });
 
   it('syncs challenge points once when a point-prize challenge transitions to COMPLETED', async () => {
@@ -384,6 +392,9 @@ describe('PhaseScheduleManager', () => {
     });
 
     expect(financeApiService.generateChallengePayments).not.toHaveBeenCalled();
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).not.toHaveBeenCalled();
   });
 
   it('triggers finance generation when an ACTIVE challenge becomes COMPLETED after immediate phase closures', async () => {
@@ -430,6 +441,12 @@ describe('PhaseScheduleManager', () => {
     expect(financeApiService.generateChallengePayments).toHaveBeenCalledWith(
       'challenge-3',
     );
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      memberApiService.rerateChallengeSubmitterRatings,
+    ).toHaveBeenCalledWith('challenge-3');
   });
 
   it('processes unchanged open review phases only once during manual phase detection', async () => {
