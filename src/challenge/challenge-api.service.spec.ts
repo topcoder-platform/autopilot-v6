@@ -3,6 +3,7 @@ import type { ChallengePrismaService } from './challenge-prisma.service';
 import type { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
+import type { ReviewService } from '../review/review.service';
 
 describe('ChallengeApiService - advancePhase scheduling', () => {
   const fixedNow = new Date('2025-09-27T06:00:00.000Z');
@@ -26,6 +27,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let txQueryRaw: jest.Mock;
   let service: ChallengeApiService;
   let configService: jest.Mocked<ConfigService>;
+  let reviewService: jest.Mocked<ReviewService>;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -84,7 +86,16 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       get: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ConfigService>;
 
-    service = new ChallengeApiService(prisma, dbLogger, configService);
+    reviewService = {
+      getPendingAiDecisionsCount: jest.fn().mockResolvedValue(0),
+    } as unknown as jest.Mocked<ReviewService>;
+
+    service = new ChallengeApiService(
+      prisma,
+      reviewService,
+      dbLogger,
+      configService,
+    );
   });
 
   afterEach(() => {
@@ -664,8 +675,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       const challengeRecord = buildAiReviewChallenge(true);
       challengeFindUnique.mockResolvedValueOnce(challengeRecord as any);
 
-      // Mock pending AI decisions count query
-      prisma.$queryRaw = jest.fn().mockResolvedValueOnce([{ count: 3 }]);
+      reviewService.getPendingAiDecisionsCount.mockResolvedValueOnce(3);
 
       const result = await service.advancePhase(
         'challenge-ai-review',
@@ -693,8 +703,7 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         .mockResolvedValueOnce(challengeRecord as any)
         .mockResolvedValueOnce(challengeRecord as any);
 
-      // Mock no pending AI decisions
-      prisma.$queryRaw = jest.fn().mockResolvedValueOnce([{ count: 0 }]);
+      reviewService.getPendingAiDecisionsCount.mockResolvedValueOnce(0);
 
       const result = await service.advancePhase(
         'challenge-ai-review',
@@ -712,17 +721,14 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         .mockResolvedValueOnce(challengeRecord as any)
         .mockResolvedValueOnce(challengeRecord as any);
 
-      const queryRawSpy = jest.fn();
-      prisma.$queryRaw = queryRawSpy;
-
       await service.advancePhase(
         'challenge-ai-review',
         'ai-review-phase',
         'open',
       );
 
-      // Should not call $queryRaw for pending AI decisions when opening
-      expect(queryRawSpy).not.toHaveBeenCalled();
+      // Pending AI decisions only gate phase closure.
+      expect(reviewService.getPendingAiDecisionsCount).not.toHaveBeenCalled();
     });
 
     it('does not check pending AI decisions for non-AI Review phases', async () => {
@@ -962,6 +968,7 @@ describe('ChallengeApiService - end date handling', () => {
   let challengeWinnerDeleteMany: jest.Mock;
   let challengeWinnerCreateMany: jest.Mock;
   let configService: jest.Mocked<ConfigService>;
+  let reviewService: jest.Mocked<ReviewService>;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -999,7 +1006,16 @@ describe('ChallengeApiService - end date handling', () => {
       get: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ConfigService>;
 
-    service = new ChallengeApiService(prisma, dbLogger, configService);
+    reviewService = {
+      getPendingAiDecisionsCount: jest.fn().mockResolvedValue(0),
+    } as unknown as jest.Mocked<ReviewService>;
+
+    service = new ChallengeApiService(
+      prisma,
+      reviewService,
+      dbLogger,
+      configService,
+    );
   });
 
   afterEach(() => {
