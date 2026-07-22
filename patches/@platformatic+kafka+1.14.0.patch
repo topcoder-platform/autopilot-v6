@@ -1,5 +1,5 @@
---- a/node_modules/.pnpm/@platformatic+kafka@1.14.0/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
-+++ b/node_modules/.pnpm/@platformatic+kafka@1.14.0/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
+--- a/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
++++ b/node_modules/@platformatic/kafka/dist/clients/consumer/consumer.js
 @@ -842,14 +842,44 @@
              .appendInt32(0).buffer; // No user data
      }

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
+import { isAxiosError } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import { Auth0Service } from '../auth/auth0.service';
 import { AutopilotDbLoggerService } from '../autopilot/services/autopilot-db-logger.service';
@@ -44,7 +45,7 @@ export class ReviewApiService {
 
   async createReviewOpportunity(
     dto: CreateReviewOpportunityDto,
-  ): Promise<Record<string, any> | null> {
+  ): Promise<Record<string, unknown> | null> {
     const url = this.buildUrl('/review-opportunities');
     if (!url) {
       await this.dbLogger.logAction('review.createOpportunity', {
@@ -68,7 +69,7 @@ export class ReviewApiService {
     try {
       token = await this.auth0Service.getAccessToken();
       const response = await firstValueFrom(
-        this.httpService.post(url, payload, {
+        this.httpService.post<Record<string, unknown>>(url, payload, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -92,10 +93,13 @@ export class ReviewApiService {
       );
       return response.data;
     } catch (error) {
-      const err = error;
+      const err = error instanceof Error ? error : undefined;
       const message = err?.message || 'Unknown error';
-      const status = err?.response?.status;
-      const data = err?.response?.data;
+      const response = isAxiosError<unknown>(error)
+        ? error.response
+        : undefined;
+      const status = response?.status;
+      const data = response?.data;
 
       this.logger.error(
         `Failed to create review opportunity for challenge ${dto.challengeId}: ${message}`,
@@ -119,7 +123,7 @@ export class ReviewApiService {
 
   async getReviewOpportunitiesByChallengeId(
     challengeId: string,
-  ): Promise<any[]> {
+  ): Promise<unknown[]> {
     const url = this.buildUrl(`/review-opportunities/challenge/${challengeId}`);
     if (!url) {
       await this.dbLogger.logAction('review.getOpportunitiesByChallenge', {
@@ -137,7 +141,7 @@ export class ReviewApiService {
     try {
       token = await this.auth0Service.getAccessToken();
       const response = await firstValueFrom(
-        this.httpService.get(url, {
+        this.httpService.get<unknown[]>(url, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -147,10 +151,13 @@ export class ReviewApiService {
       );
       return Array.isArray(response.data) ? response.data : [];
     } catch (error) {
-      const err = error;
+      const err = error instanceof Error ? error : undefined;
       const message = err?.message || 'Unknown error';
-      const status = err?.response?.status;
-      const data = err?.response?.data;
+      const response = isAxiosError<unknown>(error)
+        ? error.response
+        : undefined;
+      const status = response?.status;
+      const data = response?.data;
 
       this.logger.error(
         `Failed to fetch review opportunities for challenge ${challengeId}: ${message}`,

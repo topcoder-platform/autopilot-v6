@@ -66,6 +66,7 @@ workflows:
             only:
               - develop
               - reviews
+              - security_july_2026
           tags:
             only: /^dev-.*/
             
