@@ -429,9 +429,8 @@ export class PhaseChangeNotificationService {
   }
 
   private buildEventsUrl(baseUrl: string): string {
-    if (!baseUrl.endsWith('/')) {
-      baseUrl = `${baseUrl}/`;
-    }
-    return new URL('v5/bus/events', baseUrl).toString();
+    const url = new URL(baseUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/events`;
+    return url.toString();
   }
 }
