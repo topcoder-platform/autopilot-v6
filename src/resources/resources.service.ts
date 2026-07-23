@@ -514,7 +514,7 @@ export class ResourcesService {
 
     const roleId = await this.getResourceRoleIdByName(normalizedRole);
     if (!roleId) {
-      this.dbLogger.logAction('resources.ensureResourcesForMembers', {
+      void this.dbLogger.logAction('resources.ensureResourcesForMembers', {
         challengeId,
         status: 'SUCCESS',
         source: ResourcesService.name,

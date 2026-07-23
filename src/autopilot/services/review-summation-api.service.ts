@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
+import { isAxiosError } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import { Auth0Service } from '../../auth/auth0.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
@@ -118,7 +119,7 @@ export class ReviewSummationApiService {
       };
 
       const response = await firstValueFrom(
-        this.httpService.post(url, undefined, axiosConfig),
+        this.httpService.post<unknown>(url, undefined, axiosConfig),
       );
 
       const status = response.status;
@@ -146,12 +147,15 @@ export class ReviewSummationApiService {
       );
       return true;
     } catch (error) {
-      const err = error;
+      const err = error instanceof Error ? error : undefined;
       const message = err?.message || 'Unknown error';
-      const status = err?.response?.status;
-      const data = err?.response?.data;
+      const response = isAxiosError<unknown>(error)
+        ? error.response
+        : undefined;
+      const status = response?.status;
+      const data = response?.data;
       const sanitizedResponseHeaders = this.sanitizeHeaders(
-        err?.response?.headers,
+        response?.headers as Record<string, unknown> | undefined,
       );
 
       this.logger.error(

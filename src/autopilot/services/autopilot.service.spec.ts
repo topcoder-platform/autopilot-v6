@@ -1,7 +1,6 @@
 jest.mock('../../kafka/kafka.service', () => ({
   KafkaService: jest.fn().mockImplementation(() => ({})),
 }));
-/* eslint-disable @typescript-eslint/unbound-method */
 
 import { AutopilotService } from './autopilot.service';
 import type {

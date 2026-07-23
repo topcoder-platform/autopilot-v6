@@ -4,13 +4,8 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type {
-  Consumer,
-  MessagesStream,
-  ProduceAcks,
-  Producer,
-} from '@platformatic/kafka';
-import { v4 as uuidv4 } from 'uuid';
+import type { Consumer, MessagesStream, Producer } from '@platformatic/kafka';
+import { randomUUID as uuidv4 } from 'node:crypto';
 
 import {
   KafkaConnectionException,
@@ -380,6 +375,8 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
     }
   }
 
+  // The asynchronous signature is retained for health-check API compatibility.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async isConnected(): Promise<boolean> {
     if (
       this.kafkaState === KafkaConnectionState.failed ||
@@ -517,17 +514,17 @@ export class KafkaService implements OnApplicationShutdown, OnModuleInit {
       },
     });
 
-    consumer.on('consumer:group:rebalance', (info) => {
+    consumer.on('consumer:group:rebalance', (info: unknown) => {
       this.logger.info(`Kafka consumer ${groupId} rebalanced`, { info });
     });
 
-    consumer.on('client:broker:disconnect', (details) => {
+    consumer.on('client:broker:disconnect', (details: unknown) => {
       this.logger.warn(`Kafka consumer ${groupId} disconnected from broker`, {
         details,
       });
     });
 
-    consumer.on('client:broker:failed', (details) => {
+    consumer.on('client:broker:failed', (details: unknown) => {
       this.logger.error(`Kafka consumer ${groupId} broker failure`, {
         details,
       });
