@@ -75,6 +75,10 @@ export class AutopilotConsumer {
         this.autopilotService.handleAiWorkflowCompleted.bind(
           this.autopilotService,
         ) as (message: AiWorkflowCompletedPayload) => Promise<void>,
+      [KAFKA_TOPICS.AI_PHASE_OPENED]:
+        this.autopilotService.handleAiPhaseOpened.bind(
+          this.autopilotService,
+        ) as (message: PhaseTransitionPayload) => Promise<void>,
       [KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED]:
         this.autopilotService.handleFirst2FinishSubmission.bind(
           this.autopilotService,
@@ -146,6 +150,11 @@ export class AutopilotConsumer {
             case KAFKA_TOPICS.AI_WORKFLOW_COMPLETED:
               await this.autopilotService.handleAiWorkflowCompleted(
                 payload as AiWorkflowCompletedPayload,
+              );
+              break;
+            case KAFKA_TOPICS.AI_PHASE_OPENED:
+              await this.autopilotService.handleAiPhaseOpened(
+                payload as PhaseTransitionPayload,
               );
               break;
             case KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED:
