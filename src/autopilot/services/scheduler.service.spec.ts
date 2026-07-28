@@ -1124,7 +1124,7 @@ describe('SchedulerService (review phase deferral)', () => {
     );
   });
 
-  it('emits AI phase opened event when opening AI Screening with instantReview enabled', async () => {
+  it('emits AI phase opened event when opening AI Screening with instantReview disabled', async () => {
     const payload = createPayload({
       state: 'START',
       phaseId: 'ai-screening-phase',
@@ -1169,7 +1169,7 @@ describe('SchedulerService (review phase deferral)', () => {
       legacy: {},
     } as unknown as IChallenge);
 
-    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(true);
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(false);
 
     const openResponse: Awaited<
       ReturnType<ChallengeApiService['advancePhase']>

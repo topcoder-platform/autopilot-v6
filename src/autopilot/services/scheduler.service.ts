@@ -1109,10 +1109,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       if (operation === 'open' && isAiScreeningPhase) {
         try {
-          shouldEmitAiPhaseOpenedEvent =
+          const instantReviewEnabled =
             await this.reviewService.isInstantReviewEnabledForChallenge(
               data.challengeId,
             );
+          shouldEmitAiPhaseOpenedEvent = !instantReviewEnabled;
         } catch (error) {
           const err = error as Error;
           this.logger.error(
@@ -1124,10 +1125,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       if (operation === 'open' && isAiReviewPhase) {
         try {
-          shouldEmitAiPhaseOpenedEvent =
+          const instantReviewEnabled =
             await this.reviewService.isInstantReviewEnabledForChallenge(
               data.challengeId,
             );
+          shouldEmitAiPhaseOpenedEvent = !instantReviewEnabled;
         } catch (error) {
           const err = error as Error;
           this.logger.error(

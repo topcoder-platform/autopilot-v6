@@ -1710,42 +1710,62 @@ export class PhaseScheduleManager {
     }
 
     if (this.isAiScreeningPhaseName(updatedPhase.name)) {
+      let instantReviewEnabled = true;
       try {
-        const challenge =
-          await this.challengeApiService.getChallengeById(challengeId);
-        const aiWorkflowIds = this.getAiWorkflowIdsForChallenge(challenge);
-
-        const inProgressAiWorkflows =
-          await this.reviewService.getInProgressAiWorkflowRunCount(
+        instantReviewEnabled =
+          await this.reviewService.isInstantReviewEnabledForChallenge(
             challengeId,
-            aiWorkflowIds,
           );
-
-        if (inProgressAiWorkflows === 0) {
-          this.logger.log(
-            `[AI SCREENING] No pending AI workflow runs for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
-          );
-
-          const closePayload: PhaseTransitionPayload = {
-            projectId,
-            challengeId,
-            phaseId: updatedPhase.id,
-            phaseTypeName: updatedPhase.name,
-            state: 'END',
-            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
-            projectStatus,
-            date: new Date().toISOString(),
-          };
-
-          await this.schedulerService.advancePhase(closePayload);
-          return true;
-        }
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
+          `[AI SCREENING] Unable to determine instantReview readiness for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
           err.stack,
         );
+      }
+
+      if (!instantReviewEnabled) {
+        this.logger.log(
+          `[AI SCREENING] instantReview disabled for challenge ${challengeId}; preserving open phase ${updatedPhase.id} and scheduling closure normally at ${updatedPhase.scheduledEndDate}.`,
+        );
+      } else {
+        try {
+          const challenge =
+            await this.challengeApiService.getChallengeById(challengeId);
+          const aiWorkflowIds = this.getAiWorkflowIdsForChallenge(challenge);
+
+          const inProgressAiWorkflows =
+            await this.reviewService.getInProgressAiWorkflowRunCount(
+              challengeId,
+              aiWorkflowIds,
+            );
+
+          if (inProgressAiWorkflows === 0) {
+            this.logger.log(
+              `[AI SCREENING] No pending AI workflow runs for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
+            );
+
+            const closePayload: PhaseTransitionPayload = {
+              projectId,
+              challengeId,
+              phaseId: updatedPhase.id,
+              phaseTypeName: updatedPhase.name,
+              state: 'END',
+              operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+              projectStatus,
+              date: new Date().toISOString(),
+            };
+
+            await this.schedulerService.advancePhase(closePayload);
+            return true;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
+            err.stack,
+          );
+        }
       }
     }
 
