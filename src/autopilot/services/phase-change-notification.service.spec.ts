@@ -142,7 +142,7 @@ describe('PhaseChangeNotificationService', () => {
       get: jest.fn((key: string) => {
         switch (key) {
           case 'bus.url':
-            return 'https://bus-api.topcoder.com';
+            return 'https://api.topcoder-dev.com/v6/bus';
           case 'bus.timeoutMs':
             return 5000;
           case 'bus.originator':
@@ -231,7 +231,7 @@ describe('PhaseChangeNotificationService', () => {
       },
     ];
 
-    expect(url).toBe('https://bus-api.topcoder.com/v5/bus/events');
+    expect(url).toBe('https://api.topcoder-dev.com/v6/bus/events');
     expect(message.topic).toBe('external.action.email');
     expect(message.payload.from).toBe('no-reply@topcoder.com');
     expect(message.payload.replyTo).toBe('no-reply@topcoder.com');

@@ -19,15 +19,40 @@ const parseNumber = (value: string | undefined, fallback: number): number => {
 };
 
 /**
+ * Resolves the member API base URL.
+ *
+ * BUS_API_URL includes the versioned Bus API path, so only its origin is used
+ * when falling back to the public API gateway for member requests.
+ */
+const resolveBaseUrl = (): string => {
+  const memberApiUrl = process.env.MEMBER_API_URL?.trim();
+  if (memberApiUrl) {
+    return memberApiUrl;
+  }
+
+  const busApiUrl = process.env.BUS_API_URL?.trim();
+  if (!busApiUrl) {
+    return '';
+  }
+
+  try {
+    return new URL(busApiUrl).origin;
+  } catch {
+    return busApiUrl;
+  }
+};
+
+/**
  * Member API outbound configuration used by autopilot challenge completion flows.
  *
  * Environment variables:
  * - `MEMBER_API_URL` (optional): Base URL of member-api-v6, such as `http://member-api:3000`.
- * - `BUS_API_URL` (fallback): Public API gateway base URL used when `MEMBER_API_URL` is absent.
+ * - `BUS_API_URL` (fallback): Its origin is used as the public API gateway base URL when
+ *   `MEMBER_API_URL` is absent.
  *   When both are absent, outbound member stats refresh and rerate calls are disabled.
  * - `MEMBER_API_TIMEOUT_MS` (optional, default `15000`): HTTP timeout in milliseconds for member-api calls.
  */
 export default registerAs('memberApi', () => ({
-  baseUrl: (process.env.MEMBER_API_URL || process.env.BUS_API_URL || '').trim(),
+  baseUrl: resolveBaseUrl(),
   timeoutMs: parseNumber(process.env.MEMBER_API_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
 }));

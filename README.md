@@ -72,6 +72,14 @@ Open the `.env` file and configure the variables for your environment. It is cru
    AUTH0_PROXY_SEREVR_URL=
 
    # -------------------------------------
+   # Bus API Integration
+   # -------------------------------------
+   # Versioned base URL; autopilot appends /events.
+   BUS_API_URL=https://api.topcoder-dev.com/v6/bus
+   BUS_API_TIMEOUT_MS=10000
+   BUS_API_ORIGINATOR=autopilot-service
+
+   # -------------------------------------
    # Marathon Match Review Integration
    # -------------------------------------
    MARATHON_MATCH_API_URL=https://api.topcoder-dev.com
@@ -81,7 +89,7 @@ Open the `.env` file and configure the variables for your environment. It is cru
    # -------------------------------------
    # Member API Integration
    # -------------------------------------
-   # Optional when BUS_API_URL points to the public Topcoder API gateway.
+   # Optional when BUS_API_URL uses the public Topcoder API gateway.
    MEMBER_API_URL=http://member-api:3000
    MEMBER_API_TIMEOUT_MS=15000
 
@@ -291,7 +299,7 @@ The autopilot service uses a flexible logging strategy that adapts to different 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MEMBER_API_URL` | No | `BUS_API_URL` | Base URL of member-api-v6, e.g. `http://member-api:3000`; when absent, autopilot uses `BUS_API_URL` as the public API gateway base for affected member stats refreshes and submitter rating rerates |
+| `MEMBER_API_URL` | No | Origin of `BUS_API_URL` | Base URL of member-api-v6, e.g. `http://member-api:3000`; when absent, autopilot uses the origin of `BUS_API_URL` as the public API gateway base for affected member stats refreshes and submitter rating rerates |
 | `MEMBER_API_TIMEOUT_MS` | No | `15000` | HTTP timeout for member-api calls |
 
 ### ECS Deployment Notes
