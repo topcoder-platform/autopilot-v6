@@ -59,6 +59,9 @@ type ReviewServiceMock = {
   getActiveContestSubmissionIds: MockedMethod<
     ReviewService['getActiveContestSubmissionIds']
   >;
+  isInstantReviewEnabledForChallenge: MockedMethod<
+    ReviewService['isInstantReviewEnabledForChallenge']
+  >;
   getFailedScreeningSubmissionIds: MockedMethod<
     ReviewService['getFailedScreeningSubmissionIds']
   >;
@@ -229,6 +232,8 @@ describe('SchedulerService (review phase deferral)', () => {
         createMockMethod<ReviewService['getCompletedReviewCountForPhase']>(),
       getInProgressAiWorkflowRunCount:
         createMockMethod<ReviewService['getInProgressAiWorkflowRunCount']>(),
+      isInstantReviewEnabledForChallenge:
+        createMockMethod<ReviewService['isInstantReviewEnabledForChallenge']>(),
     };
     reviewService.getTotalAppealCount.mockResolvedValue(1);
     reviewService.getPendingAppealCount.mockResolvedValue(0);
@@ -245,6 +250,7 @@ describe('SchedulerService (review phase deferral)', () => {
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(0);
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(false);
 
     resourcesService = {
       hasSubmitterResource: jest.fn().mockResolvedValue(true),
@@ -1115,6 +1121,91 @@ describe('SchedulerService (review phase deferral)', () => {
       payload.challengeId,
       payload.phaseId,
       'close',
+    );
+  });
+
+  it('emits AI phase opened event when opening AI Screening with instantReview enabled', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'ai-screening-phase',
+      phaseTypeName: 'AI Screening',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [closedPhaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-screening-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(true);
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened ai screening',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-screening-template',
+          name: 'AI Screening',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValueOnce(openResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(kafkaService.produce).toHaveBeenCalledWith(
+      'autopilot.ai.phase.opened',
+      expect.objectContaining({
+        topic: 'autopilot.ai.phase.opened',
+        payload: expect.objectContaining({
+          challengeId: payload.challengeId,
+          phaseId: payload.phaseId,
+          state: 'START',
+        }),
+      }),
     );
   });
 

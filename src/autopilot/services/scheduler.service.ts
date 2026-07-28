@@ -476,6 +476,38 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async emitAiPhaseOpenedEvent(
+    data: PhaseTransitionPayload,
+  ): Promise<void> {
+    const payload: PhaseTransitionPayload = {
+      ...data,
+      state: 'START',
+      operator: data.operator ?? AutopilotOperator.SYSTEM_SCHEDULER,
+      date: new Date().toISOString(),
+    };
+
+    const message: PhaseTransitionMessage = {
+      topic: KAFKA_TOPICS.AI_PHASE_OPENED,
+      originator: 'autopilot-scheduler',
+      timestamp: new Date().toISOString(),
+      mimeType: 'application/json',
+      payload,
+    };
+
+    try {
+      await this.kafkaService.produce(KAFKA_TOPICS.AI_PHASE_OPENED, message);
+      this.logger.log(
+        `[AI PHASE OPENED] Emitted AI phase opened event for challenge ${data.challengeId}, phase ${data.phaseId}`,
+      );
+    } catch (error: unknown) {
+      const err = error as Error;
+      this.logger.error(
+        `[AI PHASE OPENED] Failed to emit AI phase opened event for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+        err.stack,
+      );
+    }
+  }
+
   public async advancePhase(data: PhaseTransitionPayload): Promise<void> {
     try {
       this.logger.log(
@@ -1011,6 +1043,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Safety check: do not open Appeals if predecessor review has pending reviews
+      let shouldEmitAiPhaseOpenedEvent = false;
+
       if (operation === 'open' && isAppealsPhase) {
         try {
           const challenge = await this.challengeApiService.getChallengeById(
@@ -1073,6 +1107,36 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         `Phase ${data.phaseId} is currently ${phaseDetails.isOpen ? 'open' : 'closed'}, will ${operation} it`,
       );
 
+      if (operation === 'open' && isAiScreeningPhase) {
+        try {
+          shouldEmitAiPhaseOpenedEvent =
+            await this.reviewService.isInstantReviewEnabledForChallenge(
+              data.challengeId,
+            );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI SCREENING] Unable to determine instantReview readiness for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
+      if (operation === 'open' && isAiReviewPhase) {
+        try {
+          shouldEmitAiPhaseOpenedEvent =
+            await this.reviewService.isInstantReviewEnabledForChallenge(
+              data.challengeId,
+            );
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI REVIEW] Unable to determine instantReview readiness for challenge ${data.challengeId}, phase ${data.phaseId}: ${err.message}`,
+            err.stack,
+          );
+        }
+      }
+
       const result = await this.challengeApiService.advancePhase(
         data.challengeId,
         data.phaseId,
@@ -1083,6 +1147,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Successfully advanced phase ${data.phaseId} for challenge ${data.challengeId}: ${result.message}`,
         );
+
+        if (operation === 'open' && shouldEmitAiPhaseOpenedEvent) {
+          await this.emitAiPhaseOpenedEvent(data);
+        }
 
         try {
           await this.phaseChangeNotificationService.sendPhaseChangeNotification(
@@ -1297,7 +1365,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        if (operation === 'open' && isAiScreeningPhase) {
+        if (operation === 'open' && isAiScreeningPhase && !shouldEmitAiPhaseOpenedEvent) {
           try {
             const challenge = await this.challengeApiService.getChallengeById(
               data.challengeId,
