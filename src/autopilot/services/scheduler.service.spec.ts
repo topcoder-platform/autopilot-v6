@@ -1209,6 +1209,94 @@ describe('SchedulerService (review phase deferral)', () => {
     );
   });
 
+  it('emits AI phase opened event when opening AI Review with instantReview disabled', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseId: 'ai-review-phase',
+      phaseTypeName: 'AI Review',
+    });
+
+    const closedPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-review-template',
+      name: 'AI Review',
+      isOpen: false,
+    });
+    const openPhaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: 'ai-review-template',
+      name: 'AI Review',
+      isOpen: true,
+    });
+
+    challengeApiService.getPhaseDetails
+      .mockResolvedValueOnce(closedPhaseDetails)
+      .mockResolvedValueOnce(openPhaseDetails);
+
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: payload.challengeId,
+      phases: [closedPhaseDetails],
+      reviewers: [
+        {
+          id: 'reviewer-config-ai',
+          scorecardId: 'scorecard-ai',
+          isMemberReview: false,
+          memberReviewerCount: 0,
+          phaseId: 'ai-review-template',
+          fixedAmount: null,
+          baseCoefficient: null,
+          incrementalCoefficient: null,
+          type: null,
+          aiWorkflowId: 'workflow-ai-1',
+          shouldOpenOpportunity: false,
+        },
+      ],
+      legacy: {},
+    } as unknown as IChallenge);
+
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(false);
+
+    const openResponse: Awaited<
+      ReturnType<ChallengeApiService['advancePhase']>
+    > = {
+      success: true,
+      message: 'opened ai review',
+      updatedPhases: [
+        createPhase({
+          id: payload.phaseId,
+          phaseId: 'ai-review-template',
+          name: 'AI Review',
+          isOpen: true,
+          actualStartDate: new Date().toISOString(),
+        }),
+      ],
+    };
+
+    challengeApiService.advancePhase.mockResolvedValueOnce(openResponse);
+
+    await scheduler.advancePhase(payload);
+
+    expect(reviewService.isInstantReviewEnabledForChallenge).toHaveBeenCalledWith(
+      payload.challengeId,
+    );
+    expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
+      payload.challengeId,
+      payload.phaseId,
+      'open',
+    );
+    expect(kafkaService.produce).toHaveBeenCalledWith(
+      'autopilot.ai.phase.opened',
+      expect.objectContaining({
+        topic: 'autopilot.ai.phase.opened',
+        payload: expect.objectContaining({
+          challengeId: payload.challengeId,
+          phaseId: payload.phaseId,
+          state: 'START',
+        }),
+      }),
+    );
+  });
+
   it('continues opening AI Screening phase when workflow check fails', async () => {
     const payload = createPayload({
       state: 'START',

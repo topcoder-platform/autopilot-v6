@@ -42,6 +42,7 @@ describe('PhaseScheduleManager', () => {
     getMarathonMatchReviewReadiness: jest.Mock;
     updatePendingReviewScorecards: jest.Mock;
     getInProgressAiWorkflowRunCount: jest.Mock;
+    isInstantReviewEnabledForChallenge: jest.Mock;
   };
   let dbLogger: {
     logAction: jest.Mock;
@@ -97,6 +98,7 @@ describe('PhaseScheduleManager', () => {
       }),
       updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
       getInProgressAiWorkflowRunCount: jest.fn().mockResolvedValue(0),
+      isInstantReviewEnabledForChallenge: jest.fn().mockResolvedValue(true),
     };
 
     dbLogger = {
@@ -614,6 +616,54 @@ describe('PhaseScheduleManager', () => {
         phaseId: aiPhase.id,
         state: 'END',
       }),
+    );
+  });
+
+  it('preserves AI Screening open phase when instantReview is disabled and skips workflow auto-close', async () => {
+    const aiPhase = {
+      id: 'ai-screening-phase-disabled',
+      phaseId: 'ai-screening-template-disabled',
+      name: 'AI Screening',
+      isOpen: false,
+      scheduledStartDate: '2026-05-01T00:00:00.000Z',
+      scheduledEndDate: '2026-05-02T00:00:00.000Z',
+    };
+
+    challengeApiService.getPhaseDetails.mockResolvedValueOnce({
+      ...aiPhase,
+      isOpen: true,
+    });
+    challengeApiService.getChallengeById.mockResolvedValueOnce({
+      id: 'challenge-ai-disabled',
+      reviewers: [],
+    });
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValueOnce(
+      false,
+    );
+
+    const opened = await (service as unknown as {
+      openPhaseAndSchedule: (
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        phase: unknown,
+      ) => Promise<boolean>;
+    }).openPhaseAndSchedule('challenge-ai-disabled', 1002, 'ACTIVE', aiPhase);
+
+    expect(opened).toBe(true);
+    expect(reviewService.isInstantReviewEnabledForChallenge).toHaveBeenCalledWith(
+      'challenge-ai-disabled',
+    );
+    expect(reviewService.getInProgressAiWorkflowRunCount).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).toHaveBeenCalledTimes(1);
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'START' }),
+    );
+    expect(schedulerService.advancePhase).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'END' }),
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'END' }),
     );
   });
 });
