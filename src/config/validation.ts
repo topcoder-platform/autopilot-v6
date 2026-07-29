@@ -24,6 +24,12 @@ export const validationSchema = Joi.object({
   KAFKA_MAX_RETRY_TIME: Joi.number().default(30000),
   KAFKA_INITIAL_RETRY_TIME: Joi.number().default(300),
   KAFKA_RETRIES: Joi.number().default(5),
+  KAFKA_CONNECTION_TIMEOUT: Joi.number().integer().positive().default(10000),
+  KAFKA_REQUEST_TIMEOUT: Joi.number().integer().positive().default(30000),
+  KAFKA_BROKER_TIMEOUT: Joi.number().integer().positive().default(5000),
+  KAFKA_SESSION_TIMEOUT: Joi.number().integer().positive().default(60000),
+  KAFKA_HEARTBEAT_INTERVAL: Joi.number().integer().positive().default(3000),
+  KAFKA_MAX_WAIT_TIME: Joi.number().integer().positive().default(5000),
 
   // Challenge DB Configuration
   CHALLENGE_DB_URL: Joi.string()
