@@ -892,12 +892,14 @@ export class AutopilotService {
     }
   }
 
-  async handleAiPhaseOpened(payload: PhaseTransitionPayload): Promise<void> {
+  handleAiPhaseOpened(payload: PhaseTransitionPayload): Promise<void> {
     const { challengeId, phaseId } = payload;
 
     this.logger.debug(
       `Received AI phase opened event for challenge ${challengeId}, phase ${phaseId}; ignoring in autopilot consumer.`,
     );
+
+    return Promise.resolve();
   }
 
   private resolvePhaseByIdentifier(
