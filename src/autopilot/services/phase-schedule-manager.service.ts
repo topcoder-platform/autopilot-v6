@@ -17,6 +17,7 @@ import {
   PhaseTransitionPayload,
 } from '../interfaces/autopilot.interface';
 import {
+  AI_REVIEW_PHASE_NAME,
   AI_SCREENING_PHASE_NAME,
   APPROVAL_PHASE_NAMES,
   CHECKPOINT_SUBMISSION_PHASE_NAME,
@@ -1557,39 +1558,94 @@ export class PhaseScheduleManager {
       `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
 
-    const openResult = await this.challengeApiService.advancePhase(
-      challengeId,
-      phase.id,
-      'open',
-    );
+    const isAiPhase =
+      this.isAiScreeningPhaseName(phase.name) ||
+      this.isAiReviewPhaseName(phase.name);
 
-    if (!openResult.success) {
-      this.logger.error(
-        `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${openResult.message}`,
+    let updatedPhase: IPhase | null = phase;
+
+    if (isAiPhase) {
+      try {
+        await this.schedulerService.advancePhase({
+          projectId,
+          challengeId,
+          phaseId: phase.id,
+          phaseTypeName: phase.name,
+          state: 'START',
+          operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+          projectStatus,
+          date: new Date().toISOString(),
+        });
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to open AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+        return false;
+      }
+
+      try {
+        updatedPhase = await this.challengeApiService.getPhaseDetails(
+          challengeId,
+          phase.id,
+        );
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to fetch phase details after opening AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+        return false;
+      }
+
+      if (!updatedPhase || !updatedPhase.isOpen) {
+        this.logger.log(
+          `[PHASE CHAIN] AI phase ${phase.name} (${phase.id}) for challenge ${challengeId} is no longer open after scheduler-managed open; skipping scheduling.`,
+        );
+        return true;
+      }
+
+      this.reviewAssignmentService.clearPolling(challengeId, phase.id);
+
+      this.logger.log(
+        `[PHASE CHAIN] Successfully opened AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
       );
-      return false;
-    }
-
-    this.reviewAssignmentService.clearPolling(challengeId, phase.id);
-
-    this.logger.log(
-      `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
-    );
-
-    // Create pending reviews for any review-related phases (Review, Screening, Approval).
-    // PhaseReviewService will ignore non review phases.
-    try {
-      await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
-        err.stack,
+    } else {
+      const openResult = await this.challengeApiService.advancePhase(
+        challengeId,
+        phase.id,
+        'open',
       );
-    }
 
-    const updatedPhase =
-      openResult.updatedPhases?.find((p) => p.id === phase.id) || phase;
+      if (!openResult.success) {
+        this.logger.error(
+          `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${openResult.message}`,
+        );
+        return false;
+      }
+
+      this.reviewAssignmentService.clearPolling(challengeId, phase.id);
+
+      this.logger.log(
+        `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+      );
+
+      // Create pending reviews for any review-related phases (Review, Screening, Approval).
+      // PhaseReviewService will ignore non review phases.
+      try {
+        await this.phaseReviewService.handlePhaseOpened(challengeId, phase.id);
+      } catch (error) {
+        const err = error as Error;
+        this.logger.error(
+          `[PHASE CHAIN] Failed to prepare review records for phase ${phase.name} (${phase.id}) on challenge ${challengeId}: ${err.message}`,
+          err.stack,
+        );
+      }
+
+      updatedPhase =
+        openResult.updatedPhases?.find((p) => p.id === phase.id) || phase;
+    }
 
     const updatedScheduledStart = updatedPhase.scheduledStartDate
       ? new Date(updatedPhase.scheduledStartDate).getTime()
@@ -1654,42 +1710,62 @@ export class PhaseScheduleManager {
     }
 
     if (this.isAiScreeningPhaseName(updatedPhase.name)) {
+      let instantReviewEnabled = true;
       try {
-        const challenge =
-          await this.challengeApiService.getChallengeById(challengeId);
-        const aiWorkflowIds = this.getAiWorkflowIdsForChallenge(challenge);
-
-        const inProgressAiWorkflows =
-          await this.reviewService.getInProgressAiWorkflowRunCount(
+        instantReviewEnabled =
+          await this.reviewService.isInstantReviewEnabledForChallenge(
             challengeId,
-            aiWorkflowIds,
           );
-
-        if (inProgressAiWorkflows === 0) {
-          this.logger.log(
-            `[AI SCREENING] No pending AI workflow runs for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
-          );
-
-          const closePayload: PhaseTransitionPayload = {
-            projectId,
-            challengeId,
-            phaseId: updatedPhase.id,
-            phaseTypeName: updatedPhase.name,
-            state: 'END',
-            operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
-            projectStatus,
-            date: new Date().toISOString(),
-          };
-
-          await this.schedulerService.advancePhase(closePayload);
-          return true;
-        }
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
+          `[AI SCREENING] Unable to determine instantReview readiness for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
           err.stack,
         );
+      }
+
+      if (!instantReviewEnabled) {
+        this.logger.log(
+          `[AI SCREENING] instantReview disabled for challenge ${challengeId}; preserving open phase ${updatedPhase.id} and scheduling closure normally at ${updatedPhase.scheduledEndDate}.`,
+        );
+      } else {
+        try {
+          const challenge =
+            await this.challengeApiService.getChallengeById(challengeId);
+          const aiWorkflowIds = this.getAiWorkflowIdsForChallenge(challenge);
+
+          const inProgressAiWorkflows =
+            await this.reviewService.getInProgressAiWorkflowRunCount(
+              challengeId,
+              aiWorkflowIds,
+            );
+
+          if (inProgressAiWorkflows === 0) {
+            this.logger.log(
+              `[AI SCREENING] No pending AI workflow runs for challenge ${challengeId}; closing phase ${updatedPhase.id} immediately after open.`,
+            );
+
+            const closePayload: PhaseTransitionPayload = {
+              projectId,
+              challengeId,
+              phaseId: updatedPhase.id,
+              phaseTypeName: updatedPhase.name,
+              state: 'END',
+              operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+              projectStatus,
+              date: new Date().toISOString(),
+            };
+
+            await this.schedulerService.advancePhase(closePayload);
+            return true;
+          }
+        } catch (error) {
+          const err = error as Error;
+          this.logger.error(
+            `[AI SCREENING] Unable to evaluate pending AI workflow runs for challenge ${challengeId}, phase ${updatedPhase.id}: ${err.message}`,
+            err.stack,
+          );
+        }
       }
     }
 
@@ -1736,6 +1812,10 @@ export class PhaseScheduleManager {
 
   private isAiScreeningPhaseName(phaseName?: string | null): boolean {
     return phaseName?.trim() === AI_SCREENING_PHASE_NAME;
+  }
+
+  private isAiReviewPhaseName(phaseName?: string | null): boolean {
+    return phaseName?.trim() === AI_REVIEW_PHASE_NAME;
   }
 
   private getAiWorkflowIdsForChallenge(challenge: IChallenge): string[] {

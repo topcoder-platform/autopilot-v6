@@ -3525,6 +3525,47 @@ export class ReviewService {
     }
   }
 
+  async isInstantReviewEnabledForChallenge(
+    challengeId: string,
+  ): Promise<boolean> {
+    if (!challengeId) {
+      return false;
+    }
+
+    const query = Prisma.sql`
+      SELECT c."instantReview" AS "instantReview"
+      FROM ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
+      WHERE c."challengeId" = ${challengeId}
+      ORDER BY c."version" DESC
+      LIMIT 1
+    `;
+
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ instantReview: boolean | null }>
+      >(query);
+      const instantReview = rows?.[0]?.instantReview === true;
+
+      void this.dbLogger.logAction('review.isInstantReviewEnabledForChallenge', {
+        challengeId,
+        status: 'SUCCESS',
+        source: ReviewService.name,
+        details: { instantReview },
+      });
+
+      return instantReview;
+    } catch (error) {
+      const err = error as Error;
+      void this.dbLogger.logAction('review.isInstantReviewEnabledForChallenge', {
+        challengeId,
+        status: 'ERROR',
+        source: ReviewService.name,
+        details: { error: err.message },
+      });
+      return false;
+    }
+  }
+
   async getTotalAppealCount(challengeId: string): Promise<number> {
     const query = Prisma.sql`
       SELECT COUNT(*)::int AS count
