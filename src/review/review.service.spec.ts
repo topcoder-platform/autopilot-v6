@@ -144,7 +144,7 @@ describe('ReviewService', () => {
   });
 
   describe('getActiveContestSubmissions', () => {
-    it('keeps shared active-submission queries limited to active rows', async () => {
+    it('keeps shared queries limited to active, virus-scan-eligible submissions', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([
         { id: 'submission-1', memberId: 'member-1', isLatest: false },
         { id: 'submission-2', memberId: 'member-1', isLatest: true },
@@ -169,6 +169,11 @@ describe('ReviewService', () => {
       expect(sqlText).toContain('COALESCE(s."memberId", s."id")');
       expect(sqlText).toContain('s."status" = \'ACTIVE\'');
       expect(sqlText).not.toContain('s."status" = \'AI_FAILED_REVIEW\'');
+      expect(sqlText).toContain('WHERE ranked."isFileSubmission" = FALSE');
+      expect(sqlText).toContain('OR ranked."virusScan" = TRUE');
+      expect(sqlText.indexOf('ROW_NUMBER() OVER')).toBeLessThan(
+        sqlText.indexOf('WHERE ranked."isFileSubmission" = FALSE'),
+      );
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getActiveContestSubmissions',

@@ -672,26 +672,36 @@ export class ReviewService {
 
     const query = Prisma.sql`
       SELECT
-        s."id",
-        s."memberId",
-        CASE
-          WHEN ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(s."memberId", s."id")
-            ORDER BY
-              s."submittedDate" DESC NULLS LAST,
-              s."createdAt" DESC NULLS LAST,
-              s."updatedAt" DESC NULLS LAST,
-              s."id" DESC
-          ) = 1 THEN TRUE
-          ELSE FALSE
-        END AS "isLatest"
-      FROM ${ReviewService.SUBMISSION_TABLE} s
-      WHERE s."challengeId" = ${challengeId}
-        ${statusFilter}
-        AND (
-          s."type" IS NULL
-          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
-        )
+        ranked."id",
+        ranked."memberId",
+        ranked."isLatest"
+      FROM (
+        SELECT
+          s."id",
+          s."memberId",
+          s."isFileSubmission",
+          s."virusScan",
+          CASE
+            WHEN ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) = 1 THEN TRUE
+            ELSE FALSE
+          END AS "isLatest"
+        FROM ${ReviewService.SUBMISSION_TABLE} s
+        WHERE s."challengeId" = ${challengeId}
+          ${statusFilter}
+          AND (
+            s."type" IS NULL
+            OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+          )
+      ) ranked
+      WHERE ranked."isFileSubmission" = FALSE
+        OR ranked."virusScan" = TRUE
     `;
 
     try {
