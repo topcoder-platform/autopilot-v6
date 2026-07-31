@@ -982,6 +982,7 @@ describe('SchedulerService (review phase deferral)', () => {
       legacy: {},
     } as unknown as IChallenge);
 
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(true);
     reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(0);
 
     const openResponse: Awaited<
@@ -1085,6 +1086,7 @@ describe('SchedulerService (review phase deferral)', () => {
       legacy: {},
     } as unknown as IChallenge);
 
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValue(true);
     reviewService.getInProgressAiWorkflowRunCount.mockResolvedValue(3);
 
     const openResponse: Awaited<

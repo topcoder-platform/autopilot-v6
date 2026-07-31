@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import * as cityTimezones from 'city-timezones';
+import * as moment from 'moment-timezone';
 import { ResourcesService } from '../../resources/resources.service';
 import type { ReviewerResourceRecord } from '../../resources/resources.service';
 import { MembersService } from '../../members/members.service';
@@ -23,6 +25,15 @@ interface NotificationPayloadData {
   phaseOpenDate: string | null;
   phaseClose: string | null;
   phaseCloseDate: string | null;
+  localized_time: string;
+  phase_change: string;
+}
+
+interface NotificationRecipient {
+  email: string;
+  city: string | null;
+  homeCountryCode: string | null;
+  competitionCountryCode: string | null;
 }
 
 @Injectable()
@@ -34,16 +45,6 @@ export class PhaseChangeNotificationService {
   private readonly reviewAppBaseUrl: string;
   private readonly emailDomain: string;
   private readonly sendgridTemplateId: string | null;
-  private readonly easternTimeFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour12: false,
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  });
 
   constructor(
     private readonly resourcesService: ResourcesService,
@@ -80,12 +81,20 @@ export class PhaseChangeNotificationService {
     }
   }
 
+  /**
+   * Publishes one phase-change email event for each unique opted-in recipient.
+   *
+   * @param params Challenge phase and operation that triggered the notification.
+   * @returns A promise that resolves after every recipient event is accepted.
+   * @throws Resource, member, challenge, authentication, or Bus API errors.
+   */
   async sendPhaseChangeNotification(
     params: PhaseChangeNotificationParams,
   ): Promise<void> {
     if (!this.busEventsUrl) {
       return;
     }
+    const busEventsUrl = this.busEventsUrl;
 
     if (!this.sendgridTemplateId) {
       await this.dbLogger.logAction('notifications.phaseChange', {
@@ -147,29 +156,38 @@ export class PhaseChangeNotificationService {
     const memberIds = resources.map((resource) => resource.memberId ?? '');
     const handles = resources.map((resource) => resource.memberHandle ?? '');
 
-    let recipientEmails: string[] = [];
+    let recipients: NotificationRecipient[] = [];
     try {
-      const { idToEmail, handleToEmail } =
+      const { idToMember, handleToMember } =
         await this.membersService.getMemberEmails({
           memberIds,
           handles,
         });
 
-      const emailSet = new Set<string>();
+      const recipientMap = new Map<string, NotificationRecipient>();
       for (const resource of resources) {
         const normalizedId = resource.memberId?.trim();
         const normalizedHandle = resource.memberHandle?.trim().toLowerCase();
 
-        const email =
-          (normalizedId && idToEmail.get(normalizedId)) ||
-          (normalizedHandle && handleToEmail.get(normalizedHandle));
+        const member =
+          (normalizedId ? idToMember.get(normalizedId) : undefined) ??
+          (normalizedHandle ? handleToMember.get(normalizedHandle) : undefined);
+        const email = member?.email.trim();
 
-        if (email) {
-          emailSet.add(email.trim());
+        if (member && email) {
+          const normalizedEmail = email.toLowerCase();
+          if (!recipientMap.has(normalizedEmail)) {
+            recipientMap.set(normalizedEmail, {
+              email,
+              city: member.city,
+              homeCountryCode: member.homeCountryCode,
+              competitionCountryCode: member.competitionCountryCode,
+            });
+          }
         }
       }
 
-      recipientEmails = Array.from(emailSet);
+      recipients = Array.from(recipientMap.values());
     } catch (error) {
       const err = error as Error;
       this.logger.error(
@@ -190,7 +208,7 @@ export class PhaseChangeNotificationService {
       throw err;
     }
 
-    if (!recipientEmails.length) {
+    if (!recipients.length) {
       await this.dbLogger.logAction('notifications.phaseChange', {
         challengeId,
         status: 'INFO',
@@ -259,53 +277,62 @@ export class PhaseChangeNotificationService {
       return;
     }
 
-    const phaseOpenDateRaw =
+    const phaseDateRaw =
       operation === 'open'
         ? (phase.actualStartDate ?? new Date().toISOString())
-        : null;
-    const phaseCloseDateRaw =
-      operation === 'close'
-        ? (phase.actualEndDate ?? new Date().toISOString())
-        : null;
-
-    const payloadData: NotificationPayloadData = {
-      challengeName: challenge.name,
-      challengeURL: this.buildChallengeUrl(challengeId),
-      phaseOpen: operation === 'open' ? phase.name : null,
-      phaseOpenDate: this.formatPhaseDate(phaseOpenDateRaw),
-      phaseClose: operation === 'close' ? phase.name : null,
-      phaseCloseDate: this.formatPhaseDate(phaseCloseDateRaw),
-    };
+        : (phase.actualEndDate ?? new Date().toISOString());
+    const phaseChange = `${phase.name} ${
+      operation === 'open' ? 'Open' : 'Closed'
+    }`;
 
     const defaultNotificationEmail = `no-reply@${this.emailDomain}.com`;
+    const messages = recipients.map((recipient) => {
+      const localizedTime = this.formatPhaseDate(
+        phaseDateRaw,
+        this.resolveTimeZone(recipient),
+      );
+      const payloadData: NotificationPayloadData = {
+        challengeName: challenge.name,
+        challengeURL: this.buildChallengeUrl(challengeId),
+        phaseOpen: operation === 'open' ? phase.name : null,
+        phaseOpenDate: operation === 'open' ? localizedTime : null,
+        phaseClose: operation === 'close' ? phase.name : null,
+        phaseCloseDate: operation === 'close' ? localizedTime : null,
+        localized_time: localizedTime,
+        phase_change: phaseChange,
+      };
 
-    const message = {
-      topic: 'external.action.email',
-      originator: this.originator,
-      timestamp: new Date().toISOString(),
-      'mime-type': 'application/json',
-      payload: {
-        from: defaultNotificationEmail,
-        replyTo: defaultNotificationEmail,
-        recipients: [defaultNotificationEmail],
-        bcc: recipientEmails,
-        data: payloadData,
-        sendgrid_template_id: this.sendgridTemplateId,
-        version: 'v3',
-      },
-    };
+      return {
+        topic: 'external.action.email',
+        originator: this.originator,
+        timestamp: new Date().toISOString(),
+        'mime-type': 'application/json',
+        payload: {
+          from: defaultNotificationEmail,
+          replyTo: defaultNotificationEmail,
+          recipients: [recipient.email],
+          data: payloadData,
+          sendgrid_template_id: this.sendgridTemplateId,
+          version: 'v3',
+        },
+      };
+    });
 
     try {
       const token = await this.auth0Service.getAccessToken();
 
-      await firstValueFrom(
-        this.httpService.post(this.busEventsUrl, message, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: this.timeoutMs,
-        }),
+      await Promise.all(
+        messages.map((message) =>
+          firstValueFrom(
+            this.httpService.post(busEventsUrl, message, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              timeout: this.timeoutMs,
+            }),
+          ),
+        ),
       );
 
       await this.dbLogger.logAction('notifications.phaseChange', {
@@ -315,8 +342,8 @@ export class PhaseChangeNotificationService {
         details: {
           phaseId,
           operation,
-          recipients: recipientEmails.length,
-          payload: payloadData,
+          recipients: recipients.length,
+          payloads: messages.map((message) => message.payload.data),
         },
       });
     } catch (error) {
@@ -332,7 +359,7 @@ export class PhaseChangeNotificationService {
         details: {
           phaseId,
           operation,
-          recipients: recipientEmails.length,
+          recipients: recipients.length,
           error: err.message,
           stage: 'publish',
         },
@@ -389,39 +416,57 @@ export class PhaseChangeNotificationService {
     return `${base}/active-challenges/${challengeId}/challenge-details`;
   }
 
-  private formatPhaseDate(
-    value: string | Date | null | undefined,
-  ): string | null {
-    if (!value) {
-      return null;
+  /**
+   * Resolves the member's profile city to the same IANA timezone used by the
+   * profile application.
+   *
+   * @param recipient Member city and country codes from the saved profile.
+   * @returns The first matching IANA timezone, or UTC when none is available.
+   * @throws Never. Missing and unrecognized cities use UTC.
+   */
+  private resolveTimeZone(recipient: NotificationRecipient): string {
+    const city = recipient.city;
+    if (!city) {
+      return 'UTC';
     }
 
-    const date = value instanceof Date ? value : new Date(value);
+    const timeZone = cityTimezones.lookupViaCity(city)[0]?.timezone;
+    if (timeZone && moment.tz.zone(timeZone)) {
+      return timeZone;
+    }
 
-    if (Number.isNaN(date.getTime())) {
+    const countryCode =
+      recipient.homeCountryCode || recipient.competitionCountryCode;
+    const country = countryCode
+      ? cityTimezones.findFromIsoCode(countryCode)[0]?.country
+      : null;
+    const profileFallbackTimeZone = country ? `${country}/${city}` : null;
+
+    return profileFallbackTimeZone && moment.tz.zone(profileFallbackTimeZone)
+      ? profileFallbackTimeZone
+      : 'UTC';
+  }
+
+  /**
+   * Formats a phase transition timestamp in a member's resolved timezone.
+   *
+   * @param value Phase transition timestamp.
+   * @param timeZone IANA timezone resolved from the member profile.
+   * @returns A readable localized timestamp, or the original invalid value.
+   * @throws Never. Invalid timestamps are returned unchanged.
+   */
+  private formatPhaseDate(value: string | Date, timeZone: string): string {
+    const date = moment(value);
+
+    if (!date.isValid()) {
       this.logger.warn(
         `Unable to format phase date "${String(value)}" for phase change notification payload.`,
       );
 
-      return typeof value === 'string' ? value : null;
+      return String(value);
     }
 
-    const parts = this.easternTimeFormatter.formatToParts(date);
-    const getPartValue = (type: Intl.DateTimeFormatPartTypes) =>
-      parts.find((part) => part.type === type)?.value ?? '';
-
-    const day = getPartValue('day');
-    const month = getPartValue('month');
-    const year = getPartValue('year');
-    const hour = getPartValue('hour');
-    const minute = getPartValue('minute');
-    const timeZoneName = getPartValue('timeZoneName');
-
-    if (!day || !month || !year || !hour || !minute || !timeZoneName) {
-      return this.easternTimeFormatter.format(date);
-    }
-
-    return `${day}-${month}-${year} ${hour}:${minute} ${timeZoneName}`;
+    return date.tz(timeZone).format('MMMM DD, YYYY HH:mm z');
   }
 
   private normalizeBaseUrl(value: string): string {
