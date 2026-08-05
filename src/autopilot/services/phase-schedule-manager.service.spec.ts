@@ -26,9 +26,13 @@ describe('PhaseScheduleManager', () => {
   };
   let challengeApiService: {
     getChallengeById: jest.Mock;
+    getPhaseDetails: jest.Mock;
   };
   let phaseReviewService: {
     handlePhaseOpenedForChallenge: jest.Mock;
+  };
+  let reviewAssignmentService: {
+    clearPolling: jest.Mock;
   };
   let reviewApiService: {
     createReviewOpportunity: jest.Mock;
@@ -37,6 +41,8 @@ describe('PhaseScheduleManager', () => {
   let reviewService: {
     getMarathonMatchReviewReadiness: jest.Mock;
     updatePendingReviewScorecards: jest.Mock;
+    getInProgressAiWorkflowRunCount: jest.Mock;
+    isInstantReviewEnabledForChallenge: jest.Mock;
   };
   let dbLogger: {
     logAction: jest.Mock;
@@ -67,10 +73,15 @@ describe('PhaseScheduleManager', () => {
 
     challengeApiService = {
       getChallengeById: jest.fn(),
+      getPhaseDetails: jest.fn(),
     };
 
     phaseReviewService = {
       handlePhaseOpenedForChallenge: jest.fn().mockResolvedValue(undefined),
+    };
+
+    reviewAssignmentService = {
+      clearPolling: jest.fn().mockResolvedValue(undefined),
     };
 
     reviewApiService = {
@@ -86,6 +97,8 @@ describe('PhaseScheduleManager', () => {
         finalScoreSubmissionCount: 0,
       }),
       updatePendingReviewScorecards: jest.fn().mockResolvedValue(0),
+      getInProgressAiWorkflowRunCount: jest.fn().mockResolvedValue(0),
+      isInstantReviewEnabledForChallenge: jest.fn().mockResolvedValue(true),
     };
 
     dbLogger = {
@@ -109,7 +122,7 @@ describe('PhaseScheduleManager', () => {
       schedulerService as unknown as SchedulerService,
       challengeApiService as unknown as ChallengeApiService,
       phaseReviewService as unknown as PhaseReviewService,
-      {} as unknown as ReviewAssignmentService,
+      reviewAssignmentService as unknown as ReviewAssignmentService,
       reviewService as unknown as ReviewService,
       reviewApiService as unknown as ReviewApiService,
       {
@@ -549,6 +562,108 @@ describe('PhaseScheduleManager', () => {
         challengeId: 'challenge-iterative',
         type: 'ITERATIVE_REVIEW',
       }),
+    );
+  });
+
+  it('opens AI Screening phases via SchedulerService advancePhase during phase chain to preserve AI phase open semantics', async () => {
+    const aiPhase = {
+      id: 'ai-screening-phase',
+      phaseId: 'ai-screening-template',
+      name: 'AI Screening',
+      isOpen: false,
+      scheduledStartDate: '2026-05-01T00:00:00.000Z',
+      scheduledEndDate: '2026-05-02T00:00:00.000Z',
+    };
+
+    challengeApiService.getPhaseDetails.mockResolvedValueOnce({
+      ...aiPhase,
+      isOpen: true,
+    });
+    challengeApiService.getChallengeById.mockResolvedValueOnce({
+      id: 'challenge-ai',
+      reviewers: [],
+    });
+    reviewService.getInProgressAiWorkflowRunCount.mockResolvedValueOnce(1);
+
+    await (service as unknown as { openPhaseAndSchedule: (
+      challengeId: string,
+      projectId: number,
+      projectStatus: string,
+      phase: unknown,
+    ) => Promise<boolean> }).openPhaseAndSchedule(
+      'challenge-ai',
+      1001,
+      'ACTIVE',
+      aiPhase,
+    );
+
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-ai',
+        phaseId: aiPhase.id,
+        phaseTypeName: aiPhase.name,
+        state: 'START',
+        operator: AutopilotOperator.SYSTEM_PHASE_CHAIN,
+        projectStatus: 'ACTIVE',
+      }),
+    );
+    expect(challengeApiService.getChallengeById).toHaveBeenCalledWith(
+      'challenge-ai',
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-ai',
+        phaseId: aiPhase.id,
+        state: 'END',
+      }),
+    );
+  });
+
+  it('preserves AI Screening open phase when instantReview is disabled and skips workflow auto-close', async () => {
+    const aiPhase = {
+      id: 'ai-screening-phase-disabled',
+      phaseId: 'ai-screening-template-disabled',
+      name: 'AI Screening',
+      isOpen: false,
+      scheduledStartDate: '2026-05-01T00:00:00.000Z',
+      scheduledEndDate: '2026-05-02T00:00:00.000Z',
+    };
+
+    challengeApiService.getPhaseDetails.mockResolvedValueOnce({
+      ...aiPhase,
+      isOpen: true,
+    });
+    challengeApiService.getChallengeById.mockResolvedValueOnce({
+      id: 'challenge-ai-disabled',
+      reviewers: [],
+    });
+    reviewService.isInstantReviewEnabledForChallenge.mockResolvedValueOnce(
+      false,
+    );
+
+    const opened = await (service as unknown as {
+      openPhaseAndSchedule: (
+        challengeId: string,
+        projectId: number,
+        projectStatus: string,
+        phase: unknown,
+      ) => Promise<boolean>;
+    }).openPhaseAndSchedule('challenge-ai-disabled', 1002, 'ACTIVE', aiPhase);
+
+    expect(opened).toBe(true);
+    expect(reviewService.isInstantReviewEnabledForChallenge).toHaveBeenCalledWith(
+      'challenge-ai-disabled',
+    );
+    expect(reviewService.getInProgressAiWorkflowRunCount).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).toHaveBeenCalledTimes(1);
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'START' }),
+    );
+    expect(schedulerService.advancePhase).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'END' }),
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'END' }),
     );
   });
 });

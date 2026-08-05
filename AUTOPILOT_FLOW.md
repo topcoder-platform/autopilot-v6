@@ -413,8 +413,9 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 - **Code**: `PhaseChangeNotificationService.sendPhaseChangeNotification`
 - **What it does**:
   - resolves opted-in resources
-  - resolves member emails
-  - sends an external email event with challenge URL, phase name, and timestamp
+  - resolves each member's email and profile location
+  - sends one external email event per member with the challenge URL, phase change, and a profile-localized timestamp
+  - defaults the timestamp to UTC when the member has no resolvable profile location
 
 ### Finance generation
 

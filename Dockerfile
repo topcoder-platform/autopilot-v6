@@ -12,7 +12,6 @@ FROM tooling AS deps
 COPY package.json ./
 COPY pnpm-lock.yaml ./
 COPY pnpm-workspace.yaml ./
-COPY patches ./patches
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
@@ -25,10 +24,8 @@ RUN pnpm build
 # ---- Production Dependencies Stage ----
 FROM tooling AS prod-deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY patches ./patches
 COPY prisma ./prisma
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
-  && pnpm dlx patch-package@8.0.0 \
   && pnpm dlx prisma@6.19.3 generate --schema prisma/challenge.schema.prisma
 
 # ---- Production Stage ----

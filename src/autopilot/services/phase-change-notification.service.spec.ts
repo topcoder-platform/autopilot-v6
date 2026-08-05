@@ -18,7 +18,6 @@ interface PublishedEmailPayload {
   from: string;
   replyTo: string;
   recipients: string[];
-  bcc: string[];
   sendgrid_template_id: string | null;
   version: string;
   data: {
@@ -28,6 +27,8 @@ interface PublishedEmailPayload {
     phaseOpenDate: string | null;
     phaseClose: string | null;
     phaseCloseDate: string | null;
+    localized_time: string;
+    phase_change: string;
   };
 }
 
@@ -170,13 +171,25 @@ describe('PhaseChangeNotificationService', () => {
       configService,
       dbLogger,
     );
+
+    auth0Service.getAccessToken.mockResolvedValue('token');
+    const response: AxiosResponse<Record<string, never>> = {
+      data: {},
+      status: 202,
+      statusText: 'Accepted',
+      headers: {},
+      config: {
+        headers: new AxiosHeaders(),
+      } as InternalAxiosRequestConfig,
+    };
+    httpService.post.mockReturnValue(of(response));
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('publishes phase change emails with opted-in members in bcc', async () => {
+  it('publishes one localized open event per unique opted-in member', async () => {
     resourcesService.getPhaseChangeNotificationResources.mockResolvedValue([
       {
         id: 'resource-1',
@@ -190,26 +203,42 @@ describe('PhaseChangeNotificationService', () => {
         memberHandle: 'second-member',
         roleName: 'Copilot',
       },
+      {
+        id: 'resource-3',
+        memberId: '1001',
+        memberHandle: 'first-member',
+        roleName: 'Copilot',
+      },
     ]);
     membersService.getMemberEmails.mockResolvedValue({
-      idToEmail: new Map([
-        ['1001', 'first@example.com'],
-        ['1002', 'second@example.com'],
+      idToMember: new Map([
+        [
+          '1001',
+          {
+            email: 'first@example.com',
+            city: 'Hobart',
+            homeCountryCode: 'AUS',
+            competitionCountryCode: 'AUS',
+          },
+        ],
+        [
+          '1002',
+          {
+            email: 'second@example.com',
+            city: null,
+            homeCountryCode: null,
+            competitionCountryCode: null,
+          },
+        ],
       ]),
-      handleToEmail: new Map(),
+      handleToMember: new Map(),
     });
-    challengeApiService.getChallengeById.mockResolvedValue(buildChallenge());
-    auth0Service.getAccessToken.mockResolvedValue('token');
-    const response: AxiosResponse<Record<string, never>> = {
-      data: {},
-      status: 202,
-      statusText: 'Accepted',
-      headers: {},
-      config: {
-        headers: new AxiosHeaders(),
-      } as InternalAxiosRequestConfig,
-    };
-    httpService.post.mockReturnValue(of(response));
+    challengeApiService.getChallengeById.mockResolvedValue(
+      buildChallenge({
+        name: 'Checkpoint Submission',
+        actualStartDate: '2026-07-29T03:35:00.000Z',
+      }),
+    );
 
     await service.sendPhaseChangeNotification({
       challengeId: 'challenge-1',
@@ -217,39 +246,123 @@ describe('PhaseChangeNotificationService', () => {
       operation: 'open',
     });
 
+    expect(httpService.post.mock.calls).toHaveLength(2);
+    expect(auth0Service.getAccessToken).toHaveBeenCalledTimes(1);
+
+    const publishedMessages = new Map(
+      httpService.post.mock.calls.map((call) => {
+        const [url, message, options] = call as [
+          string,
+          PublishedEmailMessage,
+          {
+            headers: {
+              Authorization: string;
+              'Content-Type': string;
+            };
+            timeout: number;
+          },
+        ];
+
+        expect(url).toBe('https://api.topcoder-dev.com/v6/bus/events');
+        expect(message.topic).toBe('external.action.email');
+        expect(message.payload.from).toBe('no-reply@topcoder.com');
+        expect(message.payload.replyTo).toBe('no-reply@topcoder.com');
+        expect(message.payload).not.toHaveProperty('bcc');
+        expect(message.payload.sendgrid_template_id).toBe(
+          'sendgrid-template-id',
+        );
+        expect(message.payload.version).toBe('v3');
+        expect(options.headers.Authorization).toBe('Bearer token');
+        expect(options.headers['Content-Type']).toBe('application/json');
+        expect(options.timeout).toBe(5000);
+
+        return [message.payload.recipients[0], message] as const;
+      }),
+    );
+
+    const hobartMessage = publishedMessages.get('first@example.com');
+    expect(hobartMessage?.payload.data).toEqual({
+      challengeName: 'Phase Change Challenge',
+      challengeURL:
+        'https://review.topcoder.com/active-challenges/challenge-1/challenge-details',
+      phaseOpen: 'Checkpoint Submission',
+      phaseOpenDate: 'July 29, 2026 13:35 AEST',
+      phaseClose: null,
+      phaseCloseDate: null,
+      localized_time: 'July 29, 2026 13:35 AEST',
+      phase_change: 'Checkpoint Submission Open',
+    });
+
+    const utcMessage = publishedMessages.get('second@example.com');
+    expect(utcMessage?.payload.data).toEqual({
+      challengeName: 'Phase Change Challenge',
+      challengeURL:
+        'https://review.topcoder.com/active-challenges/challenge-1/challenge-details',
+      phaseOpen: 'Checkpoint Submission',
+      phaseOpenDate: 'July 29, 2026 03:35 UTC',
+      phaseClose: null,
+      phaseCloseDate: null,
+      localized_time: 'July 29, 2026 03:35 UTC',
+      phase_change: 'Checkpoint Submission Open',
+    });
+  });
+
+  it('publishes a localized close using handle and profile country fallbacks', async () => {
+    resourcesService.getPhaseChangeNotificationResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '',
+        memberHandle: 'first-member',
+        roleName: 'Reviewer',
+      },
+    ]);
+    membersService.getMemberEmails.mockResolvedValue({
+      idToMember: new Map(),
+      handleToMember: new Map([
+        [
+          'first-member',
+          {
+            email: 'first@example.com',
+            city: 'Lindeman',
+            homeCountryCode: 'AUS',
+            competitionCountryCode: 'AUS',
+          },
+        ],
+      ]),
+    });
+    challengeApiService.getChallengeById.mockResolvedValue(
+      buildChallenge({
+        name: 'Checkpoint Submission',
+        isOpen: false,
+        actualEndDate: '2026-07-29T03:35:00.000Z',
+      }),
+    );
+
+    await service.sendPhaseChangeNotification({
+      challengeId: 'challenge-1',
+      phaseId: 'phase-1',
+      operation: 'close',
+    });
+
     expect(httpService.post.mock.calls).toHaveLength(1);
 
-    const [url, message, options] = httpService.post.mock.calls[0] as [
+    const [, message] = httpService.post.mock.calls[0] as [
       string,
       PublishedEmailMessage,
-      {
-        headers: {
-          Authorization: string;
-          'Content-Type': string;
-        };
-        timeout: number;
-      },
     ];
 
-    expect(url).toBe('https://api.topcoder-dev.com/v6/bus/events');
-    expect(message.topic).toBe('external.action.email');
-    expect(message.payload.from).toBe('no-reply@topcoder.com');
-    expect(message.payload.replyTo).toBe('no-reply@topcoder.com');
-    expect(message.payload.recipients).toEqual(['no-reply@topcoder.com']);
-    expect(message.payload.bcc).toEqual([
-      'first@example.com',
-      'second@example.com',
-    ]);
-    expect(message.payload.sendgrid_template_id).toBe('sendgrid-template-id');
-    expect(message.payload.version).toBe('v3');
-    expect(message.payload.data.challengeName).toBe('Phase Change Challenge');
-    expect(message.payload.data.challengeURL).toBe(
-      'https://review.topcoder.com/active-challenges/challenge-1/challenge-details',
-    );
-    expect(message.payload.data.phaseOpen).toBe('Review');
-    expect(message.payload.data.phaseClose).toBeNull();
-    expect(options.headers.Authorization).toBe('Bearer token');
-    expect(options.headers['Content-Type']).toBe('application/json');
-    expect(options.timeout).toBe(5000);
+    expect(message.payload.recipients).toEqual(['first@example.com']);
+    expect(message.payload).not.toHaveProperty('bcc');
+    expect(message.payload.data).toEqual({
+      challengeName: 'Phase Change Challenge',
+      challengeURL:
+        'https://review.topcoder.com/active-challenges/challenge-1/challenge-details',
+      phaseOpen: null,
+      phaseOpenDate: null,
+      phaseClose: 'Checkpoint Submission',
+      phaseCloseDate: 'July 29, 2026 13:35 AEST',
+      localized_time: 'July 29, 2026 13:35 AEST',
+      phase_change: 'Checkpoint Submission Closed',
+    });
   });
 });

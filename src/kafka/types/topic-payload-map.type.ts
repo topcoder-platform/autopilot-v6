@@ -24,6 +24,7 @@ export type TopicPayloadMap = {
   [KAFKA_TOPICS.REVIEW_COMPLETED]: ReviewCompletedPayload;
   [KAFKA_TOPICS.REVIEW_APPEAL_RESPONDED]: AppealRespondedPayload;
   [KAFKA_TOPICS.AI_WORKFLOW_COMPLETED]: AiWorkflowCompletedPayload;
+  [KAFKA_TOPICS.AI_PHASE_OPENED]: PhaseTransitionPayload;
   [KAFKA_TOPICS.FIRST2FINISH_SUBMISSION_RECEIVED]: First2FinishSubmissionPayload;
   [KAFKA_TOPICS.TOPGEAR_SUBMISSION_RECEIVED]: TopgearSubmissionPayload;
 };

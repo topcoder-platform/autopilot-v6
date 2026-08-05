@@ -8,9 +8,16 @@ export interface MemberEmailLookupInput {
   handles?: string[];
 }
 
+export interface MemberEmailProfile {
+  email: string;
+  city: string | null;
+  homeCountryCode: string | null;
+  competitionCountryCode: string | null;
+}
+
 export interface MemberEmailLookupResult {
-  idToEmail: Map<string, string>;
-  handleToEmail: Map<string, string>;
+  idToMember: Map<string, MemberEmailProfile>;
+  handleToMember: Map<string, MemberEmailProfile>;
 }
 
 @Injectable()
@@ -20,6 +27,14 @@ export class MembersService {
     private readonly dbLogger: AutopilotDbLoggerService,
   ) {}
 
+  /**
+   * Resolves member email addresses and the city from each member's first saved
+   * profile address for individualized phase-change notifications.
+   *
+   * @param params Member IDs and handles that identify notification recipients.
+   * @returns Member details keyed by normalized user ID and handle.
+   * @throws The members database error when recipient details cannot be loaded.
+   */
   async getMemberEmails(
     params: MemberEmailLookupInput,
   ): Promise<MemberEmailLookupResult> {
@@ -44,8 +59,8 @@ export class MembersService {
       ),
     );
 
-    const idToEmail = new Map<string, string>();
-    const handleToEmail = new Map<string, string>();
+    const idToMember = new Map<string, MemberEmailProfile>();
+    const handleToMember = new Map<string, MemberEmailProfile>();
 
     if (!memberIds.length && !handles.length) {
       void this.dbLogger.logAction('members.getMemberEmails', {
@@ -60,7 +75,7 @@ export class MembersService {
         },
       });
 
-      return { idToEmail, handleToEmail };
+      return { idToMember, handleToMember };
     }
 
     try {
@@ -70,12 +85,29 @@ export class MembersService {
         );
 
         const rows = await this.prisma.$queryRaw<
-          Array<{ userId: bigint; email: string | null }>
+          Array<{
+            userId: bigint;
+            email: string | null;
+            city: string | null;
+            homeCountryCode: string | null;
+            competitionCountryCode: string | null;
+          }>
         >(
           Prisma.sql`
-            SELECT "userId", "email"
-            FROM "member"
-            WHERE "userId" IN (${idList})
+            SELECT
+              m."userId",
+              m."email",
+              m."homeCountryCode",
+              m."competitionCountryCode",
+              (
+                SELECT a."city"
+                FROM "memberAddress" a
+                WHERE a."userId" = m."userId"
+                ORDER BY a."id" ASC
+                LIMIT 1
+              ) AS "city"
+            FROM "member" m
+            WHERE m."userId" IN (${idList})
           `,
         );
 
@@ -83,7 +115,12 @@ export class MembersService {
           if (!row.userId || !row.email) {
             continue;
           }
-          idToEmail.set(row.userId.toString(), row.email.trim());
+          idToMember.set(row.userId.toString(), {
+            email: row.email.trim(),
+            city: row.city?.trim() || null,
+            homeCountryCode: row.homeCountryCode?.trim() || null,
+            competitionCountryCode: row.competitionCountryCode?.trim() || null,
+          });
         }
       }
 
@@ -93,12 +130,29 @@ export class MembersService {
         );
 
         const rows = await this.prisma.$queryRaw<
-          Array<{ handleLower: string; email: string | null }>
+          Array<{
+            handleLower: string;
+            email: string | null;
+            city: string | null;
+            homeCountryCode: string | null;
+            competitionCountryCode: string | null;
+          }>
         >(
           Prisma.sql`
-            SELECT "handleLower", "email"
-            FROM "member"
-            WHERE "handleLower" IN (${handleList})
+            SELECT
+              m."handleLower",
+              m."email",
+              m."homeCountryCode",
+              m."competitionCountryCode",
+              (
+                SELECT a."city"
+                FROM "memberAddress" a
+                WHERE a."userId" = m."userId"
+                ORDER BY a."id" ASC
+                LIMIT 1
+              ) AS "city"
+            FROM "member" m
+            WHERE m."handleLower" IN (${handleList})
           `,
         );
 
@@ -106,7 +160,12 @@ export class MembersService {
           if (!row.handleLower || !row.email) {
             continue;
           }
-          handleToEmail.set(row.handleLower.trim(), row.email.trim());
+          handleToMember.set(row.handleLower.trim(), {
+            email: row.email.trim(),
+            city: row.city?.trim() || null,
+            homeCountryCode: row.homeCountryCode?.trim() || null,
+            competitionCountryCode: row.competitionCountryCode?.trim() || null,
+          });
         }
       }
 
@@ -118,12 +177,12 @@ export class MembersService {
           inputHandles: handleCandidates.length,
           resolvedIds: memberIds.length,
           resolvedHandles: handles.length,
-          matchedIds: idToEmail.size,
-          matchedHandles: handleToEmail.size,
+          matchedIds: idToMember.size,
+          matchedHandles: handleToMember.size,
         },
       });
 
-      return { idToEmail, handleToEmail };
+      return { idToMember, handleToMember };
     } catch (error) {
       const err = error as Error;
       void this.dbLogger.logAction('members.getMemberEmails', {

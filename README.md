@@ -11,16 +11,12 @@ autopilot operations with Kafka integration.
 - **Health Checks**: Provides endpoints to monitor application and Kafka connection health.
 - **Structured Logging**: Uses Winston for detailed and configurable logging.
 
-## Prerequisites
-
-- Node.js (v18 or higher)
-- Docker and Docker Compose
-
 ## Installation
 
 ### 1. Prerequisites
 
-- Node.js v20 or higher
+- Node.js 22.22 or newer in the Node 22 line (the repository uses 22.23.1),
+  or Node.js 24.6 or newer
 - Docker and Docker Compose
 
 ### 2. Environment Setup
@@ -50,6 +46,15 @@ Open the `.env` file and configure the variables for your environment. It is cru
    # -------------------------------------
    KAFKA_BROKERS=localhost:9092
    KAFKA_CLIENT_ID=autopilot-service
+   KAFKA_CONNECTION_TIMEOUT=10000
+   KAFKA_REQUEST_TIMEOUT=30000
+   KAFKA_BROKER_TIMEOUT=5000
+   KAFKA_SESSION_TIMEOUT=60000
+   KAFKA_HEARTBEAT_INTERVAL=3000
+   KAFKA_MAX_WAIT_TIME=5000
+   KAFKA_INITIAL_RETRY_TIME=300
+   KAFKA_MAX_RETRY_TIME=30000
+   KAFKA_RETRIES=5
 
   # -------------------------------------
   # Challenge Database Configuration
@@ -120,6 +125,20 @@ This will start:
 - Zookeeper (port 2181)
 - Kafka (ports 9092, 29092)
 - Kafka UI (port 8080)
+
+### Kafka client and recovery
+
+- Broker access uses exact `@platformatic/kafka` 2.8.0.
+- The aggregate Fetch cap remains 5 MiB rather than adopting the 50 MiB
+  Platformatic 2.x default.
+- Consumer and producer client errors, stream errors, and offset commit
+  failures update Kafka health to `reconnecting` and rebuild the shared
+  producer plus every configured consumer group.
+- Reconnect attempts use bounded jitter. Successful replacement clients return
+  health to `ready`; exhausted attempts expose the last error as `failed`.
+- `KAFKA_REQUEST_TIMEOUT` must exceed both `KAFKA_BROKER_TIMEOUT` and
+  `KAFKA_MAX_WAIT_TIME`. `KAFKA_HEARTBEAT_INTERVAL` plus
+  `KAFKA_REQUEST_TIMEOUT` must be less than `KAFKA_SESSION_TIMEOUT`.
 
 2. Verify Docker containers are healthy:
 ```bash
