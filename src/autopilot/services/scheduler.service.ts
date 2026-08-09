@@ -590,7 +590,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         REVIEW_PHASE_NAMES.has(phaseName) ||
         REVIEW_PHASE_NAMES.has(data.phaseTypeName);
 
-      if (operation === 'open' && isReviewPhase) {
+      if (operation === 'open' && (isReviewPhase || isScreeningPhase)) {
         const canOpenNow =
           await this.reviewAssignmentService.ensureAssignmentsOrSchedule(
             data.challengeId,

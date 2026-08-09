@@ -9,12 +9,13 @@ import {
 } from '../../challenge/interfaces/challenge.interface';
 import {
   REVIEW_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
   getRoleNamesForPhase,
 } from '../constants/review.constants';
 import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import {
   getMemberReviewerConfigs,
-  getRequiredReviewerCountForPhase,
+  getReviewerConfigsForPhase,
 } from '../utils/reviewer.utils';
 
 interface PhaseSummary {
@@ -64,7 +65,10 @@ export class ReviewAssignmentService {
     phase: IPhase,
     openPhaseCallback: () => Promise<boolean>,
   ): Promise<boolean> {
-    if (!REVIEW_PHASE_NAMES.has(phase.name)) {
+    if (
+      !REVIEW_PHASE_NAMES.has(phase.name) &&
+      !SCREENING_PHASE_NAMES.has(phase.name)
+    ) {
       return true;
     }
 
@@ -259,10 +263,10 @@ export class ReviewAssignmentService {
       };
     }
 
-    const reviewerConfigs = getMemberReviewerConfigs(
-      challenge.reviewers,
-      phaseDetails.phaseId,
-    );
+    const isScreeningPhase = SCREENING_PHASE_NAMES.has(phaseDetails.name);
+    const reviewerConfigs = isScreeningPhase
+      ? getReviewerConfigsForPhase(challenge.reviewers, phaseDetails.phaseId)
+      : getMemberReviewerConfigs(challenge.reviewers, phaseDetails.phaseId);
 
     if (reviewerConfigs.length === 0) {
       return {
@@ -274,9 +278,9 @@ export class ReviewAssignmentService {
       };
     }
 
-    const required = getRequiredReviewerCountForPhase(
-      challenge.reviewers,
-      phaseDetails.phaseId,
+    const required = reviewerConfigs.reduce(
+      (total, config) => total + Math.max(config.memberReviewerCount ?? 1, 0),
+      0,
     );
 
     if (required === 0) {
