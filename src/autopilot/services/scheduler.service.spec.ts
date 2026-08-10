@@ -514,6 +514,35 @@ describe('SchedulerService (review phase deferral)', () => {
     expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
   });
 
+  it('defers opening screening phases when a screener is not assigned', async () => {
+    const payload = createPayload({
+      state: 'START',
+      phaseTypeName: 'Screening',
+    });
+    const phaseDetails = createPhase({
+      id: payload.phaseId,
+      phaseId: payload.phaseId,
+      name: 'Screening',
+      isOpen: false,
+    });
+
+    challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
+    reviewAssignmentService.ensureAssignmentsOrSchedule.mockResolvedValue(
+      false,
+    );
+
+    await scheduler.advancePhase(payload);
+
+    expect(
+      reviewAssignmentService.ensureAssignmentsOrSchedule,
+    ).toHaveBeenCalledWith(
+      payload.challengeId,
+      phaseDetails,
+      expect.any(Function),
+    );
+    expect(challengeApiService.advancePhase).not.toHaveBeenCalled();
+  });
+
   it('repairs iterative assignment when iterative review opens', async () => {
     const payload = createPayload({
       state: 'START',

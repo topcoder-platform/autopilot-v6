@@ -144,4 +144,42 @@ describe('ReviewAssignmentService', () => {
     expect(addIntervalMock).toHaveBeenCalledTimes(1);
     expect(openPhaseCallback).not.toHaveBeenCalled();
   });
+
+  it('polls screening phases until a screener is assigned', async () => {
+    const phase = createPhase({
+      id: 'screening-phase-instance',
+      phaseId: 'screening-phase-template',
+      name: 'Screening',
+    });
+    const challenge = createChallenge({
+      phases: [phase],
+      reviewers: [
+        createReviewer({
+          isMemberReview: false,
+          phaseId: phase.phaseId,
+        }),
+      ],
+    });
+    const openPhaseCallback = jest.fn().mockResolvedValue(true);
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    getReviewerResourcesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{}]);
+
+    const canOpen = await service.ensureAssignmentsOrSchedule(
+      challenge.id,
+      phase,
+      openPhaseCallback,
+    );
+
+    expect(canOpen).toBe(false);
+    expect(getReviewerResourcesMock).toHaveBeenCalledWith(challenge.id, [
+      'Screener',
+    ]);
+    expect(addIntervalMock).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(openPhaseCallback).toHaveBeenCalledTimes(1);
+  });
 });
