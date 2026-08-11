@@ -186,6 +186,127 @@ export function challengeAllowsUnlimitedSubmissions(
 }
 
 /**
+ * Resolve the number of submissions per member that screening and review
+ * should consider for a challenge.
+ * @param challenge Challenge snapshot containing its track and submission-limit metadata.
+ * @param warn Optional callback used when Design metadata is malformed or contradictory.
+ * @returns A positive per-member limit, or `null` for unlimited Design submissions.
+ * Development and other non-Design tracks always return one.
+ * @throws Never. Malformed explicit Design metadata safely falls back to one.
+ */
+export function resolveReviewSubmissionLimit(
+  challenge: Pick<IChallenge, 'id' | 'metadata' | 'track'>,
+  warn?: (message: string) => void,
+): number | null {
+  if ((challenge.track ?? '').trim().toLowerCase() !== 'design') {
+    return 1;
+  }
+
+  const rawValue = challenge.metadata?.['submissionLimit'];
+  if (rawValue == null) {
+    return null;
+  }
+
+  const fallbackToLatest = (value: unknown): number => {
+    warn?.(
+      `Unrecognized submissionLimit metadata value ${describeSubmissionLimitValue(
+        value,
+      )} for Design challenge ${challenge.id}; defaulting to the latest submission.`,
+    );
+    return 1;
+  };
+
+  let parsed: unknown = rawValue;
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return fallbackToLatest(rawValue);
+    }
+
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      parsed = trimmed;
+    }
+  }
+
+  const primitiveLimit = parsePositiveInteger(parsed);
+  if (primitiveLimit !== null) {
+    return primitiveLimit;
+  }
+
+  if (typeof parsed === 'number' && parsed === 0) {
+    return null;
+  }
+
+  if (typeof parsed === 'boolean') {
+    return parsed ? fallbackToLatest(parsed) : null;
+  }
+
+  if (typeof parsed === 'string') {
+    const normalized = parsed.trim().toLowerCase();
+    if (['unlimited', 'false', '0', 'no', 'none'].includes(normalized)) {
+      return null;
+    }
+
+    return fallbackToLatest(parsed);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return fallbackToLatest(parsed);
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const unlimited = parseMetadataBoolean(record.unlimited);
+  const limit = parseMetadataBoolean(record.limit);
+  const countValue = [
+    record.count,
+    record.max,
+    record.maximum,
+    record.limitCount,
+    record.value,
+  ].find(
+    (candidate) =>
+      candidate !== undefined && candidate !== null && candidate !== '',
+  );
+  const count = parsePositiveInteger(countValue);
+
+  const flagsConflict =
+    unlimited !== null && limit !== null && unlimited === limit;
+
+  if (flagsConflict) {
+    return fallbackToLatest(record);
+  }
+
+  if (unlimited === true || limit === false) {
+    return null;
+  }
+
+  if (count !== null) {
+    return count;
+  }
+
+  return fallbackToLatest(record);
+}
+
+/**
+ * Parse metadata input as a positive integer submission limit.
+ * @param value Candidate metadata value.
+ * @returns The positive integer, or `null` when the value is not valid.
+ * @throws Never.
+ */
+function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  return Number.isSafeInteger(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
+}
+
+/**
  * Format raw submission-limit metadata for warnings.
  * @param value Metadata value to describe.
  * @returns Human-readable representation for log output.

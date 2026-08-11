@@ -56,6 +56,9 @@ type ReviewServiceMock = {
     ReviewService['getPendingAiDecisionsEscalationsCount']
   >;
   getTotalAppealCount: MockedMethod<ReviewService['getTotalAppealCount']>;
+  getActiveContestSubmissions: MockedMethod<
+    ReviewService['getActiveContestSubmissions']
+  >;
   getActiveContestSubmissionIds: MockedMethod<
     ReviewService['getActiveContestSubmissionIds']
   >;
@@ -222,6 +225,8 @@ describe('SchedulerService (review phase deferral)', () => {
         >(),
       getTotalAppealCount:
         createMockMethod<ReviewService['getTotalAppealCount']>(),
+      getActiveContestSubmissions:
+        createMockMethod<ReviewService['getActiveContestSubmissions']>(),
       getActiveContestSubmissionIds:
         createMockMethod<ReviewService['getActiveContestSubmissionIds']>(),
       getFailedScreeningSubmissionIds:
@@ -246,6 +251,7 @@ describe('SchedulerService (review phase deferral)', () => {
       finalScoreSubmissionCount: 0,
     });
     reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
+    reviewService.getActiveContestSubmissions.mockResolvedValue([]);
     reviewService.getActiveContestSubmissionIds.mockResolvedValue([]);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
@@ -1307,9 +1313,9 @@ describe('SchedulerService (review phase deferral)', () => {
 
     await scheduler.advancePhase(payload);
 
-    expect(reviewService.isInstantReviewEnabledForChallenge).toHaveBeenCalledWith(
-      payload.challengeId,
-    );
+    expect(
+      reviewService.isInstantReviewEnabledForChallenge,
+    ).toHaveBeenCalledWith(payload.challengeId);
     expect(challengeApiService.advancePhase).toHaveBeenCalledWith(
       payload.challengeId,
       payload.phaseId,
@@ -1753,7 +1759,7 @@ describe('SchedulerService (review phase deferral)', () => {
     );
   });
 
-  it('cancels challenge as failed screening when all active submissions fail screening', async () => {
+  it('cancels a limited Design challenge when all latest eligible submissions fail screening', async () => {
     const payload = createPayload({
       phaseId: 'screening-phase',
       phaseTypeName: 'Screening',
@@ -1768,12 +1774,28 @@ describe('SchedulerService (review phase deferral)', () => {
 
     challengeApiService.getPhaseDetails.mockResolvedValue(phaseDetails);
     reviewService.getPendingReviewCount.mockResolvedValue(0);
-    reviewService.getActiveContestSubmissionIds.mockResolvedValue([
-      'submission-1',
-      'submission-2',
+    reviewService.getActiveContestSubmissions.mockResolvedValue([
+      {
+        id: 'oldest-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 3,
+      },
+      {
+        id: 'second-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ]);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
-      new Set(['submission-1', 'submission-2']),
+      new Set(['oldest-submission', 'second-submission', 'latest-submission']),
     );
     reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
 
@@ -1781,6 +1803,14 @@ describe('SchedulerService (review phase deferral)', () => {
       id: payload.challengeId,
       phases: [],
       reviewers: [],
+      track: 'Design',
+      metadata: {
+        submissionLimit: JSON.stringify({
+          unlimited: 'false',
+          limit: 'true',
+          count: '2',
+        }),
+      },
       legacy: { screeningScorecardId: 'screening-scorecard' },
     } as unknown as IChallenge;
     challengeApiService.getChallengeById.mockResolvedValue(challenge);

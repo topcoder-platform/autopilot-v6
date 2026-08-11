@@ -55,6 +55,8 @@ import {
   getReviewerConfigsForPhase,
 } from '../utils/reviewer.utils';
 import { First2FinishService } from './first2finish.service';
+import { resolveReviewSubmissionLimit } from '../utils/challenge-metadata.utils';
+import { selectSubmissionIdsWithinLimit } from '../utils/submission-selection.utils';
 
 const PHASE_QUEUE_NAME = 'autopilot-phase-transitions';
 const PHASE_QUEUE_PREFIX = '{autopilot-phase-transitions}';
@@ -2023,10 +2025,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       const screeningScorecardIds = this.getScreeningScorecardIds(challenge);
 
-      const activeSubmissionIds =
-        await this.reviewService.getActiveContestSubmissionIds(
-          data.challengeId,
-        );
+      const activeSubmissions =
+        await this.reviewService.getActiveContestSubmissions(data.challengeId);
+      const maxSubmissionsPerMember = resolveReviewSubmissionLimit(
+        challenge,
+        (message) => this.logger.warn(message),
+      );
+      const activeSubmissionIds = selectSubmissionIdsWithinLimit(
+        activeSubmissions,
+        maxSubmissionsPerMember,
+      );
 
       if (activeSubmissionIds.length === 0) {
         return false;
@@ -2057,11 +2065,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         return false;
       }
 
-      for (const passedSubmissionId of passedSubmissionIds) {
-        failedSubmissionIds.delete(passedSubmissionId);
-      }
+      const failedActiveSubmissionCount = activeSubmissionIds.filter(
+        (submissionId) => failedSubmissionIds.has(submissionId),
+      ).length;
 
-      if (failedSubmissionIds.size !== activeSubmissionIdSet.size) {
+      if (failedActiveSubmissionCount !== activeSubmissionIdSet.size) {
         return false;
       }
 

@@ -31,7 +31,8 @@ import { ChallengeCompletionService } from './challenge-completion.service';
 import { AutopilotDbLoggerService } from './autopilot-db-logger.service';
 import { ReviewSummationApiService } from './review-summation-api.service';
 import { MarathonMatchReviewService } from '../../marathon-match/marathon-match-review.service';
-import { challengeAllowsUnlimitedSubmissions } from '../utils/challenge-metadata.utils';
+import { resolveReviewSubmissionLimit } from '../utils/challenge-metadata.utils';
+import { selectSubmissionIdsWithinLimit } from '../utils/submission-selection.utils';
 
 @Injectable()
 export class PhaseReviewService {
@@ -78,7 +79,7 @@ export class PhaseReviewService {
       return;
     }
 
-    const allowUnlimitedSubmissions = challengeAllowsUnlimitedSubmissions(
+    const maxSubmissionsPerMember = resolveReviewSubmissionLimit(
       challenge,
       (message) => this.logger.warn(message),
     );
@@ -383,7 +384,7 @@ export class PhaseReviewService {
         challengeId,
         phase.id,
         activeCheckpointSubmissions,
-        allowUnlimitedSubmissions,
+        maxSubmissionsPerMember,
       );
     } else if (phase.name === 'Checkpoint Review') {
       const screeningPhase = (challenge.phases ?? []).find(
@@ -436,7 +437,7 @@ export class PhaseReviewService {
             challengeId,
             phase.id,
             activeCheckpointSubmissions,
-            allowUnlimitedSubmissions,
+            maxSubmissionsPerMember,
           );
 
         const checkpointPassedSubmissionIds =
@@ -466,7 +467,7 @@ export class PhaseReviewService {
         challengeId,
         phase.id,
         activeSubmissions,
-        allowUnlimitedSubmissions,
+        maxSubmissionsPerMember,
       );
     }
 
@@ -492,13 +493,13 @@ export class PhaseReviewService {
       (isApprovalPhase || (isReviewPhase && phase.name !== 'Checkpoint Review'))
     ) {
       const beforeScreeningFilter = submissionIds.length;
-      submissionIds = await this.excludeFailedScreeningSubmissions(
+      submissionIds = await this.retainPassedScreeningSubmissions(
         challenge,
         submissionIds,
       );
       if (beforeScreeningFilter !== submissionIds.length) {
         this.logger.debug(
-          `Submission filtering: Failed screening removed ${beforeScreeningFilter - submissionIds.length} submission(s) (remaining: ${submissionIds.length})`,
+          `Submission filtering: Screening eligibility removed ${beforeScreeningFilter - submissionIds.length} submission(s) (remaining: ${submissionIds.length})`,
         );
       }
     }
@@ -653,7 +654,16 @@ export class PhaseReviewService {
     );
   }
 
-  private async excludeFailedScreeningSubmissions(
+  /**
+   * Keep only submissions with a completed passing standard Screening review.
+   * @param challenge Challenge containing Screening reviewer configuration.
+   * @param submissionIds Candidate contest submission IDs for the next phase.
+   * @returns Candidate IDs that passed Screening, the original IDs when the
+   * challenge has no standard Screening phase, or none when Screening exists
+   * without a resolvable scorecard.
+   * @throws Error when passing Screening results cannot be loaded.
+   */
+  private async retainPassedScreeningSubmissions(
     challenge: IChallenge,
     submissionIds: string[],
   ): Promise<string[]> {
@@ -661,40 +671,35 @@ export class PhaseReviewService {
       return submissionIds;
     }
 
+    const hasScreeningPhase = (challenge.phases ?? []).some(
+      (phase) => phase.name === 'Screening',
+    );
+    if (!hasScreeningPhase) {
+      return submissionIds;
+    }
+
     const screeningScorecardIds = this.getScreeningScorecardIds(challenge);
     if (!screeningScorecardIds.length) {
-      return submissionIds;
-    }
-
-    try {
-      const failedIds =
-        await this.reviewService.getFailedScreeningSubmissionIds(
-          challenge.id,
-          screeningScorecardIds,
-        );
-
-      if (!failedIds.size) {
-        return submissionIds;
-      }
-
-      const filtered = submissionIds.filter((id) => !failedIds.has(id));
-      const removedCount = submissionIds.length - filtered.length;
-
-      if (removedCount > 0) {
-        this.logger.log(
-          `Excluded ${removedCount} submission(s) for challenge ${challenge.id} due to failed screening.`,
-        );
-      }
-
-      return filtered;
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `Failed to filter screened submissions for challenge ${challenge.id}: ${err.message}`,
-        err.stack,
+      this.logger.warn(
+        `Standard Screening exists for challenge ${challenge.id}, but no Screening scorecard could be resolved; excluding all submissions from the next phase.`,
       );
-      return submissionIds;
+      return [];
     }
+
+    const passedIds = await this.reviewService.getPassedScreeningSubmissionIds(
+      challenge.id,
+      screeningScorecardIds,
+    );
+    const filtered = submissionIds.filter((id) => passedIds.has(id));
+    const removedCount = submissionIds.length - filtered.length;
+
+    if (removedCount > 0) {
+      this.logger.log(
+        `Excluded ${removedCount} submission(s) for challenge ${challenge.id} because they did not have a completed passing Screening review.`,
+      );
+    }
+
+    return filtered;
   }
 
   private async excludeAiFailedReviewSubmissions(
@@ -808,44 +813,46 @@ export class PhaseReviewService {
     return sorted[0] ?? null;
   }
 
+  /**
+   * Select ranked submissions that are eligible for pending reviews.
+   * @param challengeId Challenge identifier used in diagnostic logging.
+   * @param phaseId Review or Screening phase identifier used in logging.
+   * @param submissions Active submissions ranked newest-first per member and type.
+   * @param maxSubmissionsPerMember Positive per-member cap, or `null` for unlimited.
+   * @returns Unique eligible submission IDs.
+   * @throws Never.
+   */
   private selectSubmissionIdsForPendingReviews(
     challengeId: string,
     phaseId: string,
     submissions: ActiveContestSubmission[],
-    allowUnlimitedSubmissions: boolean,
+    maxSubmissionsPerMember: number | null,
   ): string[] {
-    const filteredSubmissions = allowUnlimitedSubmissions
-      ? submissions
-      : this.selectLatestSubmissions(submissions);
+    const submissionIds = selectSubmissionIdsWithinLimit(
+      submissions,
+      maxSubmissionsPerMember,
+    );
 
     if (
-      !allowUnlimitedSubmissions &&
-      !filteredSubmissions.length &&
+      maxSubmissionsPerMember !== null &&
+      !submissionIds.length &&
       submissions.length
     ) {
       this.logger.warn(
-        `No latest submissions found for challenge ${challengeId} in phase ${phaseId}; skipping review creation because only the latest submission per member is reviewed when a submission limit is enforced.`,
+        `No ranked submissions within the per-member limit were found for challenge ${challengeId} in phase ${phaseId}; skipping review creation.`,
       );
     }
 
-    if (!allowUnlimitedSubmissions) {
-      const skipped = submissions.length - filteredSubmissions.length;
-      if (skipped > 0 && filteredSubmissions.length > 0) {
+    if (maxSubmissionsPerMember !== null) {
+      const skipped = submissions.length - submissionIds.length;
+      if (skipped > 0 && submissionIds.length > 0) {
         this.logger.log(
-          `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phaseId} because only the latest submissions are reviewed when the submission limit is enforced.`,
+          `Skipping ${skipped} older submission(s) for challenge ${challengeId} in phase ${phaseId}; considering the latest ${maxSubmissionsPerMember} submission(s) per member.`,
         );
       }
     }
 
-    return Array.from(
-      new Set(
-        filteredSubmissions
-          .map((submission) => submission.id)
-          .filter((submissionId): submissionId is string =>
-            Boolean(submissionId),
-          ),
-      ),
-    );
+    return submissionIds;
   }
 
   private async pruneStalePendingReviews(
@@ -879,32 +886,5 @@ export class PhaseReviewService {
       );
       throw err;
     }
-  }
-
-  private selectLatestSubmissions(
-    submissions: ActiveContestSubmission[],
-  ): ActiveContestSubmission[] {
-    if (!submissions.length) {
-      return [];
-    }
-
-    const selected: ActiveContestSubmission[] = [];
-    const addedKeys = new Set<string>();
-
-    for (const submission of submissions) {
-      if (!submission.isLatest) {
-        continue;
-      }
-
-      const key = submission.memberId ?? submission.id;
-      if (addedKeys.has(key)) {
-        continue;
-      }
-
-      selected.push(submission);
-      addedKeys.add(key);
-    }
-
-    return selected;
   }
 }
