@@ -282,9 +282,24 @@ describe('MarathonMatchReviewService', () => {
 
   it('creates and dispatches system reviews for latest active submissions', async () => {
     const submissions: ActiveContestSubmission[] = [
-      { id: 'old-submission', memberId: 'member-1', isLatest: false },
-      { id: 'latest-submission', memberId: 'member-1', isLatest: true },
-      { id: 'anonymous-submission', memberId: null, isLatest: true },
+      {
+        id: 'old-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'anonymous-submission',
+        memberId: null,
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
     reviewService.getActiveContestSubmissions.mockResolvedValueOnce(
       submissions,

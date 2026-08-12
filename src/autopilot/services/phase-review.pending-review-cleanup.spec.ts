@@ -114,6 +114,7 @@ describe('PhaseReviewService pending review cleanup', () => {
     deleteStalePendingSubmissionReviews: jest.Mock;
     deletePendingReviewsExceptSubmissions: jest.Mock;
     getFailedScreeningSubmissionIds: jest.Mock;
+    getPassedScreeningSubmissionIds: jest.Mock;
     getAiFailedDecisionSubmissionIds: jest.Mock;
     markSubmissionsAsAiFailedReview: jest.Mock;
     generateReviewSummaries: jest.Mock;
@@ -154,6 +155,8 @@ describe('PhaseReviewService pending review cleanup', () => {
         >(),
       getFailedScreeningSubmissionIds:
         createMockMethod<ReviewService['getFailedScreeningSubmissionIds']>(),
+      getPassedScreeningSubmissionIds:
+        createMockMethod<ReviewService['getPassedScreeningSubmissionIds']>(),
       getAiFailedDecisionSubmissionIds:
         createMockMethod<ReviewService['getAiFailedDecisionSubmissionIds']>(),
       markSubmissionsAsAiFailedReview:
@@ -177,6 +180,7 @@ describe('PhaseReviewService pending review cleanup', () => {
     reviewService.deleteStalePendingSubmissionReviews.mockResolvedValue(0);
     reviewService.deletePendingReviewsExceptSubmissions.mockResolvedValue(1);
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
@@ -213,8 +217,18 @@ describe('PhaseReviewService pending review cleanup', () => {
   it('prunes stale pending reviews for limited standard review phases', async () => {
     const challenge = buildChallenge(baseReviewPhase);
     const submissions: ActiveContestSubmission[] = [
-      { id: 'old-submission', memberId: 'member-1', isLatest: false },
-      { id: 'latest-submission', memberId: 'member-1', isLatest: true },
+      {
+        id: 'old-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
@@ -246,9 +260,20 @@ describe('PhaseReviewService pending review cleanup', () => {
         count: '',
       }),
     });
+    challenge.track = 'Design';
     const submissions: ActiveContestSubmission[] = [
-      { id: 'first-submission', memberId: 'member-1', isLatest: false },
-      { id: 'second-submission', memberId: 'member-1', isLatest: true },
+      {
+        id: 'first-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'second-submission',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
@@ -276,6 +301,59 @@ describe('PhaseReviewService pending review cleanup', () => {
       'first-submission',
       'second-submission',
     ]);
+  });
+
+  it('keeps the latest configured number while pruning older Design submissions', async () => {
+    const challenge = buildChallenge(baseReviewPhase, undefined, {
+      submissionLimit: JSON.stringify({
+        unlimited: 'false',
+        limit: 'true',
+        count: '2',
+      }),
+    });
+    challenge.track = 'Design';
+    const submissions: ActiveContestSubmission[] = [
+      {
+        id: 'oldest-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 3,
+      },
+      {
+        id: 'second-submission',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
+    ];
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+      submissions,
+    );
+
+    await service.handlePhaseOpened(challenge.id, baseReviewPhase.id);
+
+    expect(
+      reviewService.deletePendingReviewsExceptSubmissions.mock.calls,
+    ).toEqual([
+      [
+        challenge.id,
+        baseReviewPhase.id,
+        ['second-submission', 'latest-submission'],
+      ],
+    ]);
+    expect(
+      reviewService.createPendingReview.mock.calls.map(
+        (call: [string, ...unknown[]]) => call[0],
+      ),
+    ).toEqual(['second-submission', 'latest-submission']);
   });
 
   it('prunes stale pending reviews for checkpoint review phases', async () => {
@@ -326,8 +404,18 @@ describe('PhaseReviewService pending review cleanup', () => {
     );
 
     const checkpointSubmissions: ActiveContestSubmission[] = [
-      { id: 'old-checkpoint', memberId: 'member-1', isLatest: false },
-      { id: 'latest-checkpoint', memberId: 'member-1', isLatest: true },
+      {
+        id: 'old-checkpoint',
+        memberId: 'member-1',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-checkpoint',
+        memberId: 'member-1',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     resourcesService.getReviewerResources.mockResolvedValueOnce([

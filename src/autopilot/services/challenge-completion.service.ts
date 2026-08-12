@@ -24,9 +24,9 @@ import { MarathonMatchApiService } from '../../marathon-match/marathon-match-api
 import { MemberApiService } from '../../member-api/member-api.service';
 import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import {
-  challengeAllowsUnlimitedSubmissions,
   isRatedChallenge,
   parseMetadataBoolean,
+  resolveReviewSubmissionLimit,
 } from '../utils/challenge-metadata.utils';
 import {
   buildChallengePointAwards,
@@ -143,16 +143,20 @@ export class ChallengeCompletionService {
     try {
       const createdAt = this.resolveChallengeResultCreatedAt(challenge);
       const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
+      const maxSubmissionsPerMember = resolveReviewSubmissionLimit(
+        challenge,
+        (message) => this.logger.warn(message),
+      );
+      const allowMultipleReviewedSubmissions =
+        maxSubmissionsPerMember === null || maxSubmissionsPerMember > 1;
       await this.reviewService.syncChallengeResultsForChallenge(challengeId, {
         placementWinners: placementWinners.map((winner) => ({
           userId: winner.userId,
           placement: winner.placement,
         })),
         ignorePassingScore: isMarathonMatch,
-        allowUnlimitedSubmissions: challengeAllowsUnlimitedSubmissions(
-          challenge,
-          (message) => this.logger.warn(message),
-        ),
+        allowUnlimitedSubmissions: allowMultipleReviewedSubmissions,
+        maxSubmissionsPerMember,
         rankAllSubmissions: isMarathonMatch,
         ratedChallenge: this.isRatedChallengeResult(challenge),
         actor: 'autopilot',

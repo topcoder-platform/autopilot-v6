@@ -18,6 +18,7 @@ import type {
 import type { ConfigService } from '@nestjs/config';
 import type { ReviewSummationApiService } from './review-summation-api.service';
 import type { MarathonMatchApiService } from '../../marathon-match/marathon-match-api.service';
+import { buildChallengeResultRecords } from '../../review/challenge-result.utils';
 
 describe('ChallengeCompletionService', () => {
   let challengeApiService: {
@@ -561,6 +562,154 @@ describe('ChallengeCompletionService', () => {
       type: PrizeSetTypeEnum.PASSED_REVIEW,
     });
   });
+
+  it('attaches a finite-limit Design winner to the stronger reviewed rank-two submission', async () => {
+    const challenge = buildChallenge({
+      track: 'Design',
+      metadata: {
+        submissionLimit: JSON.stringify({
+          unlimited: 'false',
+          limit: 'true',
+          count: '2',
+        }),
+      },
+      prizeSets: [buildPlacementPrizeSet(1)],
+      numOfSubmissions: 2,
+    });
+    let selectedSubmissionId: string | undefined;
+    reviewService.syncChallengeResultsForChallenge.mockImplementationOnce(
+      async (_challengeId, options) => {
+        const records = buildChallengeResultRecords({
+          challengeId: challenge.id,
+          candidates: [
+            {
+              submissionId: 'oldest-rank-three',
+              memberId: '101',
+              submissionRank: 3,
+              submittedDate: new Date('2023-12-31T00:00:00.000Z'),
+              createdAt: new Date('2023-12-31T00:00:00.000Z'),
+              updatedAt: new Date('2023-12-31T00:00:00.000Z'),
+              status: 'ACTIVE',
+              isLatest: false,
+              initialScore: 100,
+              finalScore: 100,
+              passingScore: 75,
+              passedReview: true,
+              validSubmission: true,
+            },
+            {
+              submissionId: 'older-rank-two',
+              memberId: '101',
+              submissionRank: 2,
+              submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+              createdAt: new Date('2024-01-01T00:00:00.000Z'),
+              updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+              status: 'ACTIVE',
+              isLatest: false,
+              initialScore: 98,
+              finalScore: 98,
+              passingScore: 75,
+              passedReview: true,
+              validSubmission: true,
+            },
+            {
+              submissionId: 'newer-rank-one',
+              memberId: '101',
+              submissionRank: 1,
+              submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+              createdAt: new Date('2024-01-02T00:00:00.000Z'),
+              updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+              status: 'ACTIVE',
+              isLatest: true,
+              initialScore: 88,
+              finalScore: 88,
+              passingScore: 75,
+              passedReview: true,
+              validSubmission: true,
+            },
+          ],
+          placementWinners: options.placementWinners,
+          allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+          maxSubmissionsPerMember: options.maxSubmissionsPerMember,
+          ratedChallenge: options.ratedChallenge,
+          actor: options.actor,
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        });
+        selectedSubmissionId = records[0]?.submissionId;
+        return {
+          rowsBuilt: records.length,
+          rowsUpserted: records.length,
+          staleRowsDeleted: 0,
+        };
+      },
+    );
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+    await service.finalizeChallenge(challenge.id);
+
+    expect(selectedSubmissionId).toBe('older-rank-two');
+    expect(reviewService.syncChallengeResultsForChallenge).toHaveBeenCalledWith(
+      challenge.id,
+      expect.objectContaining({
+        allowUnlimitedSubmissions: true,
+        maxSubmissionsPerMember: 2,
+      }),
+    );
+  });
+
+  it.each<[string, string, string, boolean, number | null]>([
+    [
+      'Design limit one',
+      'Design',
+      JSON.stringify({ unlimited: 'false', limit: 'true', count: '1' }),
+      false,
+      1,
+    ],
+    [
+      'Design unlimited',
+      'Design',
+      JSON.stringify({ unlimited: 'true', limit: 'false', count: '' }),
+      true,
+      null,
+    ],
+    [
+      'Development limit two',
+      'Development',
+      JSON.stringify({ unlimited: 'false', limit: 'true', count: '2' }),
+      false,
+      1,
+    ],
+  ])(
+    'uses the expected challenge-result selection mode for %s',
+    async (
+      _description,
+      track,
+      submissionLimit,
+      expectedMultiple,
+      expectedMaximum,
+    ) => {
+      const challenge = buildChallenge({
+        track,
+        metadata: { submissionLimit },
+        prizeSets: [buildPlacementPrizeSet(1)],
+        numOfSubmissions: 2,
+      });
+      challengeApiService.getChallengeById.mockResolvedValue(challenge);
+
+      await service.finalizeChallenge(challenge.id);
+
+      expect(
+        reviewService.syncChallengeResultsForChallenge,
+      ).toHaveBeenCalledWith(
+        challenge.id,
+        expect.objectContaining({
+          allowUnlimitedSubmissions: expectedMultiple,
+          maxSubmissionsPerMember: expectedMaximum,
+        }),
+      );
+    },
+  );
 
   it('preserves multiple passing submissions from the same member', async () => {
     const challenge = buildChallenge({

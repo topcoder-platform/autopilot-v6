@@ -127,6 +127,7 @@ describe('PhaseReviewService', () => {
       getExistingReviewPairs: jest.fn(),
       createPendingReview: jest.fn(),
       getFailedScreeningSubmissionIds: jest.fn(),
+      getPassedScreeningSubmissionIds: jest.fn(),
       getAiFailedDecisionSubmissionIds: jest.fn(),
       markSubmissionsAsAiFailedReview: jest.fn(),
       getCheckpointPassedSubmissionIds: jest.fn(),
@@ -185,6 +186,7 @@ describe('PhaseReviewService', () => {
       reviewId: 'review-1',
     });
     reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(new Set());
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.markSubmissionsAsAiFailedReview.mockResolvedValue(0);
     reviewService.generateReviewSummaries.mockResolvedValue([]);
@@ -218,9 +220,24 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'old-submission', memberId: '123', isLatest: false },
-      { id: 'latest-submission', memberId: '123', isLatest: true },
-      { id: 'unique-submission', memberId: null, isLatest: true },
+      {
+        id: 'old-submission',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'unique-submission',
+        memberId: null,
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -258,11 +275,22 @@ describe('PhaseReviewService', () => {
       count: '',
     });
     const challenge = buildChallenge({ submissionLimit });
+    challenge.track = 'Design';
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'old-submission', memberId: '123', isLatest: false },
-      { id: 'latest-submission', memberId: '123', isLatest: true },
+      {
+        id: 'old-submission',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -282,29 +310,102 @@ describe('PhaseReviewService', () => {
     ]);
   });
 
-  it('creates reviews only for latest submissions when the challenge enforces a submission limit', async () => {
-    const submissionLimit = JSON.stringify({ limit: 'true', count: 2 });
-    const challenge = buildChallenge({ submissionLimit });
-    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+  it.each([2, 3])(
+    'creates reviews for the latest %s Design submissions',
+    async (submissionCount) => {
+      const submissionLimit = JSON.stringify({
+        unlimited: 'false',
+        limit: 'true',
+        count: String(submissionCount),
+      });
+      const challenge = buildChallenge({ submissionLimit });
+      challenge.track = 'Design';
+      challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
+      const submissions: ActiveContestSubmission[] = [
+        {
+          id: 'oldest-submission',
+          memberId: '123',
+          isLatest: false,
+          submissionRank: 4,
+        },
+        {
+          id: 'third-submission',
+          memberId: '123',
+          isLatest: false,
+          submissionRank: 3,
+        },
+        {
+          id: 'second-submission',
+          memberId: '123',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'latest-submission',
+          memberId: '123',
+          isLatest: true,
+          submissionRank: 1,
+        },
+      ];
+
+      reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
+        submissions,
+      );
+
+      await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+      const createdSubmissionIds =
+        reviewService.createPendingReview.mock.calls.map(
+          (callArgs) => callArgs[0],
+        );
+
+      const expectedSubmissionIds = [
+        'third-submission',
+        'second-submission',
+        'latest-submission',
+      ].slice(3 - submissionCount);
+
+      expect(createdSubmissionIds).toEqual(expectedSubmissionIds);
+      expect(createdSubmissionIds).not.toContain('oldest-submission');
+    },
+  );
+
+  it('keeps Development challenges limited to the latest submission even when metadata is unlimited', async () => {
+    const challenge = buildChallenge({
+      submissionLimit: JSON.stringify({
+        unlimited: 'true',
+        limit: 'false',
+        count: '',
+      }),
+    });
     const submissions: ActiveContestSubmission[] = [
-      { id: 'old-submission', memberId: '123', isLatest: false },
-      { id: 'latest-submission', memberId: '123', isLatest: true },
+      {
+        id: 'old-submission',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
       submissions,
     );
 
     await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
 
-    const createdSubmissionIds =
+    expect(
       reviewService.createPendingReview.mock.calls.map(
         (callArgs) => callArgs[0],
-      );
-
-    expect(createdSubmissionIds).toEqual(['latest-submission']);
-    expect(createdSubmissionIds).not.toContain('old-submission');
+      ),
+    ).toEqual(['latest-submission']);
   });
 
   it.each([
@@ -317,11 +418,22 @@ describe('PhaseReviewService', () => {
       const challenge = buildChallenge({
         submissionLimit,
       } as any);
+      challenge.track = 'Design';
       challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
       const submissions: ActiveContestSubmission[] = [
-        { id: 'old-submission', memberId: '123', isLatest: false },
-        { id: 'latest-submission', memberId: '123', isLatest: true },
+        {
+          id: 'old-submission',
+          memberId: '123',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'latest-submission',
+          memberId: '123',
+          isLatest: true,
+          submissionRank: 1,
+        },
       ];
 
       reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -342,7 +454,7 @@ describe('PhaseReviewService', () => {
       );
       expect(warningMessages).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('defaulting to limited submissions.'),
+          expect.stringContaining('defaulting to the latest submission.'),
         ]),
       );
     },
@@ -351,11 +463,22 @@ describe('PhaseReviewService', () => {
   it('skips non-latest submissions without member IDs when a limit is enforced', async () => {
     const submissionLimit = JSON.stringify({ limit: 'true', count: 1 });
     const challenge = buildChallenge({ submissionLimit });
+    challenge.track = 'Design';
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'legacy-submission', memberId: null, isLatest: false },
-      { id: 'latest-submission', memberId: null, isLatest: true },
+      {
+        id: 'legacy-submission',
+        memberId: null,
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-submission',
+        memberId: null,
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -372,7 +495,7 @@ describe('PhaseReviewService', () => {
     expect(createdSubmissionIds).toEqual(['latest-submission']);
   });
 
-  it('omits submissions that failed screening', async () => {
+  it('creates standard Review records only for submissions that passed Screening', async () => {
     const challenge = buildChallenge({});
     const screeningPhase = {
       ...basePhase,
@@ -397,23 +520,42 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'failed-submission', memberId: '123', isLatest: true },
-      { id: 'passed-submission', memberId: '456', isLatest: true },
+      {
+        id: 'failed-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'passed-submission',
+        memberId: '456',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'unscreened-submission',
+        memberId: '789',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
       submissions,
     );
-    reviewService.getFailedScreeningSubmissionIds.mockResolvedValue(
-      new Set(['failed-submission']),
+    reviewService.getPassedScreeningSubmissionIds.mockResolvedValue(
+      new Set(['passed-submission']),
     );
 
     await service.handlePhaseOpened(challenge.id, basePhase.id);
 
-    expect(reviewService.getFailedScreeningSubmissionIds).toHaveBeenCalledWith(
+    expect(reviewService.getPassedScreeningSubmissionIds).toHaveBeenCalledWith(
       challenge.id,
       ['screening-scorecard'],
     );
+    expect(
+      reviewService.getFailedScreeningSubmissionIds,
+    ).not.toHaveBeenCalled();
 
     const createdSubmissionIds =
       reviewService.createPendingReview.mock.calls.map(
@@ -421,6 +563,38 @@ describe('PhaseReviewService', () => {
       );
 
     expect(createdSubmissionIds).toEqual(['passed-submission']);
+  });
+
+  it('fails closed when standard Screening exists without a resolvable scorecard', async () => {
+    const challenge = buildChallenge({});
+    challenge.phases = [
+      challenge.phases[0],
+      {
+        ...basePhase,
+        id: 'phase-screening',
+        phaseId: 'template-screening',
+        name: 'Screening',
+      },
+    ];
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue([
+      {
+        id: 'candidate-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+    ]);
+
+    await service.handlePhaseOpened(challenge.id, challenge.phases[0].id);
+
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    expect(
+      reviewService.getPassedScreeningSubmissionIds,
+    ).not.toHaveBeenCalled();
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('no Screening scorecard could be resolved'),
+    );
   });
 
   it('locks and skips submissions that failed AI review decisions', async () => {
@@ -435,8 +609,18 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'ai-failed-submission', memberId: '123', isLatest: true },
-      { id: 'eligible-submission', memberId: '456', isLatest: true },
+      {
+        id: 'ai-failed-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'eligible-submission',
+        memberId: '456',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -500,8 +684,18 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'submission-1', memberId: '123', isLatest: true },
-      { id: 'submission-2', memberId: '456', isLatest: true },
+      {
+        id: 'submission-1',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'submission-2',
+        memberId: '456',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
       submissions,
@@ -553,8 +747,18 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'ai-passed-submission', memberId: '123', isLatest: true },
-      { id: 'ai-failed-submission', memberId: '456', isLatest: true },
+      {
+        id: 'ai-passed-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'ai-failed-submission',
+        memberId: '456',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
       submissions,
@@ -605,8 +809,18 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'submission-1', memberId: '123', isLatest: true },
-      { id: 'submission-2', memberId: '456', isLatest: true },
+      {
+        id: 'submission-1',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+      {
+        id: 'submission-2',
+        memberId: '456',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
       submissions,
@@ -639,8 +853,18 @@ describe('PhaseReviewService', () => {
     challengeApiService.getChallengeById.mockResolvedValue(challenge);
 
     const submissions: ActiveContestSubmission[] = [
-      { id: 'older-active-submission', memberId: '123', isLatest: false },
-      { id: 'newer-ai-failed-submission', memberId: '123', isLatest: true },
+      {
+        id: 'older-active-submission',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'newer-ai-failed-submission',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ];
 
     reviewService.getContestSubmissionsForLatestSelection.mockResolvedValue(
@@ -838,6 +1062,108 @@ describe('PhaseReviewService', () => {
     expect(reviewService.createPendingReview).not.toHaveBeenCalled();
   });
 
+  it('applies the Design submission limit independently to Checkpoint Screening', async () => {
+    const checkpointScreeningPhase = {
+      ...basePhase,
+      id: 'phase-checkpoint-screening',
+      phaseId: 'template-checkpoint-screening',
+      name: 'Checkpoint Screening',
+    };
+    const challenge = buildChallenge({
+      submissionLimit: JSON.stringify({
+        unlimited: 'false',
+        limit: 'true',
+        count: '2',
+      }),
+    });
+    challenge.track = 'Design';
+    challenge.phases = [checkpointScreeningPhase];
+    challenge.reviewers = [
+      {
+        ...challenge.reviewers[0],
+        id: 'checkpoint-screening-config',
+        phaseId: checkpointScreeningPhase.phaseId,
+        scorecardId: 'checkpoint-screening-scorecard',
+        isMemberReview: false,
+      },
+    ];
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([
+      {
+        id: 'old-checkpoint',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 3,
+      },
+      {
+        id: 'second-checkpoint',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+      {
+        id: 'latest-checkpoint',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
+    ]);
+
+    await service.handlePhaseOpened(challenge.id, checkpointScreeningPhase.id);
+
+    expect(
+      reviewService.createPendingReview.mock.calls.map(
+        (callArgs) => callArgs[0],
+      ),
+    ).toEqual(['second-checkpoint', 'latest-checkpoint']);
+    expect(
+      reviewService.getContestSubmissionsForLatestSelection,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not promote an older safe checkpoint when the newest limited attempt fails antivirus filtering', async () => {
+    const checkpointScreeningPhase = {
+      ...basePhase,
+      id: 'phase-checkpoint-screening',
+      phaseId: 'template-checkpoint-screening',
+      name: 'Checkpoint Screening',
+    };
+    const challenge = buildChallenge({
+      submissionLimit: JSON.stringify({
+        unlimited: 'false',
+        limit: 'true',
+        count: '1',
+      }),
+    });
+    challenge.track = 'Design';
+    challenge.phases = [checkpointScreeningPhase];
+    challenge.reviewers = [
+      {
+        ...challenge.reviewers[0],
+        id: 'checkpoint-screening-config',
+        phaseId: checkpointScreeningPhase.phaseId,
+        scorecardId: 'checkpoint-screening-scorecard',
+        isMemberReview: false,
+      },
+    ];
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    reviewService.getActiveCheckpointSubmissions.mockResolvedValue([
+      {
+        id: 'older-safe-checkpoint',
+        memberId: '123',
+        isLatest: false,
+        submissionRank: 2,
+      },
+    ]);
+
+    await service.handlePhaseOpened(challenge.id, checkpointScreeningPhase.id);
+
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    expect(
+      reviewService.getContestSubmissionsForLatestSelection,
+    ).not.toHaveBeenCalled();
+  });
+
   it('uses checkpoint reviewer resources when checkpoint review phase opens', async () => {
     const challenge = buildChallenge({});
     const checkpointPhase = {
@@ -877,7 +1203,12 @@ describe('PhaseReviewService', () => {
       { id: 'checkpoint-resource' },
     ] as any);
     reviewService.getActiveCheckpointSubmissions.mockResolvedValue([
-      { id: 'submission-1', memberId: '123', isLatest: true },
+      {
+        id: 'submission-1',
+        memberId: '123',
+        isLatest: true,
+        submissionRank: 1,
+      },
     ] as any);
     reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
       'submission-1',
