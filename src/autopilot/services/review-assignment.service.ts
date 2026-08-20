@@ -15,6 +15,7 @@ import {
 import { isMarathonMatchChallenge } from '../constants/challenge.constants';
 import {
   getMemberReviewerConfigs,
+  getRequiredScreenerCountForPhase,
   getReviewerConfigsForPhase,
 } from '../utils/reviewer.utils';
 
@@ -278,10 +279,16 @@ export class ReviewAssignmentService {
       };
     }
 
-    const required = reviewerConfigs.reduce(
-      (total, config) => total + Math.max(config.memberReviewerCount ?? 1, 0),
-      0,
-    );
+    const required = isScreeningPhase
+      ? getRequiredScreenerCountForPhase(
+          challenge.reviewers,
+          phaseDetails.phaseId,
+        )
+      : reviewerConfigs.reduce(
+          (total, config) =>
+            total + Math.max(config.memberReviewerCount ?? 1, 0),
+          0,
+        );
 
     if (required === 0) {
       return {
