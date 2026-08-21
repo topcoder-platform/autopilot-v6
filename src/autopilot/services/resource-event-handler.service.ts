@@ -25,7 +25,7 @@ import {
   getNormalizedStringArray,
   isActiveStatus,
 } from '../utils/config.utils';
-import { getReviewerConfigsForPhase } from '../utils/reviewer.utils';
+import { getRequiredScreenerCountForPhase } from '../utils/reviewer.utils';
 
 @Injectable()
 export class ResourceEventHandler {
@@ -408,18 +408,10 @@ export class ResourceEventHandler {
       return true;
     }
 
-    const reviewerConfigs = getReviewerConfigsForPhase(
+    const required = getRequiredScreenerCountForPhase(
       challenge.reviewers,
       phase.phaseId,
     );
-
-    const required = reviewerConfigs.reduce((total, config) => {
-      const normalized = Number(config.memberReviewerCount ?? 1);
-      const increment = Number.isFinite(normalized)
-        ? Math.max(normalized, 0)
-        : 0;
-      return total + increment;
-    }, 0);
 
     if (required <= 0) {
       return true;
