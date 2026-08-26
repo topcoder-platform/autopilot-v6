@@ -4,6 +4,7 @@ import {
 } from '../autopilot/services/autopilot-db-logger.service';
 import { ReviewPrismaService } from './review-prisma.service';
 import { ReviewService } from './review.service';
+import { selectSubmissionIdsWithinLimit } from '../autopilot/utils/submission-selection.utils';
 
 type QueryRawMock = jest.Mock<Promise<unknown[]>, [unknown]>;
 type ExecuteRawMock = jest.Mock<Promise<number>, [unknown?]>;
@@ -146,16 +147,36 @@ describe('ReviewService', () => {
   describe('getActiveContestSubmissions', () => {
     it('keeps shared queries limited to active, virus-scan-eligible submissions', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([
-        { id: 'submission-1', memberId: 'member-1', isLatest: false },
-        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+        {
+          id: 'submission-1',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'submission-2',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: 1,
+        },
       ]);
 
       const submissions =
         await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
-        { id: 'submission-1', memberId: 'member-1', isLatest: false },
-        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+        {
+          id: 'submission-1',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'submission-2',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: 1,
+        },
       ]);
 
       const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
@@ -166,13 +187,14 @@ describe('ReviewService', () => {
         : '';
 
       expect(sqlText).toContain('ROW_NUMBER() OVER');
+      expect(sqlText).toContain('AS "submissionRank"');
       expect(sqlText).toContain('COALESCE(s."memberId", s."id")');
-      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
-      expect(sqlText).not.toContain('s."status" = \'AI_FAILED_REVIEW\'');
-      expect(sqlText).toContain('WHERE ranked."isFileSubmission" = FALSE');
+      expect(sqlText).toContain('ranked."status" = \'ACTIVE\'');
+      expect(sqlText).not.toContain('ranked."status" = \'AI_FAILED_REVIEW\'');
+      expect(sqlText).toContain('ranked."isFileSubmission" = FALSE');
       expect(sqlText).toContain('OR ranked."virusScan" = TRUE');
       expect(sqlText.indexOf('ROW_NUMBER() OVER')).toBeLessThan(
-        sqlText.indexOf('WHERE ranked."isFileSubmission" = FALSE'),
+        sqlText.indexOf('ranked."isFileSubmission" = FALSE'),
       );
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
@@ -186,17 +208,68 @@ describe('ReviewService', () => {
       );
     });
 
-    it('filters out rows without ids after querying eligible statuses', async () => {
+    it('does not promote an older active submission when the newer attempt failed screening', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([
-        { id: '', memberId: 'member-1', isLatest: false },
-        { id: 'submission-2', memberId: null, isLatest: true },
+        {
+          id: 'older-active-submission',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
       ]);
 
       const submissions =
         await service.getActiveContestSubmissions(challengeId);
 
       expect(submissions).toEqual([
-        { id: 'submission-2', memberId: null, isLatest: true },
+        {
+          id: 'older-active-submission',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+      ]);
+      expect(selectSubmissionIdsWithinLimit(submissions, 1)).toEqual([]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+      const rankedQueryEnd = sqlText.indexOf(') ranked');
+
+      expect(sqlText).toContain('(s."status")::text AS "status"');
+      expect(sqlText).toContain(
+        "UPPER(COALESCE((s.\"status\")::text, 'ACTIVE')) <> 'DELETED'",
+      );
+      expect(rankedQueryEnd).toBeGreaterThan(sqlText.indexOf("<> 'DELETED'"));
+      expect(sqlText.indexOf('ranked."status" = \'ACTIVE\'')).toBeGreaterThan(
+        rankedQueryEnd,
+      );
+    });
+
+    it('filters out rows without ids after querying eligible statuses', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        { id: '', memberId: 'member-1', isLatest: false, submissionRank: 2 },
+        {
+          id: 'submission-2',
+          memberId: null,
+          isLatest: true,
+          submissionRank: 1,
+        },
+      ]);
+
+      const submissions =
+        await service.getActiveContestSubmissions(challengeId);
+
+      expect(submissions).toEqual([
+        {
+          id: 'submission-2',
+          memberId: null,
+          isLatest: true,
+          submissionRank: 1,
+        },
       ]);
     });
   });
@@ -204,16 +277,36 @@ describe('ReviewService', () => {
   describe('getContestSubmissionsForLatestSelection', () => {
     it('includes AI_FAILED_REVIEW submissions when computing latest flags for phase review', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([
-        { id: 'submission-1', memberId: 'member-1', isLatest: false },
-        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+        {
+          id: 'submission-1',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'submission-2',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: 1,
+        },
       ]);
 
       const submissions =
         await service.getContestSubmissionsForLatestSelection(challengeId);
 
       expect(submissions).toEqual([
-        { id: 'submission-1', memberId: 'member-1', isLatest: false },
-        { id: 'submission-2', memberId: 'member-1', isLatest: true },
+        {
+          id: 'submission-1',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'submission-2',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: 1,
+        },
       ]);
 
       const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
@@ -223,8 +316,8 @@ describe('ReviewService', () => {
         ? rawQuery.strings.join('')
         : '';
 
-      expect(sqlText).toContain('s."status" = \'ACTIVE\'');
-      expect(sqlText).toContain('s."status" = \'AI_FAILED_REVIEW\'');
+      expect(sqlText).toContain('ranked."status" = \'ACTIVE\'');
+      expect(sqlText).toContain('ranked."status" = \'AI_FAILED_REVIEW\'');
 
       expect(dbLoggerMock.logAction).toHaveBeenCalledWith(
         'review.getContestSubmissionsForLatestSelection',
@@ -234,6 +327,103 @@ describe('ReviewService', () => {
             submissionCount: 2,
           }),
         }),
+      );
+    });
+  });
+
+  describe('getActiveCheckpointSubmissions', () => {
+    it('returns per-member ranks calculated only from checkpoint submissions', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        {
+          id: 'checkpoint-2',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: '2',
+        },
+        {
+          id: 'checkpoint-1',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: '1',
+        },
+      ]);
+
+      await expect(
+        service.getActiveCheckpointSubmissions(challengeId),
+      ).resolves.toEqual([
+        {
+          id: 'checkpoint-2',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+        {
+          id: 'checkpoint-1',
+          memberId: 'member-1',
+          isLatest: true,
+          submissionRank: 1,
+        },
+      ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('ROW_NUMBER() OVER');
+      expect(sqlText).toContain(
+        'UPPER((s."type")::text) = \'CHECKPOINT_SUBMISSION\'',
+      );
+      expect(sqlText).toContain('AS "submissionRank"');
+      expect(sqlText).toContain('s."isFileSubmission"');
+      expect(sqlText).toContain('s."virusScan"');
+      expect(sqlText).toContain('ranked."isFileSubmission" = FALSE');
+      expect(sqlText).toContain('ranked."virusScan" = TRUE');
+      expect(sqlText.indexOf('ROW_NUMBER() OVER')).toBeLessThan(
+        sqlText.indexOf('ranked."isFileSubmission" = FALSE'),
+      );
+    });
+
+    it('does not promote an older active checkpoint when the newer attempt failed screening', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        {
+          id: 'older-active-checkpoint',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+      ]);
+
+      const submissions =
+        await service.getActiveCheckpointSubmissions(challengeId);
+
+      expect(submissions).toEqual([
+        {
+          id: 'older-active-checkpoint',
+          memberId: 'member-1',
+          isLatest: false,
+          submissionRank: 2,
+        },
+      ]);
+      expect(selectSubmissionIdsWithinLimit(submissions, 1)).toEqual([]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+      const rankedQueryEnd = sqlText.indexOf(') ranked');
+
+      expect(sqlText).toContain('(s."status")::text AS "status"');
+      expect(sqlText).toContain(
+        "UPPER(COALESCE((s.\"status\")::text, 'ACTIVE')) <> 'DELETED'",
+      );
+      expect(rankedQueryEnd).toBeGreaterThan(sqlText.indexOf("<> 'DELETED'"));
+      expect(sqlText.indexOf('ranked."status" = \'ACTIVE\'')).toBeGreaterThan(
+        rankedQueryEnd,
       );
     });
   });
@@ -282,6 +472,7 @@ describe('ReviewService', () => {
         {
           submissionId: 'older-submission',
           memberId: '123',
+          submissionRank: 2,
           submittedDate: new Date('2024-01-01T00:00:00.000Z'),
           createdAt: new Date('2024-01-01T00:00:00.000Z'),
           updatedAt: new Date('2024-01-01T00:00:00.000Z'),
@@ -297,6 +488,7 @@ describe('ReviewService', () => {
         {
           submissionId: 'latest-submission',
           memberId: '123',
+          submissionRank: 1,
           submittedDate: new Date('2024-01-02T00:00:00.000Z'),
           createdAt: new Date('2024-01-02T00:00:00.000Z'),
           updatedAt: new Date('2024-01-02T00:00:00.000Z'),
@@ -316,6 +508,7 @@ describe('ReviewService', () => {
         {
           placementWinners: [{ userId: 123, placement: 1 }],
           allowUnlimitedSubmissions: false,
+          maxSubmissionsPerMember: 1,
           ratedChallenge: true,
           actor: 'autopilot',
           createdAt: new Date('2024-01-03T00:00:00.000Z'),
@@ -337,6 +530,114 @@ describe('ReviewService', () => {
           ratingOrder: 1,
         }),
       ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0]?.[0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+      expect(sqlText).toContain('AS "submissionRank"');
+      expect(sqlText).toContain('(rs."submissionRank" = 1) AS "isLatest"');
+    });
+
+    it('selects the strongest reviewed submission only within a finite recent limit', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([
+        {
+          submissionId: 'rank-three-submission',
+          memberId: '123',
+          submissionRank: '3',
+          submittedDate: new Date('2023-12-31T00:00:00.000Z'),
+          createdAt: new Date('2023-12-31T00:00:00.000Z'),
+          updatedAt: new Date('2023-12-31T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 100,
+          finalScore: 100,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'rank-two-submission',
+          memberId: '123',
+          submissionRank: '2',
+          submittedDate: new Date('2024-01-01T00:00:00.000Z'),
+          createdAt: new Date('2024-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: false,
+          initialScore: 95,
+          finalScore: 97,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+        {
+          submissionId: 'rank-one-submission',
+          memberId: '123',
+          submissionRank: '1',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          createdAt: new Date('2024-01-02T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+          status: 'COMPLETED_WITHOUT_WIN',
+          isLatest: true,
+          initialScore: 80,
+          finalScore: 82,
+          scorecardId: 'scorecard-1',
+          minimumPassingScore: 75,
+          reviewTypeName: 'Final Review',
+          scorecardType: 'REVIEW',
+        },
+      ]);
+
+      const records = await service.buildChallengeResultRecordsForChallenge(
+        challengeId,
+        {
+          placementWinners: [{ userId: 123, placement: 1 }],
+          allowUnlimitedSubmissions: true,
+          maxSubmissionsPerMember: 2,
+          ratedChallenge: true,
+          actor: 'autopilot',
+          createdAt: new Date('2024-01-03T00:00:00.000Z'),
+          updatedAt: new Date('2024-01-03T00:00:00.000Z'),
+        },
+      );
+
+      expect(records).toEqual([
+        objectContaining({
+          submissionId: 'rank-two-submission',
+          initialScore: 95,
+          finalScore: 97,
+          placement: 1,
+        }),
+      ]);
+    });
+
+    it('excludes deleted submissions before assigning completion ranks', async () => {
+      prismaMock.$queryRaw.mockResolvedValue([]);
+
+      await service.buildChallengeResultRecordsForChallenge(challengeId, {
+        placementWinners: [],
+        allowUnlimitedSubmissions: true,
+        maxSubmissionsPerMember: 2,
+        ratedChallenge: false,
+        actor: 'autopilot',
+      });
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0]?.[0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('WITH ranked_submissions AS');
+      expect(sqlText).toContain(
+        "UPPER(COALESCE((s.\"status\")::text, 'ACTIVE')) <> 'DELETED'",
+      );
     });
 
     it('prefers the strongest passing submission when submissions are unlimited', async () => {
@@ -344,6 +645,7 @@ describe('ReviewService', () => {
         {
           submissionId: 'best-submission',
           memberId: '123',
+          submissionRank: 2,
           submittedDate: new Date('2024-01-01T00:00:00.000Z'),
           createdAt: new Date('2024-01-01T00:00:00.000Z'),
           updatedAt: new Date('2024-01-01T00:00:00.000Z'),
@@ -359,6 +661,7 @@ describe('ReviewService', () => {
         {
           submissionId: 'latest-submission',
           memberId: '123',
+          submissionRank: 1,
           submittedDate: new Date('2024-01-02T00:00:00.000Z'),
           createdAt: new Date('2024-01-02T00:00:00.000Z'),
           updatedAt: new Date('2024-01-02T00:00:00.000Z'),

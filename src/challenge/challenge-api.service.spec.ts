@@ -4,6 +4,7 @@ import type { AutopilotDbLoggerService } from '../autopilot/services/autopilot-d
 import { ChallengeStatusEnum, PrizeSetTypeEnum } from '@prisma/client';
 import type { ConfigService } from '@nestjs/config';
 import type { ReviewService } from '../review/review.service';
+import type { ResourcesService } from '../resources/resources.service';
 
 describe('ChallengeApiService - advancePhase scheduling', () => {
   const fixedNow = new Date('2025-09-27T06:00:00.000Z');
@@ -28,6 +29,8 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
   let service: ChallengeApiService;
   let configService: jest.Mocked<ConfigService>;
   let reviewService: jest.Mocked<ReviewService>;
+  let resourcesService: jest.Mocked<ResourcesService>;
+  let getReviewerResources: jest.Mock;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -90,11 +93,17 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
       getPendingAiDecisionsCount: jest.fn().mockResolvedValue(0),
     } as unknown as jest.Mocked<ReviewService>;
 
+    getReviewerResources = jest.fn().mockResolvedValue([]);
+    resourcesService = {
+      getReviewerResources,
+    } as unknown as jest.Mocked<ResourcesService>;
+
     service = new ChallengeApiService(
       prisma,
       reviewService,
       dbLogger,
       configService,
+      resourcesService,
     );
   });
 
@@ -389,6 +398,180 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
         }),
       }),
     );
+  });
+
+  describe('deferred screener assignment (PM-5787)', () => {
+    const buildScreeningChallenge = (
+      phaseName: 'Screening' | 'Checkpoint Screening',
+      reviewers: Array<Record<string, unknown>>,
+    ): Record<string, unknown> => {
+      const submissionPhase = {
+        id: 'submission-instance',
+        phaseId: 'submission-template',
+        name:
+          phaseName === 'Screening' ? 'Submission' : 'Checkpoint Submission',
+        description: null,
+        isOpen: false,
+        predecessor: null,
+        duration: phaseDurationSeconds,
+        scheduledStartDate: new Date(fixedNow.getTime() - 7200 * 1000),
+        scheduledEndDate: fixedNow,
+        actualStartDate: new Date(fixedNow.getTime() - 7200 * 1000),
+        actualEndDate: fixedNow,
+        constraints: [],
+      };
+
+      const screeningPhase = {
+        id: 'screening-instance',
+        phaseId: 'screening-template',
+        name: phaseName,
+        description: null,
+        isOpen: false,
+        predecessor: submissionPhase.phaseId,
+        duration: phaseDurationSeconds,
+        scheduledStartDate: fixedNow,
+        scheduledEndDate: futureEnd,
+        actualStartDate: null,
+        actualEndDate: null,
+        constraints: [],
+      };
+
+      return {
+        id: 'challenge-1',
+        name: 'Design Challenge',
+        projectId: 123,
+        currentPhaseNames: [],
+        status: ChallengeStatusEnum.ACTIVE,
+        metadata: {},
+        phases: [submissionPhase, screeningPhase],
+        reviewers,
+        winners: [],
+        track: { name: 'DESIGN' },
+        type: { name: 'Challenge' },
+        prizeSets: [],
+      };
+    };
+
+    const memberReviewer = (phaseId: string): Record<string, unknown> => ({
+      id: `reviewer-${phaseId}`,
+      scorecardId: 'scorecard-id',
+      isMemberReview: true,
+      memberReviewerCount: 1,
+      phaseId,
+      fixedAmount: 0,
+      baseCoefficient: 0.13,
+      incrementalCoefficient: null,
+      type: 'REGULAR_REVIEW',
+      aiWorkflowId: null,
+      shouldOpenOpportunity: false,
+    });
+
+    it('refuses to open Screening while no Screener resource is assigned', async () => {
+      const challengeRecord = buildScreeningChallenge('Screening', [
+        memberReviewer('screening-template'),
+      ]);
+      challengeFindUnique.mockResolvedValue(challengeRecord as any);
+
+      const result = await service.advancePhase(
+        'challenge-1',
+        'screening-instance',
+        'open',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Screener role');
+      expect(getReviewerResources).toHaveBeenCalledWith('challenge-1', [
+        'Screener',
+      ]);
+      expect(challengePhaseUpdateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses to open Checkpoint Screening while no Checkpoint Screener resource is assigned', async () => {
+      const challengeRecord = buildScreeningChallenge('Checkpoint Screening', [
+        memberReviewer('screening-template'),
+      ]);
+      challengeFindUnique.mockResolvedValue(challengeRecord as any);
+
+      const result = await service.advancePhase(
+        'challenge-1',
+        'screening-instance',
+        'open',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Checkpoint Screener role');
+      expect(getReviewerResources).toHaveBeenCalledWith('challenge-1', [
+        'Checkpoint Screener',
+      ]);
+      expect(challengePhaseUpdateMany).not.toHaveBeenCalled();
+    });
+
+    it('opens Screening once the Screener resource exists', async () => {
+      const challengeRecord = buildScreeningChallenge('Screening', [
+        memberReviewer('screening-template'),
+      ]);
+      challengeFindUnique.mockResolvedValue(challengeRecord as any);
+      getReviewerResources.mockResolvedValue([
+        {
+          id: 'resource-1',
+          memberId: '123',
+          memberHandle: 'screener',
+          roleName: 'Screener',
+        },
+      ]);
+
+      const result = await service.advancePhase(
+        'challenge-1',
+        'screening-instance',
+        'open',
+      );
+
+      expect(result.success).toBe(true);
+      expect(challengePhaseUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'screening-instance',
+            isOpen: false,
+          }),
+          data: expect.objectContaining({ isOpen: true }),
+        }),
+      );
+    });
+
+    it('opens Screening when the phase has no reviewer configuration', async () => {
+      const challengeRecord = buildScreeningChallenge('Screening', [
+        memberReviewer('review-template'),
+      ]);
+      challengeFindUnique.mockResolvedValue(challengeRecord as any);
+
+      const result = await service.advancePhase(
+        'challenge-1',
+        'screening-instance',
+        'open',
+      );
+
+      expect(result.success).toBe(true);
+      expect(getReviewerResources).not.toHaveBeenCalled();
+      expect(challengePhaseUpdateMany).toHaveBeenCalled();
+    });
+
+    it('does not block closing a screening phase', async () => {
+      const challengeRecord = buildScreeningChallenge('Screening', [
+        memberReviewer('screening-template'),
+      ]) as any;
+      challengeRecord.phases[1].isOpen = true;
+      challengeRecord.phases[1].actualStartDate = fixedNow;
+      challengeFindUnique.mockResolvedValue(challengeRecord);
+
+      const result = await service.advancePhase(
+        'challenge-1',
+        'screening-instance',
+        'close',
+      );
+
+      expect(result.success).toBe(true);
+      expect(getReviewerResources).not.toHaveBeenCalled();
+    });
   });
 
   describe('createPostMortemPhase', () => {
@@ -969,6 +1152,8 @@ describe('ChallengeApiService - end date handling', () => {
   let challengeWinnerCreateMany: jest.Mock;
   let configService: jest.Mocked<ConfigService>;
   let reviewService: jest.Mocked<ReviewService>;
+  let resourcesService: jest.Mocked<ResourcesService>;
+  let getReviewerResources: jest.Mock;
 
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(fixedNow);
@@ -1010,11 +1195,17 @@ describe('ChallengeApiService - end date handling', () => {
       getPendingAiDecisionsCount: jest.fn().mockResolvedValue(0),
     } as unknown as jest.Mocked<ReviewService>;
 
+    getReviewerResources = jest.fn().mockResolvedValue([]);
+    resourcesService = {
+      getReviewerResources,
+    } as unknown as jest.Mocked<ResourcesService>;
+
     service = new ChallengeApiService(
       prisma,
       reviewService,
       dbLogger,
       configService,
+      resourcesService,
     );
   });
 

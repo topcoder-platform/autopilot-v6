@@ -192,7 +192,8 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
 | Appeals close deferral | `SchedulerService.deferAppealsPhaseClosure` | pending appeals still exist | schedules another `END` attempt |
 | Appeals open deferral | `SchedulerService.deferAppealsPhaseOpen` | predecessor review still has pending reviews | schedules another `START` attempt |
 | Topgear Registration deferral | `SchedulerService.deferTopgearRegistrationPhaseClosure` | Topgear still waiting on passing iterative review | schedules another `END` attempt |
-| Reviewer assignment polling | `ReviewAssignmentService.ensureAssignmentsOrSchedule` | a review phase cannot open until enough reviewers exist | starts a poller that tries to open later |
+| Reviewer assignment polling | `ReviewAssignmentService.ensureAssignmentsOrSchedule` | a Review or Screening phase cannot open until enough reviewers or screeners exist | starts a poller that tries to open later |
+| Screening open guard | `ChallengeApiService.advancePhase` | a Screening or Checkpoint Screening phase has a reviewer configuration but no resource holding its screener role | refuses the open so the phase waits for the assignment |
 
 ## Every reason reviews are created or changed
 

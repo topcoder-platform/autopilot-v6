@@ -5,6 +5,7 @@
 export interface ChallengeResultCandidate {
   submissionId: string;
   memberId: string | null;
+  submissionRank: number;
   submittedDate: Date | null;
   createdAt: Date | null;
   updatedAt: Date | null;
@@ -79,6 +80,7 @@ export function isValidChallengeResultStatus(status: string | null): boolean {
  * @param candidates Per-submission review aggregates for the challenge.
  * @param placementWinners Placement winners from challenge completion data.
  * @param allowUnlimitedSubmissions Whether multiple reviewed submissions per member are allowed.
+ * @param maxSubmissionsPerMember Maximum recent submissions eligible per member, or `null`/omitted for all.
  * @param rankAllSubmissions Whether score-ranked placements should be filled for non-winning submitters.
  * @param ratedChallenge Whether challenge metadata marks the challenge as rated.
  * @param actor Audit actor recorded on created/updated fields.
@@ -92,6 +94,7 @@ export function buildChallengeResultRecords(params: {
   candidates: ChallengeResultCandidate[];
   placementWinners: ChallengeResultPlacementWinner[];
   allowUnlimitedSubmissions: boolean;
+  maxSubmissionsPerMember?: number | null;
   rankAllSubmissions?: boolean;
   ratedChallenge: boolean;
   actor: string;
@@ -103,6 +106,7 @@ export function buildChallengeResultRecords(params: {
     candidates,
     placementWinners,
     allowUnlimitedSubmissions,
+    maxSubmissionsPerMember,
     rankAllSubmissions,
     ratedChallenge,
     actor,
@@ -129,6 +133,7 @@ export function buildChallengeResultRecords(params: {
   const canonicalEntries = selectCanonicalChallengeResultEntries(
     candidates,
     allowUnlimitedSubmissions,
+    maxSubmissionsPerMember,
   );
 
   const records: ChallengeResultRecord[] = canonicalEntries.map(
@@ -216,16 +221,27 @@ function buildScorePlacementByUserId(
  * Choose one canonical submission candidate per member.
  * @param candidates Per-submission challenge result candidates.
  * @param allowUnlimitedSubmissions Whether multiple submissions per member are allowed.
+ * @param maxSubmissionsPerMember Maximum recent submissions eligible per member, or `null`/omitted for all.
  * @returns Canonical candidate per normalized member id.
  * @throws Never.
  */
 function selectCanonicalChallengeResultEntries(
   candidates: ChallengeResultCandidate[],
   allowUnlimitedSubmissions: boolean,
+  maxSubmissionsPerMember?: number | null,
 ): CanonicalChallengeResultEntry[] {
   const candidatesByUserId = new Map<string, ChallengeResultCandidate[]>();
 
   for (const candidate of candidates) {
+    if (
+      maxSubmissionsPerMember != null &&
+      (!Number.isInteger(candidate.submissionRank) ||
+        candidate.submissionRank <= 0 ||
+        candidate.submissionRank > maxSubmissionsPerMember)
+    ) {
+      continue;
+    }
+
     const userId = normalizeUserId(candidate.memberId);
     if (!userId) {
       continue;

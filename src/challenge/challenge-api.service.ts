@@ -16,9 +16,13 @@ import {
   APPROVAL_PHASE_NAMES,
   ITERATIVE_REVIEW_PHASE_NAME,
   POST_MORTEM_PHASE_NAMES,
+  SCREENING_PHASE_NAMES,
   isPostMortemPhaseName,
+  getRoleNamesForPhase,
   AI_REVIEW_PHASE_NAME,
 } from '../autopilot/constants/review.constants';
+import { getRequiredScreenerCountForPhase } from '../autopilot/utils/reviewer.utils';
+import { ResourcesService } from '../resources/resources.service';
 
 // DTO for filtering challenges
 interface ChallengeFiltersDto {
@@ -85,6 +89,7 @@ export class ChallengeApiService {
     private readonly reviewService: ReviewService,
     private readonly dbLogger: AutopilotDbLoggerService,
     private readonly configService: ConfigService,
+    private readonly resourcesService: ResourcesService,
   ) {
     this.appealsPhaseNames = this.buildPhaseNameSet(
       this.configService.get('autopilot.appealsPhaseNames'),
@@ -391,6 +396,30 @@ export class ChallengeApiService {
           );
           return result;
         }
+      }
+
+      // Screening and Checkpoint Screening may be launched without a screener, so refuse to
+      // open them until the matching screener resource exists (PM-5787).
+      if (
+        operation === 'open' &&
+        SCREENING_PHASE_NAMES.has(targetPhase.name) &&
+        !(await this.hasRequiredScreenerResources(challenge, targetPhase))
+      ) {
+        const roleNames = getRoleNamesForPhase(targetPhase.name).join(', ');
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Cannot open ${targetPhase.name} phase because the challenge does not have any resource with the ${roleNames} role`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        this.logger.warn(
+          `Blocked opening ${targetPhase.name} phase ${phaseId} for challenge ${challengeId}; awaiting a ${roleNames} resource assignment.`,
+        );
+        return result;
       }
 
       const now = new Date();
@@ -803,6 +832,57 @@ export class ChallengeApiService {
         err.stack,
       );
       throw err;
+    }
+  }
+
+  /**
+   * Checks whether a screening phase already has the screener resources its configuration requires.
+   *
+   * @param challenge challenge record loaded with its reviewer configurations.
+   * @param phase Screening or Checkpoint Screening phase that is about to be opened.
+   * @returns `true` when the phase may open, `false` while the required screener is still missing.
+   * @remarks Backs the phase open guard in {@link ChallengeApiService.advancePhase}. PM-5787 lets
+   * copilots launch design challenges without a screener, so this is the single choke point that
+   * keeps every caller from opening the phase before the assignment arrives. A missing phase
+   * template id, an empty reviewer configuration, or a resource lookup failure allow the open so a
+   * lookup problem can never stall the phase chain.
+   * @throws Does not throw.
+   */
+  private async hasRequiredScreenerResources(
+    challenge: ChallengeWithRelations,
+    phase: ChallengePhaseWithConstraints,
+  ): Promise<boolean> {
+    if (!phase.phaseId) {
+      this.logger.warn(
+        `Screening phase ${phase.id} on challenge ${challenge.id} is missing a phase template ID; opening without screener validation.`,
+      );
+      return true;
+    }
+
+    const required = getRequiredScreenerCountForPhase(
+      (challenge.reviewers || []).map((reviewer) => this.mapReviewer(reviewer)),
+      phase.phaseId,
+    );
+
+    if (required <= 0) {
+      return true;
+    }
+
+    try {
+      const assignedScreeners =
+        await this.resourcesService.getReviewerResources(
+          challenge.id,
+          getRoleNamesForPhase(phase.name),
+        );
+
+      return assignedScreeners.length >= required;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `Failed to verify screener resources for challenge ${challenge.id}, phase ${phase.id}: ${err.message}. Allowing the phase to open to avoid blocking the phase chain.`,
+        err.stack,
+      );
+      return true;
     }
   }
 

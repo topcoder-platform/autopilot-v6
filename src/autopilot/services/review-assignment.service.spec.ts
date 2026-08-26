@@ -144,4 +144,108 @@ describe('ReviewAssignmentService', () => {
     expect(addIntervalMock).toHaveBeenCalledTimes(1);
     expect(openPhaseCallback).not.toHaveBeenCalled();
   });
+
+  it('defers a two round design Screening phase while only a Checkpoint Screener is assigned', async () => {
+    const checkpointScreening = createPhase({
+      id: 'checkpoint-screening-instance',
+      phaseId: 'checkpoint-screening-template',
+      name: 'Checkpoint Screening',
+      predecessor: 'checkpoint-submission-template',
+    });
+    const screening = createPhase({
+      id: 'screening-phase-instance',
+      phaseId: 'screening-phase-template',
+      name: 'Screening',
+      predecessor: 'submission-phase-template',
+    });
+    const challenge = createChallenge({
+      phases: [checkpointScreening, screening, createPhase()],
+      reviewers: [
+        createReviewer({ phaseId: checkpointScreening.phaseId }),
+        createReviewer({ phaseId: screening.phaseId }),
+        createReviewer(),
+      ],
+    });
+    const assignedByRole: Record<string, number> = {
+      'Checkpoint Screener': 1,
+      Reviewer: 1,
+      Screener: 0,
+    };
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    getReviewerResourcesMock.mockImplementation(
+      (_challengeId: string, roleNames: string[]) =>
+        Promise.resolve(
+          Array.from(
+            {
+              length: roleNames.reduce(
+                (total, roleName) => total + (assignedByRole[roleName] ?? 0),
+                0,
+              ),
+            },
+            () => ({}),
+          ),
+        ),
+    );
+
+    const openPhaseCallback = jest.fn().mockResolvedValue(true);
+
+    await expect(
+      service.ensureAssignmentsOrSchedule(
+        challenge.id,
+        checkpointScreening,
+        openPhaseCallback,
+      ),
+    ).resolves.toBe(true);
+
+    await expect(
+      service.ensureAssignmentsOrSchedule(
+        challenge.id,
+        screening,
+        openPhaseCallback,
+      ),
+    ).resolves.toBe(false);
+
+    expect(getReviewerResourcesMock).toHaveBeenCalledWith(challenge.id, [
+      'Screener',
+    ]);
+    expect(openPhaseCallback).not.toHaveBeenCalled();
+  });
+
+  it('polls screening phases until a screener is assigned', async () => {
+    const phase = createPhase({
+      id: 'screening-phase-instance',
+      phaseId: 'screening-phase-template',
+      name: 'Screening',
+    });
+    const challenge = createChallenge({
+      phases: [phase],
+      reviewers: [
+        createReviewer({
+          isMemberReview: false,
+          phaseId: phase.phaseId,
+        }),
+      ],
+    });
+    const openPhaseCallback = jest.fn().mockResolvedValue(true);
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    getReviewerResourcesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{}]);
+
+    const canOpen = await service.ensureAssignmentsOrSchedule(
+      challenge.id,
+      phase,
+      openPhaseCallback,
+    );
+
+    expect(canOpen).toBe(false);
+    expect(getReviewerResourcesMock).toHaveBeenCalledWith(challenge.id, [
+      'Screener',
+    ]);
+    expect(addIntervalMock).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(openPhaseCallback).toHaveBeenCalledTimes(1);
+  });
 });

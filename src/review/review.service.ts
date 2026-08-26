@@ -23,6 +23,7 @@ export interface ActiveContestSubmission {
   id: string;
   memberId: string | null;
   isLatest: boolean;
+  submissionRank: number;
 }
 
 interface ReviewRecord {
@@ -87,6 +88,7 @@ interface ReviewAggregationRow {
 interface ChallengeResultAggregationRow {
   submissionId: string;
   memberId: string | null;
+  submissionRank: number | string | null;
   submittedDate: Date | null;
   createdAt: Date | null;
   updatedAt: Date | null;
@@ -658,15 +660,15 @@ export class ReviewService {
     const statusFilter = includeAiFailedReview
       ? Prisma.sql`
           AND (
-            s."status" IS NULL
-            OR s."status" = 'ACTIVE'
-            OR s."status" = 'AI_FAILED_REVIEW'
+            ranked."status" IS NULL
+            OR ranked."status" = 'ACTIVE'
+            OR ranked."status" = 'AI_FAILED_REVIEW'
           )
         `
       : Prisma.sql`
           AND (
-            s."status" = 'ACTIVE'
-            OR s."status" IS NULL
+            ranked."status" = 'ACTIVE'
+            OR ranked."status" IS NULL
           )
         `;
 
@@ -674,41 +676,49 @@ export class ReviewService {
       SELECT
         ranked."id",
         ranked."memberId",
-        ranked."isLatest"
+        ranked."submissionRank",
+        ranked."submissionRank" = 1 AS "isLatest"
       FROM (
         SELECT
           s."id",
           s."memberId",
           s."isFileSubmission",
           s."virusScan",
-          CASE
-            WHEN ROW_NUMBER() OVER (
+          (s."status")::text AS "status",
+          CAST(
+            ROW_NUMBER() OVER (
               PARTITION BY COALESCE(s."memberId", s."id")
               ORDER BY
                 s."submittedDate" DESC NULLS LAST,
                 s."createdAt" DESC NULLS LAST,
                 s."updatedAt" DESC NULLS LAST,
                 s."id" DESC
-            ) = 1 THEN TRUE
-            ELSE FALSE
-          END AS "isLatest"
+            ) AS INTEGER
+          ) AS "submissionRank"
         FROM ${ReviewService.SUBMISSION_TABLE} s
         WHERE s."challengeId" = ${challengeId}
-          ${statusFilter}
+          AND UPPER(COALESCE((s."status")::text, 'ACTIVE')) <> 'DELETED'
           AND (
             s."type" IS NULL
             OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
           )
       ) ranked
-      WHERE ranked."isFileSubmission" = FALSE
+      WHERE (
+        ranked."isFileSubmission" = FALSE
         OR ranked."virusScan" = TRUE
+      )
+      ${statusFilter}
     `;
 
     try {
-      const submissions =
-        await this.prisma.$queryRaw<
-          Array<{ id: string; memberId: string | null; isLatest: boolean }>
-        >(query);
+      const submissions = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          memberId: string | null;
+          isLatest: boolean;
+          submissionRank: number;
+        }>
+      >(query);
 
       const sanitized = submissions
         .filter((record) => Boolean(record?.id))
@@ -716,6 +726,7 @@ export class ReviewService {
           id: record.id,
           memberId: record.memberId ?? null,
           isLatest: Boolean(record.isLatest),
+          submissionRank: Number(record.submissionRank),
         }));
 
       void this.dbLogger.logAction(actionName, {
@@ -768,30 +779,48 @@ export class ReviewService {
   ): Promise<ActiveContestSubmission[]> {
     const query = Prisma.sql`
       SELECT
-        s."id",
-        s."memberId",
-        CASE
-          WHEN ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(s."memberId", s."id")
-            ORDER BY
-              s."submittedDate" DESC NULLS LAST,
-              s."createdAt" DESC NULLS LAST,
-              s."updatedAt" DESC NULLS LAST,
-              s."id" DESC
-          ) = 1 THEN TRUE
-          ELSE FALSE
-        END AS "isLatest"
-      FROM ${ReviewService.SUBMISSION_TABLE} s
-      WHERE s."challengeId" = ${challengeId}
-        AND (s."status" = 'ACTIVE' OR s."status" IS NULL)
-        AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+        ranked."id",
+        ranked."memberId",
+        ranked."submissionRank",
+        ranked."submissionRank" = 1 AS "isLatest"
+      FROM (
+        SELECT
+          s."id",
+          s."memberId",
+          s."isFileSubmission",
+          s."virusScan",
+          (s."status")::text AS "status",
+          CAST(
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) AS INTEGER
+          ) AS "submissionRank"
+        FROM ${ReviewService.SUBMISSION_TABLE} s
+        WHERE s."challengeId" = ${challengeId}
+          AND UPPER(COALESCE((s."status")::text, 'ACTIVE')) <> 'DELETED'
+          AND UPPER((s."type")::text) = 'CHECKPOINT_SUBMISSION'
+      ) ranked
+      WHERE (
+        ranked."isFileSubmission" = FALSE
+        OR ranked."virusScan" = TRUE
+      )
+        AND (ranked."status" = 'ACTIVE' OR ranked."status" IS NULL)
     `;
 
     try {
-      const submissions =
-        await this.prisma.$queryRaw<
-          Array<{ id: string; memberId: string | null; isLatest: boolean }>
-        >(query);
+      const submissions = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          memberId: string | null;
+          isLatest: boolean;
+          submissionRank: number;
+        }>
+      >(query);
 
       const sanitized = submissions
         .filter((record) => Boolean(record?.id))
@@ -799,6 +828,7 @@ export class ReviewService {
           id: record.id,
           memberId: record.memberId ?? null,
           isLatest: Boolean(record.isLatest),
+          submissionRank: Number(record.submissionRank),
         }));
 
       void this.dbLogger.logAction('review.getActiveCheckpointSubmissions', {
@@ -2663,7 +2693,7 @@ export class ReviewService {
   }
 
   /**
-   * Load contest submissions plus aggregated review data so completion can
+   * Load non-deleted contest submissions plus aggregated review data so completion can
    * derive one canonical `challengeResult` row per member.
    * @param challengeId Challenge whose contest submissions should be aggregated.
    * @returns Per-submission candidates including latest flags and review scores.
@@ -2687,19 +2717,17 @@ export class ReviewService {
             s."createdAt",
             s."updatedAt",
             (s."status")::text AS "status",
-            CASE
-              WHEN ROW_NUMBER() OVER (
-                PARTITION BY COALESCE(s."memberId", s."id")
-                ORDER BY
-                  s."submittedDate" DESC NULLS LAST,
-                  s."createdAt" DESC NULLS LAST,
-                  s."updatedAt" DESC NULLS LAST,
-                  s."id" DESC
-              ) = 1 THEN TRUE
-              ELSE FALSE
-            END AS "isLatest"
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(s."memberId", s."id")
+              ORDER BY
+                s."submittedDate" DESC NULLS LAST,
+                s."createdAt" DESC NULLS LAST,
+                s."updatedAt" DESC NULLS LAST,
+                s."id" DESC
+            ) AS "submissionRank"
           FROM ${ReviewService.SUBMISSION_TABLE} s
           WHERE s."challengeId" = ${challengeId}
+            AND UPPER(COALESCE((s."status")::text, 'ACTIVE')) <> 'DELETED'
             AND (
               s."type" IS NULL
               OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
@@ -2708,11 +2736,12 @@ export class ReviewService {
         SELECT
           rs."id" AS "submissionId",
           rs."memberId" AS "memberId",
+          rs."submissionRank" AS "submissionRank",
           rs."submittedDate" AS "submittedDate",
           rs."createdAt" AS "createdAt",
           rs."updatedAt" AS "updatedAt",
           rs."status" AS "status",
-          rs."isLatest" AS "isLatest",
+          (rs."submissionRank" = 1) AS "isLatest",
           r."initialScore" AS "initialScore",
           r."finalScore" AS "finalScore",
           r."scorecardId" AS "scorecardId",
@@ -2738,6 +2767,7 @@ export class ReviewService {
     interface ChallengeResultAccumulator {
       submissionId: string;
       memberId: string | null;
+      submissionRank: number;
       submittedDate: Date | null;
       createdAt: Date | null;
       updatedAt: Date | null;
@@ -2769,6 +2799,7 @@ export class ReviewService {
         accumulator = {
           submissionId,
           memberId: row.memberId ?? null,
+          submissionRank: Number(row.submissionRank),
           submittedDate: row.submittedDate ? new Date(row.submittedDate) : null,
           createdAt: row.createdAt ? new Date(row.createdAt) : null,
           updatedAt: row.updatedAt ? new Date(row.updatedAt) : null,
@@ -2847,6 +2878,7 @@ export class ReviewService {
       candidates.push({
         submissionId: accumulator.submissionId,
         memberId: accumulator.memberId,
+        submissionRank: accumulator.submissionRank,
         submittedDate: accumulator.submittedDate,
         createdAt: accumulator.createdAt,
         updatedAt: accumulator.updatedAt,
@@ -2871,7 +2903,7 @@ export class ReviewService {
    * Build canonical review-api `challengeResult` rows for one completed
    * challenge without persisting them.
    * @param challengeId Challenge whose result rows should be built.
-   * @param options Placement, rating, passing-score, and audit context for the rows.
+   * @param options Placement, per-member submission limit, rating, passing-score, and audit context for the rows.
    * @returns Canonical `challengeResult` rows keyed one-per-member.
    * @throws Error when review data cannot be loaded.
    */
@@ -2880,6 +2912,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      maxSubmissionsPerMember?: number | null;
       rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
@@ -2899,6 +2932,7 @@ export class ReviewService {
       candidates,
       placementWinners: options.placementWinners,
       allowUnlimitedSubmissions: options.allowUnlimitedSubmissions,
+      maxSubmissionsPerMember: options.maxSubmissionsPerMember,
       rankAllSubmissions: options.rankAllSubmissions,
       ratedChallenge: options.ratedChallenge,
       actor: options.actor,
@@ -2911,7 +2945,7 @@ export class ReviewService {
    * Upsert canonical review-api `challengeResult` rows for one challenge and
    * delete stale rows that no longer map to a participant outcome.
    * @param challengeId Challenge whose rows should be synchronized.
-   * @param options Placement, rating, passing-score, and audit context for the rows.
+   * @param options Placement, per-member submission limit, rating, passing-score, and audit context for the rows.
    * @returns Summary of how many rows were built, upserted, and removed.
    * @throws Error when building or persisting rows fails.
    */
@@ -2920,6 +2954,7 @@ export class ReviewService {
     options: {
       placementWinners: ChallengeResultPlacementWinner[];
       allowUnlimitedSubmissions: boolean;
+      maxSubmissionsPerMember?: number | null;
       rankAllSubmissions?: boolean;
       ignorePassingScore?: boolean;
       ratedChallenge: boolean;
