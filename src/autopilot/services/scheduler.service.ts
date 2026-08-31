@@ -1369,7 +1369,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        if (operation === 'open' && isAiScreeningPhase && !shouldEmitAiPhaseOpenedEvent) {
+        if (
+          operation === 'open' &&
+          isAiScreeningPhase &&
+          !shouldEmitAiPhaseOpenedEvent
+        ) {
           try {
             const challenge = await this.challengeApiService.getChallengeById(
               data.challengeId,

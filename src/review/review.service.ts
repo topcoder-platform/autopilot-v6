@@ -3586,27 +3586,34 @@ export class ReviewService {
     `;
 
     try {
-      const rows = await this.prisma.$queryRaw<
-        Array<{ instantReview: boolean | null }>
-      >(query);
+      const rows =
+        await this.prisma.$queryRaw<Array<{ instantReview: boolean | null }>>(
+          query,
+        );
       const instantReview = rows?.[0]?.instantReview === true;
 
-      void this.dbLogger.logAction('review.isInstantReviewEnabledForChallenge', {
-        challengeId,
-        status: 'SUCCESS',
-        source: ReviewService.name,
-        details: { instantReview },
-      });
+      void this.dbLogger.logAction(
+        'review.isInstantReviewEnabledForChallenge',
+        {
+          challengeId,
+          status: 'SUCCESS',
+          source: ReviewService.name,
+          details: { instantReview },
+        },
+      );
 
       return instantReview;
     } catch (error) {
       const err = error as Error;
-      void this.dbLogger.logAction('review.isInstantReviewEnabledForChallenge', {
-        challengeId,
-        status: 'ERROR',
-        source: ReviewService.name,
-        details: { error: err.message },
-      });
+      void this.dbLogger.logAction(
+        'review.isInstantReviewEnabledForChallenge',
+        {
+          challengeId,
+          status: 'ERROR',
+          source: ReviewService.name,
+          details: { error: err.message },
+        },
+      );
       return false;
     }
   }
