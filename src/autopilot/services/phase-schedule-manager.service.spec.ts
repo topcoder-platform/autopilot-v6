@@ -585,17 +585,16 @@ describe('PhaseScheduleManager', () => {
     });
     reviewService.getInProgressAiWorkflowRunCount.mockResolvedValueOnce(1);
 
-    await (service as unknown as { openPhaseAndSchedule: (
-      challengeId: string,
-      projectId: number,
-      projectStatus: string,
-      phase: unknown,
-    ) => Promise<boolean> }).openPhaseAndSchedule(
-      'challenge-ai',
-      1001,
-      'ACTIVE',
-      aiPhase,
-    );
+    await (
+      service as unknown as {
+        openPhaseAndSchedule: (
+          challengeId: string,
+          projectId: number,
+          projectStatus: string,
+          phase: unknown,
+        ) => Promise<boolean>;
+      }
+    ).openPhaseAndSchedule('challenge-ai', 1001, 'ACTIVE', aiPhase);
 
     expect(schedulerService.advancePhase).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -641,20 +640,24 @@ describe('PhaseScheduleManager', () => {
       false,
     );
 
-    const opened = await (service as unknown as {
-      openPhaseAndSchedule: (
-        challengeId: string,
-        projectId: number,
-        projectStatus: string,
-        phase: unknown,
-      ) => Promise<boolean>;
-    }).openPhaseAndSchedule('challenge-ai-disabled', 1002, 'ACTIVE', aiPhase);
+    const opened = await (
+      service as unknown as {
+        openPhaseAndSchedule: (
+          challengeId: string,
+          projectId: number,
+          projectStatus: string,
+          phase: unknown,
+        ) => Promise<boolean>;
+      }
+    ).openPhaseAndSchedule('challenge-ai-disabled', 1002, 'ACTIVE', aiPhase);
 
     expect(opened).toBe(true);
-    expect(reviewService.isInstantReviewEnabledForChallenge).toHaveBeenCalledWith(
-      'challenge-ai-disabled',
-    );
-    expect(reviewService.getInProgressAiWorkflowRunCount).not.toHaveBeenCalled();
+    expect(
+      reviewService.isInstantReviewEnabledForChallenge,
+    ).toHaveBeenCalledWith('challenge-ai-disabled');
+    expect(
+      reviewService.getInProgressAiWorkflowRunCount,
+    ).not.toHaveBeenCalled();
     expect(schedulerService.advancePhase).toHaveBeenCalledTimes(1);
     expect(schedulerService.advancePhase).toHaveBeenCalledWith(
       expect.objectContaining({ state: 'START' }),
