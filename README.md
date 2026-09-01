@@ -18,6 +18,9 @@ autopilot operations with Kafka integration.
 - Node.js 26.5.1 or newer in the Node 26 line (the repository uses 26.5.1)
 - Docker and Docker Compose
 
+The production and development container images run as the unprivileged
+`app` user with UID and GID `10001`.
+
 ### 2. Environment Setup
 
 Create a `.env` file in the root directory:
