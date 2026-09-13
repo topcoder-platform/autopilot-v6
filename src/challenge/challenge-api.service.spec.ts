@@ -111,6 +111,59 @@ describe('ChallengeApiService - advancePhase scheduling', () => {
     jest.useRealTimers();
   });
 
+  it('does not reopen a completed review when a delayed open arrives during appeals', async () => {
+    challengeFindUnique.mockResolvedValue({
+      id: 'challenge-1',
+      status: ChallengeStatusEnum.ACTIVE,
+      currentPhaseNames: ['Appeals'],
+      phases: [
+        {
+          id: 'review-phase',
+          name: 'Review',
+          isOpen: false,
+          actualStartDate: new Date(fixedNow.getTime() - 3600000),
+          actualEndDate: fixedNow,
+        },
+        { id: 'appeals-phase', name: 'Appeals', isOpen: true },
+      ],
+    });
+
+    const result = await service.advancePhase(
+      'challenge-1',
+      'review-phase',
+      'open',
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('already completed');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(challengeUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a phase completed after the initial challenge read', async () => {
+    challengeFindUnique.mockResolvedValue({
+      id: 'challenge-1',
+      status: ChallengeStatusEnum.ACTIVE,
+      currentPhaseNames: [],
+      phases: [{ id: 'review-phase', name: 'Review', isOpen: false }],
+    });
+    challengePhaseUpdateMany.mockResolvedValue({ count: 0 });
+
+    const result = await service.advancePhase(
+      'challenge-1',
+      'review-phase',
+      'open',
+    );
+
+    expect(challengePhaseUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'review-phase', isOpen: false, actualEndDate: null },
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(challengeUpdate).not.toHaveBeenCalled();
+  });
+
   it('pulls forward the scheduled dates when opening a phase early', async () => {
     const reviewPhase = {
       id: 'phase-1',
