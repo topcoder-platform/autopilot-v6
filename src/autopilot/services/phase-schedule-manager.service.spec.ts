@@ -39,6 +39,8 @@ describe('PhaseScheduleManager', () => {
     getReviewOpportunitiesByChallengeId: jest.Mock;
   };
   let reviewService: {
+    getPendingReviewCount: jest.Mock;
+    getCompletedReviewCountForPhase: jest.Mock;
     getMarathonMatchReviewReadiness: jest.Mock;
     updatePendingReviewScorecards: jest.Mock;
     getInProgressAiWorkflowRunCount: jest.Mock;
@@ -90,6 +92,8 @@ describe('PhaseScheduleManager', () => {
     };
 
     reviewService = {
+      getPendingReviewCount: jest.fn().mockResolvedValue(1),
+      getCompletedReviewCountForPhase: jest.fn().mockResolvedValue(0),
       getMarathonMatchReviewReadiness: jest.fn().mockResolvedValue({
         expectedSubmissionCount: 0,
         reviewedSubmissionCount: 0,
@@ -257,6 +261,102 @@ describe('PhaseScheduleManager', () => {
     ).toHaveBeenCalledWith(challenge, reviewPhase.id);
     expect(reviewService.updatePendingReviewScorecards).not.toHaveBeenCalled();
   });
+
+  it.each(['Review', 'Checkpoint Review'])(
+    'closes completed %s work during reconciliation even with Appeals already open',
+    async (name) => {
+      const reviewPhase = {
+        id: 'review-instance',
+        phaseId: 'review-template',
+        name,
+        isOpen: true,
+        actualStartDate: '2026-09-11T05:30:00.000Z',
+        actualEndDate: null,
+        scheduledStartDate: '2026-09-11T05:30:00.000Z',
+        scheduledEndDate: '2026-09-13T05:30:00.000Z',
+      };
+      const challenge = {
+        id: 'challenge-review-ready',
+        status: 'ACTIVE',
+        projectId: 1003,
+        type: 'Challenge',
+        phases: [
+          reviewPhase,
+          { ...reviewPhase, id: 'appeals-instance', name: 'Appeals' },
+        ],
+        reviewers: [],
+        prizeSets: [],
+      };
+      challengeApiService.getChallengeById
+        .mockResolvedValueOnce(challenge)
+        .mockResolvedValue({ ...challenge, phases: [] });
+      reviewService.getPendingReviewCount.mockResolvedValue(0);
+      reviewService.getCompletedReviewCountForPhase.mockResolvedValue(2);
+
+      await service.handleChallengeUpdate({
+        id: challenge.id,
+        operator: AutopilotOperator.SYSTEM_SYNC,
+        projectId: challenge.projectId,
+        status: 'ACTIVE',
+      });
+
+      expect(schedulerService.advancePhase).toHaveBeenCalledTimes(1);
+      expect(schedulerService.advancePhase).toHaveBeenCalledWith({
+        challengeId: challenge.id,
+        phaseId: reviewPhase.id,
+        phaseTypeName: name,
+        projectId: challenge.projectId,
+        projectStatus: 'ACTIVE',
+        operator: AutopilotOperator.SYSTEM_SYNC,
+        state: 'END',
+      });
+      expect(
+        phaseReviewService.handlePhaseOpenedForChallenge,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['pending reviews', 'Review', 1, 2],
+    ['no completed reviews', 'Review', 0, 0],
+    ['an iterative phase', 'Iterative Review', 0, 2],
+  ])(
+    'does not reconcile closure with %s',
+    async (_reason, name, pending, completed) => {
+      const challenge = {
+        id: 'challenge-not-ready',
+        status: 'ACTIVE',
+        type: 'Challenge',
+        projectId: 1003,
+        phases: [
+          {
+            id: 'review-instance',
+            phaseId: 'review-template',
+            name,
+            isOpen: true,
+            scheduledStartDate: new Date().toISOString(),
+            scheduledEndDate: new Date(Date.now() + 3600000).toISOString(),
+          },
+        ],
+        reviewers: [],
+        prizeSets: [],
+      };
+      challengeApiService.getChallengeById.mockResolvedValue(challenge);
+      reviewService.getPendingReviewCount.mockResolvedValue(pending);
+      reviewService.getCompletedReviewCountForPhase.mockResolvedValue(
+        completed,
+      );
+
+      await service.handleChallengeUpdate({
+        id: challenge.id,
+        operator: AutopilotOperator.SYSTEM_SYNC,
+        projectId: challenge.projectId,
+        status: 'ACTIVE',
+      });
+
+      expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    },
+  );
 
   it('closes ready Marathon Match review phases during active challenge reconciliation', async () => {
     const openReviewPhase = {
