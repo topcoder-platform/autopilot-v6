@@ -114,31 +114,62 @@ export class PhaseScheduleManager {
   }
 
   /**
-   * Closes open Marathon Match Review phases once all latest submissions have
-   * terminal SYSTEM scores. This is used during challenge-update reconciliation
-   * because failed SYSTEM runs can satisfy final-score readiness without
-   * producing a fresh review completion event for Autopilot.
+   * Reconciles completed Review and Checkpoint Review work after a missed event
+   * or a stale phase-open replay. Marathon Matches still require terminal SYSTEM
+   * scores for every latest submission. Human review phases require at least one
+   * completed review and no pending reviews; the scheduler rechecks assignments
+   * and escalations before closing. Iterative and post-mortem lifecycles retain
+   * their dedicated handlers.
    * @param challenge Active challenge snapshot to reconcile.
-   * @returns Number of Review phases submitted for closure.
+   * @returns Number of phase closure attempts, prompting a fresh challenge read.
+   * @throws Does not throw; failures are logged for the next reconciliation.
    */
-  private async closeReadyMarathonMatchReviewPhases(
-    challenge: IChallenge,
-  ): Promise<number> {
-    if (
-      !isActiveStatus(challenge.status) ||
-      !isMarathonMatchChallenge(challenge.type)
-    ) {
+  private async closeReadyReviewPhases(challenge: IChallenge): Promise<number> {
+    if (!isActiveStatus(challenge.status)) {
       return 0;
     }
 
+    const isMarathonMatch = isMarathonMatchChallenge(challenge.type);
     const openReviewPhases = (challenge.phases ?? []).filter(
-      (phase) => phase.isOpen === true && REVIEW_PHASE_NAMES.has(phase.name),
+      (phase) =>
+        phase.isOpen === true &&
+        (isMarathonMatch
+          ? REVIEW_PHASE_NAMES.has(phase.name)
+          : phase.name === 'Review' || phase.name === 'Checkpoint Review'),
     );
 
     let closedCount = 0;
 
     for (const phase of openReviewPhases) {
       try {
+        if (!isMarathonMatch) {
+          const pending = await this.reviewService.getPendingReviewCount(
+            phase.id,
+            challenge.id,
+          );
+          if (pending > 0) {
+            continue;
+          }
+
+          const completed =
+            await this.reviewService.getCompletedReviewCountForPhase(phase.id);
+          if (completed <= 0) {
+            continue;
+          }
+
+          await this.schedulerService.advancePhase({
+            projectId: challenge.projectId,
+            challengeId: challenge.id,
+            phaseId: phase.id,
+            phaseTypeName: phase.name,
+            state: 'END',
+            operator: AutopilotOperator.SYSTEM_SYNC,
+            projectStatus: challenge.status,
+          });
+          closedCount += 1;
+          continue;
+        }
+
         const readiness =
           await this.reviewService.getMarathonMatchReviewReadiness(
             challenge.id,
@@ -184,7 +215,7 @@ export class PhaseScheduleManager {
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `[MARATHON MATCH] Failed to reconcile Review phase ${phase.id} for challenge ${challenge.id}: ${err.message}`,
+          `[REVIEW RECONCILIATION] Failed to reconcile Review phase ${phase.id} for challenge ${challenge.id}: ${err.message}`,
           err.stack,
         );
       }
@@ -479,12 +510,12 @@ export class PhaseScheduleManager {
         }
       }
 
-      const marathonMatchReviewClosures =
-        await this.closeReadyMarathonMatchReviewPhases(challengeDetails);
+      const reviewClosures =
+        await this.closeReadyReviewPhases(challengeDetails);
 
-      if (marathonMatchReviewClosures > 0) {
+      if (reviewClosures > 0) {
         this.logger.log(
-          `Closed ${marathonMatchReviewClosures} ready Marathon Match review phase(s) for challenge ${message.id}; refreshing challenge snapshot before rescheduling.`,
+          `Attempted closure of ${reviewClosures} ready review phase(s) for challenge ${message.id}; refreshing challenge snapshot before rescheduling.`,
         );
 
         challengeDetails = await this.challengeApiService.getChallengeById(
@@ -503,7 +534,7 @@ export class PhaseScheduleManager {
           );
           this.updateCachedStatus(message.id, challengeDetails.status);
           this.logger.log(
-            `Skipping challenge ${message.id} update after Marathon Match review closure; status is now ${challengeDetails.status}.`,
+            `Skipping challenge ${message.id} update after review closure; status is now ${challengeDetails.status}.`,
           );
           return;
         }

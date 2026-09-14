@@ -281,6 +281,17 @@ export class ChallengeApiService {
     return name;
   }
 
+  /**
+   * Opens an uncompleted phase or closes an open phase for an active challenge.
+   * Used by the scheduler and phase-chain callbacks; replayed opens must never
+   * reopen a completed phase. Intentional manual reopens belong to challenge-api.
+   * @param challengeId Challenge containing the phase.
+   * @param phaseId Challenge phase instance to transition.
+   * @param operation Requested automatic transition.
+   * @returns Transition result and the refreshed phases and successors, if any.
+   * @throws Error when loading the challenge fails. Transaction failures are
+   * returned as unsuccessful transition results.
+   */
   async advancePhase(
     challengeId: string,
     phaseId: string,
@@ -351,6 +362,20 @@ export class ChallengeApiService {
         const result: PhaseAdvanceResponseDto = {
           success: false,
           message: `Phase ${targetPhase.name} is already open`,
+        };
+        void this.dbLogger.logAction('challenge.advancePhase', {
+          challengeId,
+          status: 'INFO',
+          source: ChallengeApiService.name,
+          details: { phaseId, operation, result },
+        });
+        return result;
+      }
+
+      if (operation === 'open' && targetPhase.actualEndDate) {
+        const result: PhaseAdvanceResponseDto = {
+          success: false,
+          message: `Phase ${targetPhase.name} has already completed`,
         };
         void this.dbLogger.logAction('challenge.advancePhase', {
           challengeId,
@@ -514,6 +539,7 @@ export class ChallengeApiService {
               where: {
                 id: targetPhase.id,
                 isOpen: false,
+                actualEndDate: null,
               },
               data: {
                 isOpen: true,
