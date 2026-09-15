@@ -1424,6 +1424,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
                 `[ZERO SUBMISSIONS] Unable to process post-submission workflow for challenge ${data.challengeId}: ${err.message}`,
                 err.stack,
               );
+              // The closed submission is reconciled on the next challenge update.
+              // Do not open Review or finalize while this decision is unresolved.
+              return;
             }
           } else if (isScreeningPhase) {
             try {
@@ -1871,6 +1874,58 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Recovers the zero-submission workflow after a missed close event or a failed
+   * post-mortem setup. Called during active challenge reconciliation before
+   * review readiness or successor scheduling can leave an empty review open.
+   * @param challenge Current challenge snapshot with its phases.
+   * @returns True when post-mortem handling replaced the remaining phase chain.
+   * @throws Propagates submission lookup and post-mortem failures for a later retry.
+   */
+  public async reconcileClosedSubmission(
+    challenge: IChallenge,
+  ): Promise<boolean> {
+    if (
+      challenge.status !== ChallengeStatusEnum.ACTIVE ||
+      isTopgearTaskChallenge(challenge.type) ||
+      challenge.phases?.some((phase) => isPostMortemPhaseName(phase.name))
+    ) {
+      return false;
+    }
+
+    const submissionPhases = (challenge.phases ?? []).filter(
+      (phase) => phase.name === SUBMISSION_PHASE_NAME,
+    );
+    if (
+      submissionPhases.some((phase) => phase.isOpen || !phase.actualEndDate)
+    ) {
+      return false;
+    }
+    const submissionPhase = submissionPhases.sort(
+      (first, second) =>
+        Date.parse(second.actualEndDate!) - Date.parse(first.actualEndDate!),
+    )[0];
+    if (!submissionPhase) {
+      return false;
+    }
+
+    return this.handleSubmissionPhaseClosed({
+      challengeId: challenge.id,
+      projectId: challenge.projectId,
+      projectStatus: challenge.status,
+      phaseId: submissionPhase.id,
+      phaseTypeName: submissionPhase.name,
+      state: 'END',
+      operator: AutopilotOperator.SYSTEM_RECOVERY,
+    });
+  }
+
+  /**
+   * Opens and schedules post-mortem when a closed Submission has no active entries.
+   * @param data Closed submission transition identifying the challenge and phase.
+   * @returns Whether zero-submission handling replaced the normal phase chain.
+   * @throws Propagates lookup and workflow errors so reconciliation can retry.
+   */
   private async handleSubmissionPhaseClosed(
     data: PhaseTransitionPayload,
   ): Promise<boolean> {
