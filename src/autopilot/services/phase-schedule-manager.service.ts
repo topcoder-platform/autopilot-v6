@@ -510,6 +510,15 @@ export class PhaseScheduleManager {
         }
       }
 
+      if (
+        await this.schedulerService.reconcileClosedSubmission(challengeDetails)
+      ) {
+        const recoveredChallenge =
+          await this.challengeApiService.getChallengeById(message.id);
+        this.updateCachedStatus(message.id, recoveredChallenge.status);
+        return;
+      }
+
       const reviewClosures =
         await this.closeReadyReviewPhases(challengeDetails);
 

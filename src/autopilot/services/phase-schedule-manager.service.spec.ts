@@ -18,6 +18,7 @@ describe('PhaseScheduleManager', () => {
   let schedulerService: {
     setPhaseChainCallback: jest.Mock;
     evaluateManualPhaseCompletion: jest.Mock;
+    reconcileClosedSubmission: jest.Mock;
     advancePhase: jest.Mock;
     buildJobId: jest.Mock;
     getScheduledTransition: jest.Mock;
@@ -64,6 +65,7 @@ describe('PhaseScheduleManager', () => {
     schedulerService = {
       setPhaseChainCallback: jest.fn(),
       evaluateManualPhaseCompletion: jest.fn().mockResolvedValue(undefined),
+      reconcileClosedSubmission: jest.fn().mockResolvedValue(false),
       advancePhase: jest.fn().mockResolvedValue(undefined),
       buildJobId: jest.fn(
         (challengeId: string, phaseId: string) => `${challengeId}|${phaseId}`,
@@ -137,6 +139,56 @@ describe('PhaseScheduleManager', () => {
       first2FinishService as unknown as First2FinishService,
       memberApiService as unknown as MemberApiService,
     );
+  });
+
+  it('recovers an empty challenge before attempting review closure or scheduling', async () => {
+    const challenge = { id: 'challenge-1', status: 'ACTIVE', phases: [] };
+    challengeApiService.getChallengeById
+      .mockResolvedValueOnce(challenge)
+      .mockResolvedValue({
+        ...challenge,
+        status: 'CANCELLED_ZERO_SUBMISSIONS',
+      });
+    schedulerService.reconcileClosedSubmission.mockResolvedValue(true);
+
+    await service.handleChallengeUpdate({
+      id: challenge.id,
+      projectId: 1000,
+      status: 'ACTIVE',
+      operator: AutopilotOperator.SYSTEM_RECOVERY,
+    });
+
+    expect(schedulerService.reconcileClosedSubmission).toHaveBeenCalledWith(
+      challenge,
+    );
+    expect(challengeApiService.getChallengeById).toHaveBeenCalledTimes(2);
+    expect(schedulerService.schedulePhaseTransition).not.toHaveBeenCalled();
+    expect(
+      reviewService.getCompletedReviewCountForPhase,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not schedule successor phases when empty-challenge recovery fails', async () => {
+    challengeApiService.getChallengeById.mockResolvedValue({
+      id: 'challenge-1',
+      status: 'ACTIVE',
+      phases: [],
+    });
+    schedulerService.reconcileClosedSubmission.mockRejectedValue(
+      new Error('Review database unavailable'),
+    );
+
+    await service.handleChallengeUpdate({
+      id: 'challenge-1',
+      projectId: 1000,
+      status: 'ACTIVE',
+      operator: AutopilotOperator.SYSTEM_RECOVERY,
+    });
+
+    expect(schedulerService.schedulePhaseTransition).not.toHaveBeenCalled();
+    expect(
+      reviewService.getCompletedReviewCountForPhase,
+    ).not.toHaveBeenCalled();
   });
 
   it('triggers finance generation once when challenge transitions to COMPLETED', async () => {
