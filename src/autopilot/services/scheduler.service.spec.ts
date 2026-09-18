@@ -1875,6 +1875,130 @@ describe('SchedulerService (review phase deferral)', () => {
   });
 
   describe('handleSubmissionPhaseClosed', () => {
+    /** Builds an active challenge whose final submission phase has closed. */
+    const closedSubmissionChallenge = (): IChallenge =>
+      ({
+        id: 'challenge-1',
+        projectId: 123,
+        status: 'ACTIVE',
+        type: 'Challenge',
+        phases: [
+          createPhase({
+            id: 'submission-phase',
+            name: 'Submission',
+            isOpen: false,
+            actualEndDate: new Date().toISOString(),
+          }),
+          createPhase({ id: 'review-phase', name: 'Review' }),
+        ],
+      }) as IChallenge;
+
+    it('recovers a challenge stranded in Review after an empty Submission closed', async () => {
+      const challenge = closedSubmissionChallenge();
+      challengeApiService.createPostMortemPhase.mockResolvedValue(
+        createPhase({
+          id: 'post-mortem-phase',
+          name: 'Post-Mortem',
+        }),
+      );
+      jest
+        .spyOn(
+          scheduler as unknown as SchedulerTestInternals,
+          'createPostMortemPendingReviews',
+        )
+        .mockResolvedValue(undefined);
+      const schedule = jest
+        .spyOn(scheduler, 'schedulePhaseTransition')
+        .mockResolvedValue('scheduled');
+
+      expect(await scheduler.reconcileClosedSubmission(challenge)).toBe(true);
+      expect(challengeApiService.createPostMortemPhase).toHaveBeenCalledWith(
+        challenge.id,
+        'submission-phase',
+        expect.any(Number),
+      );
+      expect(challengeApiService.cancelChallenge).toHaveBeenCalledWith(
+        challenge.id,
+        ChallengeStatusEnum.CANCELLED_ZERO_SUBMISSIONS,
+      );
+      expect(schedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phaseId: 'post-mortem-phase',
+          state: 'END',
+        }),
+      );
+    });
+
+    it('keeps normal review when an active contest submission exists', async () => {
+      reviewService.getActiveContestSubmissionIds.mockResolvedValue([
+        'submission-1',
+      ]);
+      expect(
+        await scheduler.reconcileClosedSubmission(closedSubmissionChallenge()),
+      ).toBe(false);
+      expect(challengeApiService.createPostMortemPhase).not.toHaveBeenCalled();
+      expect(challengeApiService.cancelChallenge).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'ACTIVE_SUBMISSION',
+      'UNSTARTED_SUBMISSION',
+      'CHECKPOINT',
+      'POST_MORTEM',
+      'TOPGEAR',
+      'CANCELLED',
+    ])('does not recover a challenge with %s', async (scenario) => {
+      const challenge = closedSubmissionChallenge();
+      if (scenario === 'ACTIVE_SUBMISSION') challenge.phases[0].isOpen = true;
+      if (scenario === 'UNSTARTED_SUBMISSION')
+        challenge.phases[0].actualEndDate = null;
+      if (scenario === 'CHECKPOINT')
+        challenge.phases[0].name = 'Checkpoint Submission';
+      if (scenario === 'POST_MORTEM')
+        challenge.phases.push(createPhase({ name: 'Post-Mortem' }));
+      if (scenario === 'TOPGEAR') challenge.type = 'Topgear Task';
+      if (scenario === 'CANCELLED')
+        challenge.status = 'CANCELLED_CLIENT_REQUEST';
+
+      expect(await scheduler.reconcileClosedSubmission(challenge)).toBe(false);
+      expect(
+        reviewService.getActiveContestSubmissionIds,
+      ).not.toHaveBeenCalled();
+      expect(challengeApiService.createPostMortemPhase).not.toHaveBeenCalled();
+    });
+
+    it('does not chain into Review when post-mortem setup fails after Submission closes', async () => {
+      const payload = createPayload({
+        phaseId: 'submission-phase',
+        phaseTypeName: 'Submission',
+      });
+      challengeApiService.getPhaseDetails.mockResolvedValue(
+        createPhase({
+          id: payload.phaseId,
+          name: 'Submission',
+        }),
+      );
+      challengeApiService.advancePhase.mockResolvedValue({
+        success: true,
+        message: 'Submission closed',
+        updatedPhases: [],
+        next: { phases: [createPhase({ id: 'review-phase', isOpen: false })] },
+      } as Awaited<ReturnType<ChallengeApiService['advancePhase']>>);
+      challengeApiService.createPostMortemPhase.mockRejectedValue(
+        new Error('Post-mortem unavailable'),
+      );
+      const phaseChain = jest.fn();
+      scheduler.setPhaseChainCallback(phaseChain);
+
+      await scheduler.advancePhase(payload);
+
+      expect(challengeApiService.createPostMortemPhase).toHaveBeenCalled();
+      expect(phaseChain).not.toHaveBeenCalled();
+      expect(
+        challengeCompletionService.finalizeChallenge,
+      ).not.toHaveBeenCalled();
+    });
+
     it('cancels challenge as zero submissions while keeping post-mortem open', async () => {
       const payload = createPayload({
         phaseId: 'submission-phase',
