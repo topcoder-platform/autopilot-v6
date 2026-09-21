@@ -1034,23 +1034,50 @@ export class ReviewService {
     }
 
     const query = Prisma.sql`
-      WITH ranked_decisions AS (
+      WITH latest_submissions AS (
         SELECT
+          s."id",
+          s."legacySubmissionId",
+          s."memberId",
+          s."submittedDate",
+          s."status",
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(s."memberId", s."id")
+            ORDER BY
+              s."submittedDate" DESC NULLS LAST,
+              s."createdAt" DESC NULLS LAST,
+              s."updatedAt" DESC NULLS LAST,
+              s."id" DESC
+          ) AS "submissionRank"
+        FROM ${ReviewService.SUBMISSION_TABLE} s
+        WHERE s."challengeId" = ${challengeId}
+          AND UPPER(COALESCE((s."status")::text, 'ACTIVE')) <> 'DELETED'
+          AND (
+            s."type" IS NULL
+            OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
+          )
+      ),
+      ranked_decisions AS (
+        SELECT
+          s."memberId" AS "memberId",
           d."submissionId",
           d."totalScore",
           UPPER((d."status")::text) AS "status",
           c."minPassingThreshold",
           ROW_NUMBER() OVER (
-            PARTITION BY d."submissionId"
+            PARTITION BY COALESCE(s."memberId", s."id")
             ORDER BY
               c."version" DESC,
               COALESCE(d."finalizedAt", d."updatedAt", d."createdAt") DESC,
               d."id" DESC
           ) AS "rn"
-        FROM ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+        FROM latest_submissions s
+        INNER JOIN ${ReviewService.AI_REVIEW_DECISION_TABLE} d
+          ON d."submissionId" = s."id"
         INNER JOIN ${ReviewService.AI_REVIEW_CONFIG_TABLE} c
           ON c."id" = d."configId"
-        WHERE c."challengeId" = ${challengeId}
+        WHERE s."submissionRank" = 1
+          AND c."challengeId" = ${challengeId}
           AND UPPER((d."status")::text) != 'PENDING'
       )
       SELECT
@@ -1061,14 +1088,10 @@ export class ReviewService {
         COALESCE(rd."totalScore", 0) AS "totalScore",
         rd."status"              AS "status",
         rd."minPassingThreshold" AS "minPassingThreshold"
-      FROM ${ReviewService.SUBMISSION_TABLE} s
+      FROM latest_submissions s
       INNER JOIN ranked_decisions rd ON rd."submissionId" = s."id"
-      WHERE s."challengeId" = ${challengeId}
+      WHERE s."submissionRank" = 1
         AND rd."rn" = 1
-        AND (
-          s."type" IS NULL
-          OR UPPER((s."type")::text) = 'CONTEST_SUBMISSION'
-        )
         AND UPPER(COALESCE((s."status")::text, '')) NOT IN ('DELETED', 'FAILED_SCREENING', 'AI_FAILED_REVIEW')
     `;
 
