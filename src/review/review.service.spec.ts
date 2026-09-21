@@ -144,6 +144,57 @@ describe('ReviewService', () => {
     });
   });
 
+  describe('getAiDecisionSummaries', () => {
+    it('uses the latest submission per user when selecting AI decisions', async () => {
+      prismaMock.$queryRaw.mockResolvedValueOnce([
+        {
+          submissionId: 'latest-submission',
+          legacySubmissionId: 'legacy-latest',
+          memberId: 'member-1',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          totalScore: '91.5',
+          status: 'PASSED',
+          minPassingThreshold: '80',
+        },
+      ]);
+
+      const summaries = await service.getAiDecisionSummaries(challengeId);
+
+      expect(summaries).toEqual([
+        {
+          submissionId: 'latest-submission',
+          legacySubmissionId: 'legacy-latest',
+          memberId: 'member-1',
+          submittedDate: new Date('2024-01-02T00:00:00.000Z'),
+          aggregateScore: 91.5,
+          scorecardId: null,
+          scorecardLegacyId: null,
+          passingScore: 80,
+          isPassing: true,
+        },
+      ]);
+
+      const rawQuery = prismaMock.$queryRaw.mock.calls[0][0] as {
+        strings?: TemplateStringsArray | string[];
+      };
+      const sqlText = Array.isArray(rawQuery?.strings)
+        ? rawQuery.strings.join('')
+        : '';
+
+      expect(sqlText).toContain('WITH latest_submissions AS');
+      expect(sqlText).toContain('PARTITION BY COALESCE(s."memberId", s."id")');
+      expect(sqlText).toContain('FROM latest_submissions s');
+      expect(sqlText).toContain('rd."rn" = 1');
+      expect(sqlText).toContain('s."submissionRank" = 1');
+      expect(sqlText).toContain('PARTITION BY COALESCE(s."memberId", s."id")');
+      expect(sqlText).toContain('INNER JOIN');
+      expect(dbLoggerMock.logAction).not.toHaveBeenCalledWith(
+        'review.getAiDecisionSummaries',
+        expect.objectContaining({ status: 'ERROR' }),
+      );
+    });
+  });
+
   describe('getActiveContestSubmissions', () => {
     it('keeps shared queries limited to active, virus-scan-eligible submissions', async () => {
       prismaMock.$queryRaw.mockResolvedValueOnce([
