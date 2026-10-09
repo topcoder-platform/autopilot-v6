@@ -114,7 +114,9 @@ export class First2FinishService {
    * Used by phase-open reconciliation paths that need to repair a missing
    * pending review without invoking the broader submission processor. The broader
    * processor may restart AI Screening, close Iterative Review phases, or create
-   * a successor phase, which is not safe from a phase-open callback.
+   * a successor phase, which is not safe from a phase-open callback. Phases whose
+   * review is already completed are skipped, because they are only waiting for
+   * review completion handling to close them and open the next phase.
    */
   async handleIterativePhaseOpened(
     challengeId: string,
@@ -164,6 +166,13 @@ export class First2FinishService {
     );
 
     if (existingPairs.size > 0) {
+      return;
+    }
+
+    if (await this.hasCompletedIterativeReview(phase.id)) {
+      this.logger.debug(
+        `Skipping iterative phase-open assignment for phase ${phase.id} on challenge ${challengeId}; its review is already completed and the phase is awaiting closure.`,
+      );
       return;
     }
 
@@ -622,6 +631,19 @@ export class First2FinishService {
         return;
       }
 
+      // The open phase already reviewed its submission; review completion
+      // handling closes it and opens the next phase for this submission.
+      if (await this.hasCompletedIterativeReview(currentPhase.id)) {
+        this.logger.debug(
+          `Iterative review phase ${currentPhase.id} on challenge ${challenge.id} already has a completed review; deferring until it closes.`,
+          {
+            submissionId: submissionId ?? null,
+            activePhaseId: currentPhase.id,
+          },
+        );
+        return;
+      }
+
       const completedIterativePhases = challenge.phases.filter(
         (phaseCandidate) =>
           phaseCandidate.id !== currentPhase.id &&
@@ -793,6 +815,13 @@ export class First2FinishService {
       );
 
       if (pendingCount > 0) {
+        return;
+      }
+
+      if (await this.hasCompletedIterativeReview(activePhase.id)) {
+        this.logger.debug(
+          `Skipping iterative review assignment verification for challenge ${challengeId}; phase ${activePhase.id} already has a completed review awaiting closure.`,
+        );
         return;
       }
 
@@ -1121,6 +1150,24 @@ export class First2FinishService {
     });
 
     return sorted.at(-1) ?? null;
+  }
+
+  /**
+   * Checks whether an Iterative Review phase already holds a completed review.
+   * @param phaseId Iterative Review phase to inspect.
+   * @returns True when at least one review in the phase is COMPLETED.
+   * @throws Error when the completed review count cannot be read.
+   *
+   * Each Iterative Review phase covers one submission. Once that review is
+   * completed, review completion handling (or the phase-close reconciliation)
+   * closes the phase and opens a successor for the next submission. The
+   * assignment paths use this check so they never add another submission to a
+   * phase that is only waiting for that closure.
+   */
+  private async hasCompletedIterativeReview(phaseId: string): Promise<boolean> {
+    const completedReviews =
+      await this.reviewService.getCompletedReviewCountForPhase(phaseId);
+    return completedReviews > 0;
   }
 
   private canReuseSeedIterativePhase(phase: IPhase): boolean {

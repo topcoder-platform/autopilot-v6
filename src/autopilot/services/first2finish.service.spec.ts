@@ -131,6 +131,7 @@ describe('First2FinishService', () => {
       getAiFailedDecisionSubmissionIds: jest.fn(),
       createPendingReview: jest.fn(),
       getPendingReviewCount: jest.fn(),
+      getCompletedReviewCountForPhase: jest.fn(),
       getScorecardPassingScore: jest.fn(),
       getLatestPassingReviewForPhase: jest.fn(),
       hasAiDecisionForSubmission: jest.fn(),
@@ -169,6 +170,7 @@ describe('First2FinishService', () => {
     reviewService.getReviewerSubmissionPairs.mockResolvedValue(new Set());
     reviewService.getAiFailedDecisionSubmissionIds.mockResolvedValue(new Set());
     reviewService.getPendingReviewCount.mockResolvedValue(0);
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(0);
     reviewService.getLatestPassingReviewForPhase.mockResolvedValue(null);
     reviewService.hasAiDecisionForSubmission.mockResolvedValue(undefined);
     resourcesService.getMemberHandleMap.mockResolvedValue(new Map());
@@ -438,6 +440,186 @@ describe('First2FinishService', () => {
         phaseId: nextPhase.id,
       }),
     );
+  });
+
+  it('moves a queued submission to a new iterative phase when the first review fails before assignment verification runs', async () => {
+    const seedPhase = buildIterativePhase({
+      isOpen: false,
+      actualStartDate: null,
+      actualEndDate: null,
+    });
+    const openedPhase: IPhase = {
+      ...seedPhase,
+      isOpen: true,
+      actualStartDate: iso(),
+      actualEndDate: null,
+    };
+    const closedPhase: IPhase = {
+      ...openedPhase,
+      isOpen: false,
+      actualEndDate: iso(),
+    };
+    const nextPhase = buildIterativePhase({
+      id: 'iterative-phase-2',
+      isOpen: true,
+      actualEndDate: null,
+      predecessor: seedPhase.id,
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(
+      buildChallenge({ phases: [seedPhase], reviewers: [buildReviewer()] }),
+    );
+    challengeApiService.getPhaseDetails.mockResolvedValue(openedPhase);
+    challengeApiService.createIterativeReviewPhase.mockResolvedValue(nextPhase);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([
+      'sub-1',
+      'sub-2',
+    ]);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.createPendingReview.mockResolvedValue({
+      created: true,
+      reviewId: null,
+    });
+
+    // Both submissions arrived before the seeded phase opened.
+    await service.handleSubmissionByChallengeId('challenge-1', 'sub-1');
+
+    expect(reviewService.createPendingReview.mock.calls).toEqual([
+      [
+        'sub-1',
+        'resource-1',
+        seedPhase.id,
+        'iterative-scorecard',
+        'challenge-1',
+      ],
+    ]);
+
+    // sub-1 is failed before the assignment verification retry fires, while
+    // the review completion event has not been handled yet.
+    challengeApiService.getChallengeById.mockResolvedValue(
+      buildChallenge({ phases: [openedPhase], reviewers: [buildReviewer()] }),
+    );
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
+    reviewService.getReviewerSubmissionPairs.mockResolvedValue(
+      new Set(['resource-1:sub-1']),
+    );
+
+    await jest.advanceTimersByTimeAsync(30_000);
+
+    expect(reviewService.getCompletedReviewCountForPhase).toHaveBeenCalledWith(
+      openedPhase.id,
+    );
+    expect(reviewService.createPendingReview).toHaveBeenCalledTimes(1);
+
+    // Review completion closes the first phase and opens the next one for sub-2.
+    challengeApiService.getChallengeById.mockResolvedValue(
+      buildChallenge({ phases: [closedPhase], reviewers: [buildReviewer()] }),
+    );
+    reviewService.getScorecardPassingScore.mockResolvedValue(80);
+
+    await service.handleIterativeReviewCompletion(
+      buildChallenge({ phases: [openedPhase], reviewers: [buildReviewer()] }),
+      openedPhase,
+      {
+        score: 0,
+        scorecardId: 'iterative-scorecard',
+        resourceId: 'resource-1',
+        submissionId: 'sub-1',
+        phaseId: openedPhase.id,
+      },
+      {
+        reviewId: 'review-1',
+        challengeId: 'challenge-1',
+        submissionId: 'sub-1',
+        phaseId: openedPhase.id,
+        scorecardId: 'iterative-scorecard',
+        reviewerResourceId: 'resource-1',
+        reviewerHandle: 'iterativeReviewer',
+        reviewerMemberId: '2001',
+        submitterHandle: 'submitter',
+        submitterMemberId: '4001',
+        completedAt: iso(),
+        initialScore: 0,
+      },
+    );
+
+    expect(schedulerService.advancePhase).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        phaseId: openedPhase.id,
+        state: 'END',
+        skipIterativePhaseRefresh: false,
+      }),
+    );
+    expect(challengeApiService.createIterativeReviewPhase).toHaveBeenCalledWith(
+      'challenge-1',
+      closedPhase.id,
+      closedPhase.phaseId,
+      closedPhase.name,
+      closedPhase.description,
+      expect.any(Number),
+    );
+    expect(reviewService.createPendingReview.mock.calls).toEqual([
+      [
+        'sub-1',
+        'resource-1',
+        seedPhase.id,
+        'iterative-scorecard',
+        'challenge-1',
+      ],
+      [
+        'sub-2',
+        'resource-1',
+        nextPhase.id,
+        'iterative-scorecard',
+        'challenge-1',
+      ],
+    ]);
+  });
+
+  it('defers a new submission while the open iterative phase awaits closure after a completed review', async () => {
+    const activePhase = buildIterativePhase({
+      isOpen: true,
+      actualEndDate: null,
+    });
+    const challenge = buildChallenge({
+      phases: [activePhase],
+      reviewers: [buildReviewer()],
+    });
+
+    challengeApiService.getChallengeById.mockResolvedValue(challenge);
+    resourcesService.getReviewerResources.mockResolvedValue([
+      {
+        id: 'resource-1',
+        memberId: '2001',
+        memberHandle: 'iterativeReviewer',
+        roleName: 'Iterative Reviewer',
+      },
+    ]);
+    reviewService.getExistingReviewPairs.mockResolvedValue(new Set());
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([
+      'sub-1',
+      'sub-2',
+    ]);
+
+    await service.handleSubmissionByChallengeId(challenge.id, 'sub-2');
+
+    expect(reviewService.getCompletedReviewCountForPhase).toHaveBeenCalledWith(
+      activePhase.id,
+    );
+    expect(reviewService.createPendingReview).not.toHaveBeenCalled();
+    expect(schedulerService.advancePhase).not.toHaveBeenCalled();
+    expect(
+      challengeApiService.createIterativeReviewPhase,
+    ).not.toHaveBeenCalled();
   });
 
   it('closes submission and registration after a passing iterative review', async () => {
