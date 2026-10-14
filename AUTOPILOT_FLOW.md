@@ -315,6 +315,7 @@ These all reschedule another `START` or `END` attempt instead of moving the phas
   - finds the next eligible submission / reviewer pair
   - creates one pending Iterative Review
   - schedules Iterative Review closure
+  - never adds a second submission to an open Iterative Review phase whose review is already completed (including the assignment verification retry); that phase waits for review completion handling to close it and open the next round
 
 ### Review row deduplication
 

@@ -66,6 +66,7 @@ describe('First2FinishService iterative phase-open repair', () => {
   };
   let reviewService: {
     getPendingReviewCount: jest.Mock<Promise<number>, [string, string]>;
+    getCompletedReviewCountForPhase: jest.Mock<Promise<number>, [string]>;
     getExistingReviewPairs: jest.Mock<Promise<Set<string>>, [string, string]>;
     getReviewerSubmissionPairs: jest.Mock<Promise<Set<string>>, [string]>;
     getAllSubmissionIdsOrdered: jest.Mock<Promise<string[]>, [string]>;
@@ -102,6 +103,9 @@ describe('First2FinishService iterative phase-open repair', () => {
     reviewService = {
       getPendingReviewCount: jest
         .fn<Promise<number>, [string, string]>()
+        .mockResolvedValue(0),
+      getCompletedReviewCountForPhase: jest
+        .fn<Promise<number>, [string]>()
         .mockResolvedValue(0),
       getExistingReviewPairs: jest
         .fn<Promise<Set<string>>, [string, string]>()
@@ -182,6 +186,30 @@ describe('First2FinishService iterative phase-open repair', () => {
     expect(
       challengeApiService.createIterativeReviewPhase.mock.calls,
     ).toHaveLength(0);
+  });
+
+  it('skips an open phase whose iterative review is already completed', async () => {
+    const phase = createIterativePhase();
+    challengeApiService.getChallengeById.mockResolvedValue(
+      createChallenge([phase]),
+    );
+    reviewService.getCompletedReviewCountForPhase.mockResolvedValue(1);
+    reviewService.getAllSubmissionIdsOrdered.mockResolvedValue([
+      'submission-1',
+      'submission-2',
+    ]);
+    reviewService.getReviewerSubmissionPairs.mockResolvedValue(
+      new Set(['iterative-reviewer-resource:submission-1']),
+    );
+
+    await service.handleIterativePhaseOpened('challenge-1', phase.id);
+
+    expect(reviewService.getCompletedReviewCountForPhase.mock.calls).toEqual([
+      [phase.id],
+    ]);
+    expect(reviewService.createPendingReview.mock.calls).toHaveLength(0);
+    expect(schedulerService.schedulePhaseTransition.mock.calls).toHaveLength(0);
+    expect(schedulerService.advancePhase.mock.calls).toHaveLength(0);
   });
 
   it('skips stale open iterative phases', async () => {
