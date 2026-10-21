@@ -1,3 +1,4 @@
+import { AuthModule } from '../auth/auth.module';
 // src/kafka/kafka.module.ts
 import { Module, forwardRef } from '@nestjs/common';
 import { KafkaService } from './kafka.service';
@@ -9,7 +10,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AutopilotModule } from '../autopilot/autopilot.module';
 
 @Module({
-  imports: [ConfigModule, forwardRef(() => AutopilotModule)],
+  imports: [AuthModule, ConfigModule, forwardRef(() => AutopilotModule)],
   controllers: [KafkaController],
   providers: [
     KafkaService,

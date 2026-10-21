@@ -1,9 +1,8 @@
 import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
 import { Auth0Service } from './auth0.service';
 
+/** Shares the Keycloak token provider under the existing outbound-client DI contract. */
 @Module({
-  imports: [HttpModule],
   providers: [Auth0Service],
   exports: [Auth0Service],
 })

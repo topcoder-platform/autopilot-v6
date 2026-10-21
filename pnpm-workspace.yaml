@@ -51,6 +51,7 @@ allowBuilds:
   '@prisma/engines@6.19.3': true
   '@scarf/scarf@1.4.0': false
   '@swc/core@1.12.14': true
+  dtrace-provider: false
   'esbuild@0.25.10': true
   'msgpackr-extract@3.0.4': true
   'prisma@6.19.3': true

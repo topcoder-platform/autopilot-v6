@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpStatus } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { Controller, Post, Body, HttpStatus, UseGuards } from '@nestjs/common';
 import { AutopilotProducer } from '../producers/autopilot.producer';
 import {
   PhaseTransitionMessageDto,
@@ -6,8 +7,16 @@ import {
   CommandMessageDto,
 } from '../dto/produce-message.dto';
 
-import { ApiResponse, ApiTags, ApiOperation } from '@nestjs/swagger';
+import {
+  ApiResponse,
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 
+/** Manual Kafka controls require a verified administrator or write:autopilot service principal. */
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 @ApiTags('kafka')
 @Controller('kafka')
 export class KafkaController {

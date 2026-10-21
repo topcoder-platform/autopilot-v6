@@ -397,11 +397,12 @@ export class PhaseChangeNotificationService {
     return this.resolveDefaultDomain();
   }
 
+  /** Returns the member-facing environment domain from the configured Keycloak issuer; no inputs or exceptions. */
   private resolveDefaultDomain(): string {
-    const auth0Domain =
-      this.configService.get<string>('auth0.domain')?.toLowerCase() ?? '';
+    const issuer =
+      this.configService.get<string>('keycloak.issuer')?.toLowerCase() ?? '';
 
-    if (auth0Domain.includes('topcoder-dev')) {
+    if (issuer.includes('topcoder-dev')) {
       return 'topcoder-dev';
     }
 

@@ -95,35 +95,22 @@ export const validationSchema = Joi.object({
   APPEALS_RESPONSE_PHASE_NAMES: Joi.string().default('Appeals Response'),
   PHASE_NOTIFICATION_SENDGRID_TEMPLATE: Joi.string().optional(),
 
-  // Auth0 Configuration (optional in test environment)
-  AUTH0_URL: Joi.string()
-    .uri()
-    .when('NODE_ENV', {
-      is: 'test',
-      then: Joi.optional().default('https://test.auth0.com/oauth/token'),
-      otherwise: Joi.required(),
-    }),
-  AUTH0_CLIENT_ID: Joi.string().when('NODE_ENV', {
-    is: 'test',
-    then: Joi.optional().default('test-client-id'),
-    otherwise: Joi.required(),
-  }),
-  AUTH0_CLIENT_SECRET: Joi.string().when('NODE_ENV', {
-    is: 'test',
-    then: Joi.optional().default('test-client-secret'),
-    otherwise: Joi.required(),
-  }),
-  AUTH0_DOMAIN: Joi.string().when('NODE_ENV', {
-    is: 'test',
-    then: Joi.optional().default('test.auth0.com'),
-    otherwise: Joi.required(),
-  }),
-  AUTH0_AUDIENCE: Joi.string().when('NODE_ENV', {
-    is: 'test',
-    then: Joi.optional().default('https://test-api.topcoder.com'),
-    otherwise: Joi.required(),
-  }),
-  AUTH0_PROXY_SEREVR_URL: Joi.string().optional().allow(''),
+  // Explicit Keycloak workload configuration; test fixtures are supplied by the test runner.
+  M2M_PROVIDER: Joi.string().valid('keycloak').required(),
+  KEYCLOAK_ISSUER: Joi.string()
+    .uri({ scheme: ['https'] })
+    .required(),
+  KEYCLOAK_TOKEN_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .required(),
+  KEYCLOAK_AUDIENCE: Joi.string().required(),
+  KEYCLOAK_CLIENT_ID: Joi.string().required(),
+  KEYCLOAK_CLIENT_SECRET: Joi.string().required(),
+  KEYCLOAK_SCOPE: Joi.string().optional(),
+  VALID_ISSUERS: Joi.string().optional(),
+  AUTH_USER_AUDIENCES: Joi.string().optional(),
+  AUTH_SECRET: Joi.string().optional(),
+  ALLOW_LEGACY_USER_AUDIENCE: Joi.string().valid('true', 'false').optional(),
 
   // Bus API Configuration
   BUS_API_URL: Joi.string()
