@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { auth } from 'tc-core-library-js';
 import * as cityTimezones from 'city-timezones';
 import * as moment from 'moment-timezone';
 import { ResourcesService } from '../../resources/resources.service';
@@ -397,12 +398,19 @@ export class PhaseChangeNotificationService {
     return this.resolveDefaultDomain();
   }
 
-  /** Returns the member-facing environment domain from the configured Keycloak issuer; no inputs or exceptions. */
+  /**
+   * Returns the member-facing environment domain ("topcoder-dev" or "topcoder") from the
+   * active M2M provider's settings: the Keycloak issuer when `USE_KEYCLOAK=true`, otherwise
+   * `AUTH0_DOMAIN` as before the migration. Used when REVIEW_APP_URL is not configured.
+   * Takes no inputs; throws TypeError only for an invalid USE_KEYCLOAK value.
+   */
   private resolveDefaultDomain(): string {
-    const issuer =
-      this.configService.get<string>('keycloak.issuer')?.toLowerCase() ?? '';
+    const providerSetting =
+      this.configService
+        .get<string>(auth.useKeycloak() ? 'keycloak.issuer' : 'auth0.domain')
+        ?.toLowerCase() ?? '';
 
-    if (issuer.includes('topcoder-dev')) {
+    if (providerSetting.includes('topcoder-dev')) {
       return 'topcoder-dev';
     }
 

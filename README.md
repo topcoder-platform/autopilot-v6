@@ -31,7 +31,7 @@ Create a `.env` file in the root directory:
 cp .env.example .env
 ```
 
-Open the `.env` file and configure the variables for your environment. It is crucial to set valid Keycloak credentials.
+Open the `.env` file and configure the variables for your environment. It is crucial to set valid M2M credentials: Keycloak (`KEYCLOAK_*`) when `USE_KEYCLOAK=true`, Auth0 (`AUTH0_*`) when `USE_KEYCLOAK` is unset or `false`.
 
    ```plaintext
    # -------------------------------------
@@ -71,14 +71,21 @@ Open the `.env` file and configure the variables for your environment. It is cru
   REVIEW_DB_URL=postgresql://<user>:<password>@<host>:<port>/<database>
 
    # -------------------------------------
-   # Keycloak Configuration
+   # M2M Configuration (USE_KEYCLOAK=true: Keycloak; unset/false: Auth0)
    # -------------------------------------
-   M2M_PROVIDER=keycloak
+   USE_KEYCLOAK=true
    KEYCLOAK_TOKEN_URL=<your-keycloak-url> # <-- IMPORTANT: REPLACE THIS
    KEYCLOAK_CLIENT_ID=<your-keycloak-client-id> # <-- IMPORTANT: REPLACE THIS
    KEYCLOAK_CLIENT_SECRET=<your-keycloak-client-secret> # <-- IMPORTANT: REPLACE THIS
    KEYCLOAK_ISSUER=<your-keycloak-domain> # <-- IMPORTANT: REPLACE THIS
    KEYCLOAK_AUDIENCE=<your-keycloak-audience> # <-- IMPORTANT: REPLACE THIS
+   # Used instead when USE_KEYCLOAK is unset or false (rollback)
+   AUTH0_URL=<your-auth0-url>
+   AUTH0_CLIENT_ID=<your-auth0-client-id>
+   AUTH0_CLIENT_SECRET=<your-auth0-client-secret>
+   AUTH0_DOMAIN=<your-auth0-domain>
+   AUTH0_AUDIENCE=<your-auth0-audience>
+   AUTH0_PROXY_SEREVR_URL=
 
    # -------------------------------------
    # Bus API Integration
@@ -352,7 +359,7 @@ For more detailed technical information, please see the documents in the `docs/`
    docker compose up -d
    ```
 
-- **API Authentication Errors**: Ensure Keycloak credentials (`KEYCLOAK_TOKEN_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_AUDIENCE`) in your `.env` file are valid and not expired.
+- **API Authentication Errors**: Ensure the active provider's credentials in your `.env` file are valid and not expired: Keycloak (`KEYCLOAK_TOKEN_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_AUDIENCE`) with `USE_KEYCLOAK=true`, otherwise Auth0 (`AUTH0_URL`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_AUDIENCE`).
 
 - **ECS Deployment - Read-only Filesystem Error**: If the application fails to start in ECS with errors about creating a 'logs' directory:
   - Ensure `NODE_ENV=production` is set in your ECS task definition

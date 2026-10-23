@@ -1,6 +1,71 @@
 import * as Joi from 'joi';
+import { auth } from 'tc-core-library-js';
 // Note: CronExpression enum is not required for string-based defaults
 
+/**
+ * Decide the M2M provider for a USE_KEYCLOAK value being validated, using the core's rule
+ * (`auth.useKeycloak`): "true" in any case selects Keycloak; missing, empty or "false"
+ * selects Auth0. The value is passed explicitly so settings from `.env` count too.
+ * @param value The USE_KEYCLOAK value from the configuration under validation.
+ * @returns True when Keycloak is selected.
+ * @throws TypeError for any other value.
+ */
+const keycloakSelected = (value: unknown): boolean =>
+  auth.useKeycloak({ USE_KEYCLOAK: value });
+
+/**
+ * Joi condition that matches only when USE_KEYCLOAK selects Keycloak. Unset, empty,
+ * "false" and invalid values do not match; invalid values are reported by the
+ * USE_KEYCLOAK key itself.
+ */
+const KEYCLOAK_SELECTED = Joi.any()
+  .required()
+  .custom((value: unknown, helpers) => {
+    try {
+      return keycloakSelected(value) ? value : helpers.error('any.invalid');
+    } catch {
+      return helpers.error('any.invalid');
+    }
+  });
+
+/**
+ * Apply a Keycloak setting's rules only in Keycloak mode; in Auth0 mode the setting is
+ * optional and unchecked, as it was before the migration.
+ * @param schema The setting's Keycloak-mode rules, including presence.
+ * @returns The conditional schema for the validation object.
+ */
+const keycloakSetting = (schema: Joi.Schema): Joi.Schema =>
+  Joi.any().when('USE_KEYCLOAK', {
+    is: KEYCLOAK_SELECTED,
+    then: schema,
+    otherwise: Joi.any(),
+  });
+
+/**
+ * Apply an Auth0 setting's pre-migration rules only in Auth0 mode: required, except under
+ * NODE_ENV=test where it is optional with the given default. In Keycloak mode the
+ * setting is optional and unchecked, as it was on the Keycloak-only branch.
+ * @param schema The setting's Auth0-mode rules (without presence).
+ * @param testDefault The default used when NODE_ENV=test.
+ * @returns The conditional schema for the validation object.
+ */
+const auth0Setting = (schema: Joi.Schema, testDefault: string): Joi.Schema =>
+  Joi.any().when('USE_KEYCLOAK', {
+    is: KEYCLOAK_SELECTED,
+    then: Joi.any(),
+    otherwise: schema.when('NODE_ENV', {
+      is: 'test',
+      then: Joi.optional().default(testDefault),
+      otherwise: Joi.required(),
+    }),
+  });
+
+/**
+ * Environment validation for ConfigModule. M2M settings follow USE_KEYCLOAK: `true`
+ * requires the KEYCLOAK_* workload settings; unset or `false` requires the Auth0
+ * settings exactly as the service did before the Keycloak migration. An invalid
+ * USE_KEYCLOAK value fails startup.
+ */
 export const validationSchema = Joi.object({
   // App Configuration
   NODE_ENV: Joi.string()
@@ -95,18 +160,40 @@ export const validationSchema = Joi.object({
   APPEALS_RESPONSE_PHASE_NAMES: Joi.string().default('Appeals Response'),
   PHASE_NOTIFICATION_SENDGRID_TEMPLATE: Joi.string().optional(),
 
-  // Explicit Keycloak workload configuration; test fixtures are supplied by the test runner.
-  M2M_PROVIDER: Joi.string().valid('keycloak').required(),
-  KEYCLOAK_ISSUER: Joi.string()
-    .uri({ scheme: ['https'] })
-    .required(),
-  KEYCLOAK_TOKEN_URL: Joi.string()
-    .uri({ scheme: ['https'] })
-    .required(),
-  KEYCLOAK_AUDIENCE: Joi.string().required(),
-  KEYCLOAK_CLIENT_ID: Joi.string().required(),
-  KEYCLOAK_CLIENT_SECRET: Joi.string().required(),
-  KEYCLOAK_SCOPE: Joi.string().optional(),
+  // M2M provider switch: true = Keycloak, unset/empty/false = Auth0. Other values fail.
+  USE_KEYCLOAK: Joi.any().custom((value: unknown) => {
+    keycloakSelected(value);
+    return value;
+  }),
+
+  // Keycloak workload configuration, required when USE_KEYCLOAK=true; test fixtures
+  // are supplied by the test runner.
+  KEYCLOAK_ISSUER: keycloakSetting(
+    Joi.string()
+      .uri({ scheme: ['https'] })
+      .required(),
+  ),
+  KEYCLOAK_TOKEN_URL: keycloakSetting(
+    Joi.string()
+      .uri({ scheme: ['https'] })
+      .required(),
+  ),
+  KEYCLOAK_AUDIENCE: keycloakSetting(Joi.string().required()),
+  KEYCLOAK_CLIENT_ID: keycloakSetting(Joi.string().required()),
+  KEYCLOAK_CLIENT_SECRET: keycloakSetting(Joi.string().required()),
+  KEYCLOAK_SCOPE: keycloakSetting(Joi.string().optional()),
+
+  // Auth0 Configuration, required when USE_KEYCLOAK is unset or false (optional in test environment)
+  AUTH0_URL: auth0Setting(
+    Joi.string().uri(),
+    'https://test.auth0.com/oauth/token',
+  ),
+  AUTH0_CLIENT_ID: auth0Setting(Joi.string(), 'test-client-id'),
+  AUTH0_CLIENT_SECRET: auth0Setting(Joi.string(), 'test-client-secret'),
+  AUTH0_DOMAIN: auth0Setting(Joi.string(), 'test.auth0.com'),
+  AUTH0_AUDIENCE: auth0Setting(Joi.string(), 'https://test-api.topcoder.com'),
+  AUTH0_PROXY_SEREVR_URL: Joi.string().optional().allow(''),
+
   VALID_ISSUERS: Joi.string().optional(),
   AUTH_USER_AUDIENCES: Joi.string().optional(),
   AUTH_SECRET: Joi.string().optional(),

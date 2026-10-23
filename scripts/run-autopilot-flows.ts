@@ -2,19 +2,25 @@
  End-to-end flow runner for Autopilot, based off the code in the autopilot-tester
  - Runs selected flows in parallel to allow us to test the various challenge tracks and types
  - Fails the process if any flow fails.
- - Uses explicitly supplied Keycloak settings for the separate autopilot-tester.
- - Refuses to overwrite an existing tester credential file.
+ - USE_KEYCLOAK=true: uses explicitly supplied Keycloak settings for the separate
+   autopilot-tester and refuses to overwrite an existing tester credential file.
+ - USE_KEYCLOAK unset/false: uses Auth0 M2M credentials from env to write
+   autopilot-tester secrets/m2m.json (if provided), as before the Keycloak migration.
 
  Supported env vars:
- - M2M_PROVIDER=keycloak
- - KEYCLOAK_CLIENT_ID / KEYCLOAK_CLIENT_SECRET
- - KEYCLOAK_AUDIENCE / KEYCLOAK_TOKEN_URL
+ - USE_KEYCLOAK (true = Keycloak, unset/false = Auth0)
+ - Keycloak: KEYCLOAK_CLIENT_ID / KEYCLOAK_CLIENT_SECRET, KEYCLOAK_AUDIENCE / KEYCLOAK_TOKEN_URL
+ - Auth0: AUTH0_CLIENT_ID / TC_M2M_CLIENT_ID
+ - Auth0: AUTH0_CLIENT_SECRET / TC_M2M_CLIENT_SECRET
+ - Auth0: AUTH0_AUDIENCE / M2M_AUDIENCE (default: https://m2m.topcoder-dev.com/)
+ - Auth0: AUTH0_TOKEN_URL / AUTH0_DOMAIN (default: https://topcoder-dev.auth0.com/oauth/token)
  - AUTOPILOT_E2E_FLOWS: comma list of flows (full,first2finish,topgear,topgearlate,design)
 */
 
 /* eslint-disable no-console */
 import fs from 'fs';
 import path from 'path';
+import { auth } from 'tc-core-library-js';
 // Use Node's CommonJS globals for path resolution under tsconfig module=commonjs
 // (Avoid import.meta which requires ESM module settings.)
 
@@ -84,22 +90,66 @@ function createFlowLogger(prefix: string) {
 }
 
 /**
- * Writes an operator-supplied Keycloak credential configuration for the external flow tester.
- * Takes no arguments; returns nothing; missing settings or an existing file raise before any flow starts.
- * Uses a restrictive new file and never rewrites an existing Auth0 tester configuration.
+ * Writes the M2M credential configuration for the external flow tester, for the provider
+ * selected by USE_KEYCLOAK (`auth.useKeycloak()`).
+ * - Keycloak: the KEYCLOAK_* settings are required; uses a restrictive new file and never
+ *   rewrites an existing tester configuration.
+ * - Auth0: as before the migration, writes the AUTH0_* (or TC_M2M_*) credentials with
+ *   default audience/token URL when both client ID and secret are set; otherwise writes nothing.
+ * Takes no arguments; returns nothing. Throws before any flow starts for an invalid
+ * USE_KEYCLOAK value, missing Keycloak settings or an existing Keycloak-mode file.
  */
 function ensureM2MSecretsFromEnv(): void {
+  if (!auth.useKeycloak()) {
+    ensureAuth0M2MSecretsFromEnv();
+    return;
+  }
   const clientId = process.env.KEYCLOAK_CLIENT_ID;
   const clientSecret = process.env.KEYCLOAK_CLIENT_SECRET;
   const audience = process.env.KEYCLOAK_AUDIENCE;
   const tokenUrl = process.env.KEYCLOAK_TOKEN_URL;
-  if (process.env.M2M_PROVIDER !== 'keycloak' || !clientId || !clientSecret || !audience || !tokenUrl) {
+  if (!clientId || !clientSecret || !audience || !tokenUrl) {
     throw new Error('Explicit Keycloak workload settings are required for these flows');
   }
   const targetDir = path.resolve(__dirname, '../../autopilot-tester/server/secrets');
   const targetFile = path.join(targetDir, 'm2m.json');
   fs.mkdirSync(targetDir, { recursive: true });
   fs.writeFileSync(targetFile, JSON.stringify({tokenUrl, audience, clientId, clientSecret}), {mode: 0o600, flag: 'wx'});
+}
+
+/**
+ * Auth0 mode (USE_KEYCLOAK unset/false): the pre-migration behaviour. Reads
+ * AUTH0_CLIENT_ID/TC_M2M_CLIENT_ID, AUTH0_CLIENT_SECRET/TC_M2M_CLIENT_SECRET,
+ * AUTH0_AUDIENCE/M2M_AUDIENCE and AUTH0_TOKEN_URL/AUTH0_DOMAIN and, when both
+ * credentials are set, writes them to the tester's secrets/m2m.json.
+ * Takes no arguments; returns nothing; file-system errors propagate.
+ */
+function ensureAuth0M2MSecretsFromEnv(): void {
+  const clientId = process.env.AUTH0_CLIENT_ID || process.env.TC_M2M_CLIENT_ID;
+  const clientSecret =
+    process.env.AUTH0_CLIENT_SECRET || process.env.TC_M2M_CLIENT_SECRET;
+  const audience =
+    process.env.AUTH0_AUDIENCE ||
+    process.env.M2M_AUDIENCE ||
+    'https://m2m.topcoder-dev.com/';
+  const tokenUrl =
+    process.env.AUTH0_TOKEN_URL ||
+    (process.env.AUTH0_DOMAIN
+      ? `https://${process.env.AUTH0_DOMAIN}/oauth/token`
+      : 'https://topcoder-dev.auth0.com/oauth/token');
+
+  // If both clientId and clientSecret are provided, write the secrets file expected by autopilot-tester
+  if (clientId && clientSecret) {
+    const targetDir = path.resolve(
+      __dirname,
+      '../../autopilot-tester/server/secrets',
+    );
+    const targetFile = path.join(targetDir, 'm2m.json');
+    fs.mkdirSync(targetDir, { recursive: true });
+    const payload = { tokenUrl, audience, clientId, clientSecret };
+    fs.writeFileSync(targetFile, JSON.stringify(payload, null, 2));
+    console.log(`[flows] Wrote M2M secrets to ${targetFile}`);
+  }
 }
 
 function readAppConfig() {

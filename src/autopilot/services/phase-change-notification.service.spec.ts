@@ -366,3 +366,44 @@ describe('PhaseChangeNotificationService', () => {
     });
   });
 });
+
+describe('PhaseChangeNotificationService default domain and USE_KEYCLOAK', () => {
+  const saved = process.env.USE_KEYCLOAK;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.USE_KEYCLOAK;
+    else process.env.USE_KEYCLOAK = saved;
+  });
+
+  /** Build the service without REVIEW_APP_URL; returns its derived review app base URL. */
+  const reviewAppBaseUrl = (settings: Record<string, string>): string => {
+    const configService = {
+      get: jest.fn((key: string) => settings[key]),
+    } as unknown as ConfigService;
+    const service = new PhaseChangeNotificationService(
+      {} as ResourcesService,
+      {} as MembersService,
+      {} as ChallengeApiService,
+      {} as Auth0Service,
+      {} as HttpService,
+      configService,
+      {} as AutopilotDbLoggerService,
+    );
+    return (service as unknown as { reviewAppBaseUrl: string })
+      .reviewAppBaseUrl;
+  };
+  const settings = {
+    'auth0.domain': 'topcoder-dev.auth0.com',
+    'keycloak.issuer': 'https://keycloak.topcoder.com/realms/topcoder-m2m',
+  };
+
+  it('uses AUTH0_DOMAIN when USE_KEYCLOAK is false', () => {
+    process.env.USE_KEYCLOAK = 'false';
+    expect(reviewAppBaseUrl(settings)).toBe('https://review.topcoder-dev.com/');
+  });
+
+  it('uses KEYCLOAK_ISSUER when USE_KEYCLOAK=true', () => {
+    process.env.USE_KEYCLOAK = 'true';
+    expect(reviewAppBaseUrl(settings)).toBe('https://review.topcoder.com/');
+  });
+});

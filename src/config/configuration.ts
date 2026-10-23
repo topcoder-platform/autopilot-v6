@@ -5,6 +5,7 @@ import reviewConfig from './sections/review.config';
 import resourcesConfig from './sections/resources.config';
 import membersConfig from './sections/members.config';
 import busConfig from './sections/bus.config';
+import auth0Config from './sections/auth0.config';
 import keycloakConfig from './sections/keycloak.config';
 import autopilotConfig from './sections/autopilot.config';
 import financeConfig from './sections/finance.config';
@@ -19,6 +20,7 @@ export default () => ({
   resources: resourcesConfig(),
   members: membersConfig(),
   bus: busConfig(),
+  auth0: auth0Config(),
   keycloak: keycloakConfig(),
   autopilot: autopilotConfig(),
   finance: financeConfig(),
