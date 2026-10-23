@@ -1,6 +1,6 @@
 # Keycloak migration branch
 
-Pin shared core `4.0.0-keycloak.1` to immutable commit `e844764`.
+Pin shared core `4.0.0-keycloak.2` to immutable commit `112d54a`.
 
 ## Provider switch: `USE_KEYCLOAK`
 
