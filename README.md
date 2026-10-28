@@ -385,7 +385,7 @@ not retry POSTs automatically. Application retry/outbox behavior remains local.
 See the [core migration guide](https://github.com/topcoder-platform/tc-core-library-js/blob/v4.0.0-rc.1/MIGRATION.md)
 for the API mapping, compatibility requirements, and rollout scope.
 
-Local login requires `LOCAL_AUTH_USERNAME` and `LOCAL_AUTH_PASSWORD` (at least 32 characters). Configure `jwt.secret` securely; locally issued tokens use issuer and audience `autopilot-v6`.
+Local login requires `LOCAL_AUTH_USERNAME` and `LOCAL_AUTH_PASSWORD` (at least 32 characters). `jwt.secret` is loaded from the shared `AUTH_SECRET` (at least 32 UTF-8 bytes); locally issued tokens use issuer and audience `autopilot-v6`.
 
 ## Alpine Node runtime packages
 
@@ -397,3 +397,10 @@ Node major. The runtime keeps Alpine's dynamically linked Node and system
 libraries. Existing non-root users and application entrypoints are preserved.
 Build stages using a versioned official Node image retain their configured
 version, and pnpm build arguments are explicitly declared in the consuming stage.
+
+The local login issuer and shared verifier both read `jwt.secret` from
+`AUTH_SECRET`, supplied by `/config/common/global-appvar`. `JWT_EXPIRES_IN` optionally
+sets the local token lifetime (default `1h`). Local tokens retain the purpose-bound
+issuer and audience `autopilot-v6`; the global Platform issuer allowlist does not
+trust them. Local login remains disabled unless explicit `LOCAL_AUTH_USERNAME` and
+`LOCAL_AUTH_PASSWORD` credentials are supplied.
