@@ -1,3 +1,8 @@
+import { createBusApiClient } from 'tc-core-library-js';
+jest.mock('tc-core-library-js', () => ({
+  ...jest.requireActual('tc-core-library-js'),
+  createBusApiClient: jest.fn(),
+}));
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -5,7 +10,7 @@ import {
   type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from 'axios';
-import { of } from 'rxjs';
+import { of, firstValueFrom } from 'rxjs';
 import { Auth0Service } from '../../auth/auth0.service';
 import type { IChallenge } from '../../challenge/interfaces/challenge.interface';
 import { ChallengeApiService } from '../../challenge/challenge-api.service';
@@ -139,6 +144,19 @@ describe('PhaseChangeNotificationService', () => {
       post: jest.fn(),
     } as unknown as jest.Mocked<HttpService>;
 
+    jest.mocked(createBusApiClient).mockImplementation((config) => ({
+      postEvent: async (event) =>
+        firstValueFrom(
+          httpService.post(config.BUSAPI_URL!, event, {
+            headers: {
+              Authorization: `Bearer ${await config.getToken!()}`,
+              'Content-Type': 'application/json',
+            },
+            timeout: config.timeoutMs,
+          }),
+        ) as never,
+    }));
+
     configService = {
       get: jest.fn((key: string) => {
         switch (key) {
@@ -247,7 +265,7 @@ describe('PhaseChangeNotificationService', () => {
     });
 
     expect(httpService.post.mock.calls).toHaveLength(2);
-    expect(auth0Service.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(auth0Service.getAccessToken).toHaveBeenCalledTimes(2);
 
     const publishedMessages = new Map(
       httpService.post.mock.calls.map((call) => {

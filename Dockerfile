@@ -1,7 +1,13 @@
 # ---- Base Stage ----
+ARG NODE_VERSION=26.5.1
+
 FROM alpine:3.24 AS base
+ARG NODE_VERSION
+# Alpine replaces old APK patch versions. Keep the configured Node major while
+# accepting maintained patch releases and verify the selected runtime below.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache nodejs-current=26.5.1-r0 \
+  && apk add --no-cache "nodejs-current~${NODE_VERSION%%.*}" \
+  && test "$(node -p 'process.versions.node.split(".")[0]')" = "${NODE_VERSION%%.*}" \
   && addgroup -S -g 10001 app \
   && adduser -S -D -u 10001 -G app -h /home/app app
 WORKDIR /usr/src/app

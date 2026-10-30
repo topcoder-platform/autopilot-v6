@@ -1,7 +1,7 @@
+import { createBusApiClient } from 'tc-core-library-js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
 import * as cityTimezones from 'city-timezones';
 import * as moment from 'moment-timezone';
 import { ResourcesService } from '../../resources/resources.service';
@@ -319,21 +319,12 @@ export class PhaseChangeNotificationService {
     });
 
     try {
-      const token = await this.auth0Service.getAccessToken();
-
-      await Promise.all(
-        messages.map((message) =>
-          firstValueFrom(
-            this.httpService.post(busEventsUrl, message, {
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              timeout: this.timeoutMs,
-            }),
-          ),
-        ),
-      );
+      const client = createBusApiClient({
+        BUSAPI_URL: busEventsUrl,
+        getToken: () => this.auth0Service.getAccessToken(),
+        timeoutMs: this.timeoutMs,
+      });
+      await Promise.all(messages.map((message) => client.postEvent(message)));
 
       await this.dbLogger.logAction('notifications.phaseChange', {
         challengeId,
