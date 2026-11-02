@@ -1,6 +1,6 @@
-ARG NODE_VERSION=26.5.1
+ARG NODE_VERSION=26.12.1
 
-FROM alpine:3.24
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 ARG NODE_VERSION
 
 # Alpine replaces old APK patch versions. Keep the configured Node major while
@@ -19,6 +19,7 @@ ENV HOME=/home/app
 
 # Install dependencies
 COPY --chown=app:app package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=app:app tools ./tools
 COPY --chown=app:app prisma ./prisma
 USER 10001:10001
 RUN pnpm install --frozen-lockfile

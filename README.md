@@ -15,7 +15,7 @@ autopilot operations with Kafka integration.
 
 ### 1. Prerequisites
 
-- Node.js 26.5.1 or newer in the Node 26 line (the repository uses 26.5.1)
+- Node.js 26.12.1 or newer in the Node 26 line (the repository uses 26.12.1)
 - Docker and Docker Compose
 
 The production and development container images run as the unprivileged
@@ -404,3 +404,20 @@ sets the local token lifetime (default `1h`). Local tokens retain the purpose-bo
 issuer and audience `autopilot-v6`; the global Platform issuer allowlist does not
 trust them. Local login remains disabled unless explicit `LOCAL_AUTH_USERNAME` and
 `LOCAL_AUTH_PASSWORD` credentials are supplied.
+
+## November 2026 security refresh
+
+The Node 26 / Alpine 3.24 container and dependency lockfile include patched
+Joi, Moment, XML parsing, matcher and HTTP dependencies. The core library uses
+an immutable reviewed revision. Run `pnpm test:dependency-compat` when changing
+the legacy minimatch adapter or its overrides. Docker builds also run lint and
+the full unit suite.
+
+Kafka publishing routes now require the existing local JWT authentication.
+Configure `AUTH_SECRET` with at least 32 bytes, `LOCAL_AUTH_USERNAME`, and
+`LOCAL_AUTH_PASSWORD` with at least 32 characters. Obtain a token from
+`POST /auth/login` and send it as `Authorization: Bearer <token>` to
+`POST /kafka/command`, `/kafka/challenge-update`, or `/kafka/phase-transition`.
+There are no default local credentials. Health endpoints remain public.
+Previously the authentication module and guard were not connected to these
+routes; callers must now authenticate before publishing.

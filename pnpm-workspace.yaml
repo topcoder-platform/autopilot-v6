@@ -1,56 +1,56 @@
 packages:
-  - "."
-
+- .
 autoInstallPeers: false
-
 overrides:
-  '@babel/core@^7': 7.29.6
-  '@eslint/plugin-kit@^0.3': 0.3.4
-  '@smithy/config-resolver@^4': 4.4.0
-  '@xhmikosr/decompress@^10': 10.2.1
-  'ajv@^6': 6.14.0
-  'ajv@^8': 8.20.0
-  axios: 1.18.1
-  'body-parser@^2': 2.3.0
-  'brace-expansion@^1': 1.1.18
-  'brace-expansion@^2': 2.1.4
-  'brace-expansion@^5': 5.0.9
+  brace-expansion@^1: 1.1.21
+  fast-uri@^3: 3.1.9
+  file-type@>=13.0.0 <21.3.2: 21.3.2
+  follow-redirects: 1.16.2
+  form-data: 4.0.6
+  lodash: 4.18.1
+  multer: 2.5.0
+  path-to-regexp: 8.4.2
+  qs: 6.17.1
+  brace-expansion@^2: 2.1.7
+  brace-expansion@>=3: 5.0.12
+  minimatch@<9: file:tools/minimatch-compat
+  minimatch@>=9: 11.0.3
+  glob@>=9: 14.0.3
+  body-parser@^2: 2.4.0
+  proxy-addr: 2.0.8
+  '@xhmikosr/decompress@^10': 10.2.2
+  js-yaml@^3: 3.15.2
+  js-yaml@^4: 4.3.2
+  js-yaml@^5: 5.5.0
+  '@humanfs/node': 0.16.8
+  piscina@^4: 4.9.4
+  baseline-browser-mapping: 2.11.0
+  browserslist: 4.28.8
+  axios@<1: 0.34.0
+  axios@>=1: 1.21.0
+  tc-core-library-js: https://codeload.github.com/topcoder-platform/tc-core-library-js/tar.gz/a25576b8b038211d1ba910eca2d900271ba6659d
   deepmerge-ts: 8.0.0
   defu: 6.1.7
-  'diff@^4': 4.0.4
-  effect: 3.22.0
-  'fast-uri@^3': 3.1.5
-  'fast-xml-parser@^5': 5.10.1
-  'file-type@>=13.0.0 <21.3.2': 21.3.2
+  effect@^3: 3.22.0
+  hono@^4: 4.12.34
+  '@prisma/config@6.19.3>deepmerge-ts': 8.0.0
+  ajv@^6: 6.14.0
+  ajv@^8: 8.18.0
   flatted: 3.4.2
-  follow-redirects: 1.16.0
-  form-data: 4.0.6
-  joi: 18.2.3
-  'js-yaml@^3': 3.15.1
-  'js-yaml@^4': 4.3.1
-  'js-yaml@^5': 5.2.2
-  jws: 4.0.1
-  lodash: 4.18.1
-  'minimatch@^3': 3.1.5
-  'minimatch@^5': 5.1.8
-  'minimatch@^9': 9.0.9
-  multer: 2.2.0
-  'nanoid@^5': 5.1.16
-  path-to-regexp: 8.4.2
-  'picomatch@^2': 2.3.2
-  'picomatch@^4': 4.0.5
-  'piscina@^4': 4.9.3
-  qs: 6.15.3
+  valibot: 1.4.2
+  find-my-way: 9.7.0
+  fast-xml-parser@^5: 5.10.1
+  picomatch@^4: 4.0.5
   tmp: 0.2.7
-  validator: 13.15.35
-  yaml: 2.9.0
-  yauzl: 3.2.1
-
+  moment: 2.31.0
+  joi: 18.3.1
 allowBuilds:
   '@prisma/client@6.19.3': true
   '@prisma/engines@6.19.3': true
   '@scarf/scarf@1.4.0': false
   '@swc/core@1.12.14': true
-  'esbuild@0.25.10': true
-  'msgpackr-extract@3.0.4': true
-  'prisma@6.19.3': true
+  esbuild@0.25.10: true
+  msgpackr-extract@3.0.4: true
+  prisma@6.19.3: true
+  '@swc/core': true
+  esbuild: true

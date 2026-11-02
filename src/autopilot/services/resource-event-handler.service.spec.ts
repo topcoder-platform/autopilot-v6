@@ -111,7 +111,7 @@ describe('ResourceEventHandler', () => {
         memberHandle: 'handle',
         challengeId,
         roleId: 'role-approver',
-      } as unknown as any);
+      });
 
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
@@ -157,7 +157,7 @@ describe('ResourceEventHandler', () => {
         memberHandle: 'handle',
         challengeId,
         roleId: 'role-approver',
-      } as unknown as any);
+      });
 
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
@@ -204,7 +204,7 @@ describe('ResourceEventHandler', () => {
         memberHandle: 'screener',
         challengeId,
         roleId: 'role-screener',
-      } as unknown as any);
+      });
 
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,
@@ -267,7 +267,7 @@ describe('ResourceEventHandler', () => {
         memberHandle: 'screener',
         challengeId,
         roleId: 'role-screener',
-      } as unknown as any);
+      });
 
       challengeApiService.getChallengeById.mockResolvedValue({
         id: challengeId,

@@ -59,9 +59,7 @@ describe('KafkaHealthIndicator', () => {
     kafkaService = {
       isConnected: jest.fn(),
       getKafkaStatus: jest.fn(),
-    } as unknown as jest.Mocked<
-      Pick<KafkaService, 'isConnected' | 'getKafkaStatus'>
-    >;
+    };
 
     indicator = new KafkaHealthIndicator(
       kafkaService as unknown as KafkaService,
