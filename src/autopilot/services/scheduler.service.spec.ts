@@ -1983,7 +1983,7 @@ describe('SchedulerService (review phase deferral)', () => {
         message: 'Submission closed',
         updatedPhases: [],
         next: { phases: [createPhase({ id: 'review-phase', isOpen: false })] },
-      } as Awaited<ReturnType<ChallengeApiService['advancePhase']>>);
+      });
       challengeApiService.createPostMortemPhase.mockRejectedValue(
         new Error('Post-mortem unavailable'),
       );

@@ -13,11 +13,6 @@ interface LoginResponse {
   access_token: string;
 }
 
-interface User {
-  id: number;
-  username: string;
-}
-
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -39,10 +34,10 @@ export class AuthController {
     description: 'Internal server error.',
   })
   async login(@Body() loginDto: LoginDto): Promise<LoginResponse> {
-    const user = (await this.authService.validateUser(
+    const user = await this.authService.validateUser(
       loginDto.username,
       loginDto.password,
-    )) as User | null;
+    );
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');

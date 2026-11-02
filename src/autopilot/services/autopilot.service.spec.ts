@@ -101,7 +101,7 @@ describe('AutopilotService - handleSubmissionNotificationAggregate', () => {
       handleIterativePhaseClosed,
       isFirst2FinishChallenge: jest.fn().mockReturnValue(true),
       isChallengeActive: jest.fn().mockReturnValue(true),
-    } as unknown as First2FinishServiceMock;
+    };
 
     schedulerService = {
       getAllScheduledTransitions: jest.fn().mockReturnValue([]),
