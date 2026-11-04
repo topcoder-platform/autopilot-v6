@@ -16,7 +16,12 @@ The read-only inventory on 2026-11-03 verified account `409275337247`, cluster `
 
 ## Development acceptance before merge/release
 
-Live dev inventory is required before rollout; the saved AWS session is currently expired. No dev resource identities have been guessed. **This PR is a draft until an administrator verifies and commits `deploy/dev.json` for account `811668436784` and branch `develop`, with corresponding narrow IAM policy/trust.** Use the same schema as `prod.json`, but inspect the actual dev resources and roles; do not replace just the account number. The dev job fails closed while its manifest is absent. Branches other than `develop` and `master` build only and receive no deployment context.
+Read-only inventory on 2026-11-04 verified `dev.json` against the actual development service, task/execution roles and image repositories. This PR targets `develop`. Matching IAM templates and detailed baselines remain private. **Keep this PR in draft until the service-specific prerequisites below are complete.** No AWS or CircleCI resources were provisioned by this refresh.
+
+- Install the service deployment role and matching permissions boundary.
+- Create the restricted empty CircleCI deployment context.
+- Set unconditional immutable ECR tags, preserving existing enhanced scanning.
+- Review and install the dev container health-check proposal; preserve all other task configuration.
 
 Run the shared offline suite, validate the CircleCI config and IAM policies, and test a dev release plus an unhealthy-image rollback. Verify CloudTrail contains no SSM/Secrets Manager calls from the deployment principal. Remove its old broker grants only after migration. Check the runtime secret references and roles stayed unchanged. Production requires the manual approval job and a passing digest/scan/health verification.
 
