@@ -34,3 +34,5 @@ IAM templates and detailed AWS baselines are maintained in the private [v6-servi
 ## Dev branch refresh
 
 This PR targets `develop` and preserves its current application/dependency fixes. The shared suite is v2.0.5 (82 offline tests); service-specific adapters and their tests remain part of review. Keep this PR in draft until its documented infrastructure and integration prerequisites are met. Updating these files does not provision AWS or CircleCI resources.
+
+Source checkout uses the public HTTPS repository and verifies the exact CircleCI commit, avoiding dependency on failing SSH checkout keys. No GitHub token is added to build or deployment contexts.
