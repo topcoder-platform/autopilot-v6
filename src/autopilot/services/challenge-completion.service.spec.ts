@@ -373,10 +373,6 @@ describe('ChallengeCompletionService', () => {
 
     financeApiService = {
       generateChallengePayments: jest.fn().mockResolvedValue(true),
-    } as unknown as {
-      generateChallengePayments: jest.MockedFunction<
-        FinanceApiService['generateChallengePayments']
-      >;
     };
 
     memberApiService = {
@@ -384,19 +380,6 @@ describe('ChallengeCompletionService', () => {
       rerateMemberStats: jest.fn().mockResolvedValue(true),
       rerateChallengeSubmitterRatings: jest.fn().mockResolvedValue(true),
       syncChallengePoints: jest.fn().mockResolvedValue(true),
-    } as unknown as {
-      refreshMemberStats: jest.MockedFunction<
-        MemberApiService['refreshMemberStats']
-      >;
-      rerateMemberStats: jest.MockedFunction<
-        MemberApiService['rerateMemberStats']
-      >;
-      rerateChallengeSubmitterRatings: jest.MockedFunction<
-        MemberApiService['rerateChallengeSubmitterRatings']
-      >;
-      syncChallengePoints: jest.MockedFunction<
-        MemberApiService['syncChallengePoints']
-      >;
     };
 
     kafkaService = {
@@ -426,7 +409,7 @@ describe('ChallengeCompletionService', () => {
       resourcesService as unknown as ResourcesService,
       financeApiService as unknown as FinanceApiService,
       memberApiService as unknown as MemberApiService,
-      reviewSummationApiService as unknown as ReviewSummationApiService,
+      reviewSummationApiService,
       configService as unknown as ConfigService,
       kafkaService as unknown as KafkaService,
       marathonMatchApiService as unknown as MarathonMatchApiService,

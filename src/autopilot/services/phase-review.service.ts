@@ -773,8 +773,7 @@ export class PhaseReviewService {
 
     if (!scorecardIds.size) {
       const legacy = challenge.legacy as
-        | { screeningScorecardId?: unknown }
-        | undefined;
+        { screeningScorecardId?: unknown } | undefined;
       const legacyScorecardId =
         legacy && typeof legacy === 'object'
           ? (legacy as Record<string, unknown>).screeningScorecardId

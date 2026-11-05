@@ -24,4 +24,9 @@ export default () => ({
   finance: financeConfig(),
   memberApi: memberApiConfig(),
   marathonMatch: marathonMatchConfig(),
+  // The local token issuer and shared verifier must use the same configured key.
+  jwt: {
+    secret: process.env.AUTH_SECRET,
+    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
+  },
 });

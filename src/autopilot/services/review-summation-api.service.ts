@@ -123,9 +123,7 @@ export class ReviewSummationApiService {
       );
 
       const status = response.status;
-      const sanitizedResponseHeaders = this.sanitizeHeaders(
-        response.headers as Record<string, unknown> | undefined,
-      );
+      const sanitizedResponseHeaders = this.sanitizeHeaders(response.headers);
       await this.dbLogger.logAction('reviewSummation.finalize', {
         challengeId,
         status: 'SUCCESS',
@@ -154,9 +152,7 @@ export class ReviewSummationApiService {
         : undefined;
       const status = response?.status;
       const data = response?.data;
-      const sanitizedResponseHeaders = this.sanitizeHeaders(
-        response?.headers as Record<string, unknown> | undefined,
-      );
+      const sanitizedResponseHeaders = this.sanitizeHeaders(response?.headers);
 
       this.logger.error(
         `Failed to finalize review summations for challenge ${challengeId}: ${message}`,

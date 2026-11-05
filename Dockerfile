@@ -1,7 +1,13 @@
 # ---- Base Stage ----
-FROM alpine:3.24 AS base
+ARG NODE_VERSION=26.12.1
+
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS base
+ARG NODE_VERSION
+# Alpine replaces old APK patch versions. Keep the configured Node major while
+# accepting maintained patch releases and verify the selected runtime below.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache nodejs-current=26.5.1-r0 \
+  && apk add --no-cache "nodejs-current~${NODE_VERSION%%.*}" \
+  && test "$(node -p 'process.versions.node.split(".")[0]')" = "${NODE_VERSION%%.*}" \
   && addgroup -S -g 10001 app \
   && adduser -S -D -u 10001 -G app -h /home/app app
 WORKDIR /usr/src/app
@@ -16,6 +22,7 @@ FROM tooling AS deps
 COPY package.json ./
 COPY pnpm-lock.yaml ./
 COPY pnpm-workspace.yaml ./
+COPY tools ./tools
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
@@ -23,11 +30,12 @@ RUN pnpm install --frozen-lockfile
 FROM deps AS build
 COPY . .
 RUN pnpm prisma:generate
-RUN pnpm build
+RUN pnpm lint && pnpm test --runInBand && pnpm test:dependency-compat && pnpm build
 
 # ---- Production Dependencies Stage ----
 FROM tooling AS prod-deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY tools ./tools
 COPY prisma ./prisma
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
   && pnpm dlx prisma@6.19.3 generate --schema prisma/challenge.schema.prisma

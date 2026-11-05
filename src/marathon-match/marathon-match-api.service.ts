@@ -116,9 +116,7 @@ export class MarathonMatchApiService {
           response: {
             status: response.status,
             data: response.data ?? null,
-            headers: this.sanitizeHeaders(
-              response.headers as Record<string, unknown> | undefined,
-            ),
+            headers: this.sanitizeHeaders(response.headers),
           },
         },
       });
@@ -236,9 +234,7 @@ export class MarathonMatchApiService {
           response: {
             status: response.status,
             data: response.data ?? null,
-            headers: this.sanitizeHeaders(
-              response.headers as Record<string, unknown> | undefined,
-            ),
+            headers: this.sanitizeHeaders(response.headers),
           },
         },
       });

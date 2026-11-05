@@ -1,4 +1,5 @@
-import { Controller, Post, Body, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpStatus, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { AutopilotProducer } from '../producers/autopilot.producer';
 import {
   PhaseTransitionMessageDto,
@@ -6,9 +7,16 @@ import {
   CommandMessageDto,
 } from '../dto/produce-message.dto';
 
-import { ApiResponse, ApiTags, ApiOperation } from '@nestjs/swagger';
+import {
+  ApiResponse,
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 
 @ApiTags('kafka')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 @Controller('kafka')
 export class KafkaController {
   constructor(private readonly autopilotProducer: AutopilotProducer) {}

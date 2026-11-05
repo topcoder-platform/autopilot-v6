@@ -172,7 +172,7 @@ describe('PhaseReviewService', () => {
         memberHandle: 'member-111',
         roleName: 'Reviewer',
       },
-    ] as any);
+    ]);
     resourcesService.ensureResourcesForMembers.mockResolvedValue([
       {
         id: 'post-mortem-resource-1',
@@ -180,7 +180,7 @@ describe('PhaseReviewService', () => {
         memberHandle: 'member-111',
         roleName: 'Post-Mortem Reviewer',
       },
-    ] as any);
+    ]);
     reviewService.createPendingReview.mockResolvedValue({
       created: true,
       reviewId: 'review-1',
@@ -933,10 +933,10 @@ describe('PhaseReviewService', () => {
     ];
 
     resourcesService.getReviewerResources.mockResolvedValueOnce(
-      sourceResources as any,
+      sourceResources,
     );
     resourcesService.ensureResourcesForMembers.mockResolvedValueOnce(
-      postMortemResources as any,
+      postMortemResources,
     );
 
     await service.handlePhaseOpenedForChallenge(challenge, postMortemPhase.id);
@@ -1209,7 +1209,7 @@ describe('PhaseReviewService', () => {
         isLatest: true,
         submissionRank: 1,
       },
-    ] as any);
+    ]);
     reviewService.getCheckpointPassedSubmissionIds.mockResolvedValue([
       'submission-1',
     ]);

@@ -1,7 +1,13 @@
-FROM alpine:3.24
+ARG NODE_VERSION=26.12.1
 
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+ARG NODE_VERSION
+
+# Alpine replaces old APK patch versions. Keep the configured Node major while
+# accepting maintained patch releases and verify the selected runtime below.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache nodejs-current=26.5.1-r0 npm \
+  && apk add --no-cache "nodejs-current~${NODE_VERSION%%.*}" npm \
+  && test "$(node -p 'process.versions.node.split(".")[0]')" = "${NODE_VERSION%%.*}" \
   && npm install -g pnpm@11.15.1 \
   && addgroup -S -g 10001 app \
   && adduser -S -D -u 10001 -G app -h /home/app app
@@ -13,6 +19,7 @@ ENV HOME=/home/app
 
 # Install dependencies
 COPY --chown=app:app package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=app:app tools ./tools
 COPY --chown=app:app prisma ./prisma
 USER 10001:10001
 RUN pnpm install --frozen-lockfile
