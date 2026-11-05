@@ -69,4 +69,18 @@ describe('local JWT configuration', () => {
       UnauthorizedException,
     );
   });
+
+  it('rejects member tokens even when signed with the configured key', async () => {
+    const token = new JwtService({ secret }).sign(
+      { sub: '1', username: 'test-user', emailVerified: true },
+      {
+        issuer: 'https://auth.topcoder.com/',
+        audience: 'autopilot-v6',
+        expiresIn: '1h',
+      },
+    );
+    await expect(service().verifyToken(token)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
 });
