@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "environment": "dev",
+  "accountId": "811668436784",
+  "region": "us-east-1",
+  "deployRoleArn": "arn:aws:iam::811668436784:role/autopilot-v6-dev-deploy",
+  "taskRoleArn": null,
+  "executionRoleArn": "arn:aws:iam::811668436784:role/ecsTaskExecutionRole",
+  "cluster": "tc-autopilot-serverless",
+  "service": "autopilot-v6",
+  "taskFamily": "autopilot-v6",
+  "circleciOrgId": "947bef5e-1669-415d-b83c-4fc85155b7df",
+  "circleciProjectId": "9c983cd3-28be-4c3a-8f5c-07d2318639aa",
+  "repository": "github.com/topcoder-platform/autopilot-v6",
+  "branch": "develop",
+  "images": {
+    "autopilot-v6": "autopilot-v6"
+  }
+}
