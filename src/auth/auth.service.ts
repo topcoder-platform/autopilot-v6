@@ -1,4 +1,4 @@
-import { createJwtVerifier, type JwtVerifier } from 'tc-core-library-js';
+import { verifySignedJwt } from 'tc-core-library-js';
 import { timingSafeEqual } from 'node:crypto';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -16,7 +16,6 @@ interface JwtPayload {
 
 @Injectable()
 export class AuthService {
-  private verifier?: JwtVerifier;
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -55,27 +54,33 @@ export class AuthService {
   }
 
   /** Verifies the supplied token through tc-core; returns local identity or throws UnauthorizedException. */
-  async verifyToken(token: string): Promise<JwtPayload> {
+  verifyToken(token: string): Promise<JwtPayload> {
     try {
-      this.verifier ??= createJwtVerifier({
-        issuers: [
-          {
-            issuer: 'autopilot-v6',
-            algorithm: 'HS256',
-            audience: 'autopilot-v6',
-            secret: this.configService.get<string>('jwt.secret'),
-          },
-        ],
+      // Local operators authenticate with configured credentials, not member email.
+      // Keep these tokens bound to Autopilot; member/Auth0 tokens are never accepted.
+      const secret = this.configService.get<string>('jwt.secret');
+      if (
+        !secret ||
+        Buffer.byteLength(secret) < 32 ||
+        secret.includes('-----BEGIN')
+      )
+        throw new Error('Invalid signing configuration');
+      const payload = verifySignedJwt(token, secret, {
+        issuer: 'autopilot-v6',
+        audience: 'autopilot-v6',
+        algorithms: ['HS256'],
       });
-      const payload = await this.verifier.verify(token);
       if (
         typeof payload.username !== 'string' ||
         !Number.isSafeInteger(Number(payload.sub))
       )
         throw new Error('Invalid identity');
-      return { sub: Number(payload.sub), username: payload.username };
+      return Promise.resolve({
+        sub: Number(payload.sub),
+        username: payload.username,
+      });
     } catch {
-      throw new UnauthorizedException('Invalid token');
+      return Promise.reject(new UnauthorizedException('Invalid token'));
     }
   }
 }
