@@ -1598,13 +1598,14 @@ export class PhaseScheduleManager {
       `[PHASE CHAIN] Opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
     );
 
-    const isAiPhase =
+    const useScheduler =
+      this.isAppealsPhaseName(phase.name) ||
       this.isAiScreeningPhaseName(phase.name) ||
       this.isAiReviewPhaseName(phase.name);
 
     let updatedPhase: IPhase | null = phase;
 
-    if (isAiPhase) {
+    if (useScheduler) {
       try {
         await this.schedulerService.advancePhase({
           projectId,
@@ -1619,7 +1620,7 @@ export class PhaseScheduleManager {
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `[PHASE CHAIN] Failed to open AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
+          `[PHASE CHAIN] Failed to open phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
           err.stack,
         );
         return false;
@@ -1633,7 +1634,7 @@ export class PhaseScheduleManager {
       } catch (error) {
         const err = error as Error;
         this.logger.error(
-          `[PHASE CHAIN] Failed to fetch phase details after opening AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
+          `[PHASE CHAIN] Failed to fetch phase details after opening phase ${phase.name} (${phase.id}) for challenge ${challengeId}: ${err.message}`,
           err.stack,
         );
         return false;
@@ -1641,7 +1642,7 @@ export class PhaseScheduleManager {
 
       if (!updatedPhase || !updatedPhase.isOpen) {
         this.logger.log(
-          `[PHASE CHAIN] AI phase ${phase.name} (${phase.id}) for challenge ${challengeId} is no longer open after scheduler-managed open; skipping scheduling.`,
+          `[PHASE CHAIN] Phase ${phase.name} (${phase.id}) for challenge ${challengeId} is no longer open after scheduler-managed open; skipping scheduling.`,
         );
         return true;
       }
@@ -1649,7 +1650,7 @@ export class PhaseScheduleManager {
       this.reviewAssignmentService.clearPolling(challengeId, phase.id);
 
       this.logger.log(
-        `[PHASE CHAIN] Successfully opened AI phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
+        `[PHASE CHAIN] Successfully opened phase ${phase.name} (${phase.id}) for challenge ${challengeId}`,
       );
     } else {
       const openResult = await this.challengeApiService.advancePhase(
