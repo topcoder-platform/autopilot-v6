@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import { PrizeSetTypeEnum } from '@prisma/client';
 import type { ChallengeApiService } from '../../challenge/challenge-api.service';
+import type { IPhase } from '../../challenge/interfaces/challenge.interface';
 import type { FinanceApiService } from '../../finance/finance-api.service';
 import type { MemberApiService } from '../../member-api/member-api.service';
 import { AutopilotOperator } from '../interfaces/autopilot.interface';
@@ -713,6 +714,51 @@ describe('PhaseScheduleManager', () => {
       expect.objectContaining({
         challengeId: 'challenge-iterative',
         type: 'ITERATIVE_REVIEW',
+      }),
+    );
+  });
+
+  it('opens chained Appeals through the scheduler and schedules closure at the refreshed deadline', async () => {
+    const appeals: IPhase = {
+      id: 'appeals-instance',
+      phaseId: 'appeals-template',
+      predecessor: 'review-template',
+      duration: 86400,
+      description: null,
+      actualStartDate: null,
+      actualEndDate: null,
+      constraints: [],
+      name: 'Appeals',
+      isOpen: false,
+      scheduledStartDate: '2026-05-01T00:00:00.000Z',
+      scheduledEndDate: '2026-05-02T00:00:00.000Z',
+    };
+    const deadline = '2026-05-02T01:00:00.000Z';
+    challengeApiService.getPhaseDetails.mockResolvedValue({
+      ...appeals,
+      isOpen: true,
+      scheduledEndDate: deadline,
+    });
+
+    await service['openPhaseAndSchedule'](
+      'challenge-1',
+      1001,
+      'ACTIVE',
+      appeals,
+    );
+
+    expect(schedulerService.advancePhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        challengeId: 'challenge-1',
+        phaseId: appeals.id,
+        state: 'START',
+      }),
+    );
+    expect(schedulerService.schedulePhaseTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseId: appeals.id,
+        state: 'END',
+        date: deadline,
       }),
     );
   });

@@ -742,6 +742,13 @@ describe('SchedulerService (review phase deferral)', () => {
       appealsPhase.id,
       'open',
     );
+    expect(
+      phaseChangeNotificationService.sendPhaseChangeNotification,
+    ).toHaveBeenCalledWith({
+      challengeId: payload.challengeId,
+      phaseId: appealsPhase.id,
+      operation: 'open',
+    });
   });
 
   it('closes review phases when no pending reviews remain', async () => {
