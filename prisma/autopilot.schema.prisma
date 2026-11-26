@@ -1,6 +1,6 @@
 datasource autopilot {
   provider = "postgresql"
-  url      = env("AUTOPILOT_DB_URL")
+
   schemas  = ["autopilot"]
 }
 

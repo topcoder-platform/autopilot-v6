@@ -1,4 +1,4 @@
-import { HealthCheckError } from '@nestjs/terminus';
+import { HealthIndicatorService } from '@nestjs/terminus';
 import { KafkaHealthIndicator } from './kafka.health';
 import { KafkaConnectionState, KafkaService } from '../kafka/kafka.service';
 
@@ -63,6 +63,7 @@ describe('KafkaHealthIndicator', () => {
 
     indicator = new KafkaHealthIndicator(
       kafkaService as unknown as KafkaService,
+      new HealthIndicatorService(),
     );
   });
 
@@ -75,25 +76,27 @@ describe('KafkaHealthIndicator', () => {
 
     const result = await indicator.isHealthy('kafka');
 
-    expect(result.kafka.status).toBe('up');
-    expect(result.kafka.state).toBe(KafkaConnectionState.ready);
-    expect(result.kafka.reconnectAttempts).toBe(0);
+    expect(result.kafka).toMatchObject({
+      status: 'up',
+      state: KafkaConnectionState.ready,
+      reconnectAttempts: 0,
+    });
   });
 
-  it('throws when Kafka state is failed', async () => {
+  it('reports down when Kafka state is failed', async () => {
     kafkaService.getKafkaStatus.mockReturnValue({
       state: KafkaConnectionState.failed,
       reconnectAttempts: 3,
       reason: 'Kafka reconnection attempts exhausted',
     });
 
-    await expect(indicator.isHealthy('kafka')).rejects.toBeInstanceOf(
-      HealthCheckError,
-    );
+    await expect(indicator.isHealthy('kafka')).resolves.toMatchObject({
+      kafka: { status: 'down' },
+    });
     expect(kafkaService.isConnected).not.toHaveBeenCalled();
   });
 
-  it('throws when Kafka connections are not ready', async () => {
+  it('reports down when Kafka connections are not ready', async () => {
     kafkaService.getKafkaStatus.mockReturnValue({
       state: KafkaConnectionState.ready,
       reconnectAttempts: 1,
@@ -101,8 +104,8 @@ describe('KafkaHealthIndicator', () => {
     });
     kafkaService.isConnected.mockResolvedValue(false);
 
-    await expect(indicator.isHealthy('kafka')).rejects.toBeInstanceOf(
-      HealthCheckError,
-    );
+    await expect(indicator.isHealthy('kafka')).resolves.toMatchObject({
+      kafka: { status: 'down' },
+    });
   });
 });

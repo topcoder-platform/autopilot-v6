@@ -1,3 +1,4 @@
+import { createPostgresAdapter } from '../src/prisma-adapter';
 import {
   ChallengeStatusEnum,
   PrismaClient,
@@ -201,18 +202,10 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   const challengeClient = new PrismaClient({
-    datasources: {
-      db: {
-        url: process.env.CHALLENGE_DB_URL,
-      },
-    },
+    adapter: createPostgresAdapter(process.env.CHALLENGE_DB_URL),
   });
   const reviewClient = new PrismaClient({
-    datasources: {
-      db: {
-        url: process.env.REVIEW_DB_URL,
-      },
-    },
+    adapter: createPostgresAdapter(process.env.REVIEW_DB_URL),
   });
 
   const reviewService = new ReviewService(

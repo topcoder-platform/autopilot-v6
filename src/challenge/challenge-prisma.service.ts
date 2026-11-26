@@ -1,3 +1,4 @@
+import { createPostgresAdapter } from '../prisma-adapter';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -17,27 +18,11 @@ export class ChallengePrismaService
       { emit: 'event', level: 'query' },
     ];
 
-    super(
-      databaseUrl
-        ? {
-            datasources: {
-              db: {
-                url: databaseUrl,
-              },
-            },
-            ...(dbDebugEnabled ? { log: logConfig } : {}),
-          }
-        : dbDebugEnabled
-          ? { log: logConfig }
-          : undefined,
-    );
+    super({
+      adapter: createPostgresAdapter(databaseUrl ?? process.env.CHALLENGE_DB_URL),
+      ...(dbDebugEnabled ? { log: logConfig } : {}),
+    });
 
-    if (!databaseUrl) {
-      Logger.warn(
-        'CHALLENGE_DB_URL is not configured. Prisma client will rely on the default environment resolution.',
-        ChallengePrismaService.name,
-      );
-    }
   }
 
   async onModuleDestroy(): Promise<void> {

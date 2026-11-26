@@ -3,11 +3,9 @@ ARG NODE_VERSION=26.13.1
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 ARG NODE_VERSION
 
-# Alpine replaces old APK patch versions. Keep the configured Node major while
-# accepting maintained patch releases and verify the selected runtime below.
 RUN apk upgrade --no-cache \
-  && apk add --no-cache "nodejs-current~${NODE_VERSION%%.*}" "nodejs-current>=26.13.1-r0" "zlib>=1.4-r0" npm \
-  && test "$(node -p 'process.versions.node.split(".")[0]')" = "${NODE_VERSION%%.*}" \
+  && apk add --no-cache 'nodejs-current~26.13.1' "zlib>=1.4-r0" npm \
+  && test "$(node -p 'process.versions.node')" = "${NODE_VERSION}" \
   && npm install -g pnpm@11.15.1 \
   && addgroup -S -g 10001 app \
   && adduser -S -D -u 10001 -G app -h /home/app app

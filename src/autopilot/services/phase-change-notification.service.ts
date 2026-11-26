@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import * as cityTimezones from 'city-timezones';
-import * as moment from 'moment-timezone';
+import moment from 'moment-timezone';
 import { ResourcesService } from '../../resources/resources.service';
 import type { ReviewerResourceRecord } from '../../resources/resources.service';
 import { MembersService } from '../../members/members.service';

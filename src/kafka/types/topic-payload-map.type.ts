@@ -10,7 +10,7 @@ import {
   ReviewCompletedPayload,
   SubmissionAggregatePayload,
   AiWorkflowCompletedPayload,
-} from 'src/autopilot/interfaces/autopilot.interface';
+} from '../../autopilot/interfaces/autopilot.interface';
 
 export type TopicPayloadMap = {
   [KAFKA_TOPICS.PHASE_TRANSITION]: PhaseTransitionPayload;

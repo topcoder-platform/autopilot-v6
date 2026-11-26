@@ -1,67 +1,44 @@
 import { Injectable } from '@nestjs/common';
-import { HealthIndicator, HealthCheckError } from '@nestjs/terminus';
+import { HealthIndicatorService } from '@nestjs/terminus';
 import { KafkaConnectionState, KafkaService } from '../kafka/kafka.service';
 import { LoggerService } from '../common/services/logger.service';
 
 @Injectable()
-export class KafkaHealthIndicator extends HealthIndicator {
+export class KafkaHealthIndicator {
   private readonly logger = new LoggerService(KafkaHealthIndicator.name);
 
-  constructor(private readonly kafkaService: KafkaService) {
-    super();
-  }
+  constructor(
+    private readonly kafkaService: KafkaService,
+    private readonly healthIndicator: HealthIndicatorService,
+  ) {}
 
   async isHealthy(key: string) {
+    const indicator = this.healthIndicator.check(key);
+    const timestamp = new Date().toISOString();
     try {
       const status = this.kafkaService.getKafkaStatus();
-      const timestamp = new Date().toISOString();
-
-      if (status.state === KafkaConnectionState.failed) {
-        throw new HealthCheckError(
-          'KafkaHealthCheck failed',
-          this.getStatus(key, false, {
-            state: status.state,
-            reconnectAttempts: status.reconnectAttempts,
-            reason: status.reason || 'Kafka reconnection attempts exhausted',
-            timestamp,
-          }),
-        );
-      }
-
-      const isConnected = await this.kafkaService.isConnected();
-
-      if (!isConnected) {
-        throw new HealthCheckError(
-          'KafkaHealthCheck failed',
-          this.getStatus(key, false, {
-            state: status.state,
-            reconnectAttempts: status.reconnectAttempts,
-            reason: status.reason || 'Kafka is not connected',
-            timestamp,
-          }),
-        );
-      }
-
-      return this.getStatus(key, true, {
+      const details = {
         state: status.state,
         reconnectAttempts: status.reconnectAttempts,
         timestamp,
-      });
-    } catch (error: unknown) {
-      const err = error as Error;
-
-      this.logger.error('Kafka health check failed', {
-        error: err.stack,
-        timestamp: new Date().toISOString(),
-      });
-
-      throw new HealthCheckError(
-        'KafkaHealthCheck failed',
-        this.getStatus(key, false, {
-          reason: err.message,
-          timestamp: new Date().toISOString(),
-        }),
-      );
+      };
+      if (status.state === KafkaConnectionState.failed) {
+        return indicator.down({
+          ...details,
+          reason: status.reason || 'Kafka reconnection attempts exhausted',
+        });
+      }
+      if (!(await this.kafkaService.isConnected())) {
+        return indicator.down({
+          ...details,
+          reason: status.reason || 'Kafka is not connected',
+        });
+      }
+      return indicator.up(details);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error('Kafka health check failed', { reason, timestamp });
+      return indicator.down({ reason, timestamp });
     }
   }
 }

@@ -1,3 +1,4 @@
+import { createPostgresAdapter } from '../src/prisma-adapter';
 import { Prisma, PrismaClient } from '@prisma/client';
 
 interface AutopilotActionRecord {
@@ -26,11 +27,7 @@ async function main(): Promise<void> {
   }
 
   const prisma = new PrismaClient({
-    datasources: {
-      db: {
-        url: databaseUrl,
-      },
-    },
+    adapter: createPostgresAdapter(databaseUrl),
   });
 
   try {
