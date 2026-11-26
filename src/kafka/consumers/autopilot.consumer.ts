@@ -15,7 +15,7 @@ import {
   ReviewCompletedPayload,
   SubmissionAggregatePayload,
   AiWorkflowCompletedPayload,
-} from 'src/autopilot/interfaces/autopilot.interface';
+} from '../../autopilot/interfaces/autopilot.interface';
 
 @Injectable()
 export class AutopilotConsumer {

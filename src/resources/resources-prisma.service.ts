@@ -1,3 +1,4 @@
+import { createPostgresAdapter } from '../prisma-adapter';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
@@ -12,24 +13,10 @@ export class ResourcesPrismaService
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>('resources.dbUrl');
 
-    super(
-      databaseUrl
-        ? {
-            datasources: {
-              db: {
-                url: databaseUrl,
-              },
-            },
-          }
-        : undefined,
-    );
+    super({
+      adapter: createPostgresAdapter(databaseUrl ?? process.env.RESOURCES_DB_URL),
+    });
 
-    if (!databaseUrl) {
-      Logger.warn(
-        'RESOURCES_DB_URL is not configured. Prisma client will rely on the default environment resolution.',
-        ResourcesPrismaService.name,
-      );
-    }
   }
 
   async onModuleDestroy(): Promise<void> {

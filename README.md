@@ -15,7 +15,7 @@ autopilot operations with Kafka integration.
 
 ### 1. Prerequisites
 
-- Node.js 26.12.1 or newer in the Node 26 line (the repository uses 26.12.1)
+- Node.js 26.13.1 or newer in the Node 26 line (the repository uses 26.12.1)
 - Docker and Docker Compose
 
 The production and development container images run as the unprivileged

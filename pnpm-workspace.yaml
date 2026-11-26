@@ -1,5 +1,5 @@
 packages:
-- .
+  - .
 autoInstallPeers: false
 overrides:
   brace-expansion@^1: 1.1.21
@@ -46,11 +46,17 @@ overrides:
   joi: 18.3.1
 allowBuilds:
   '@prisma/client@6.19.3': true
-  '@prisma/engines@6.19.3': true
+  '@prisma/engines@7.10.1': true
   '@scarf/scarf@1.4.0': false
   '@swc/core@1.12.14': true
   esbuild@0.25.10: true
   msgpackr-extract@3.0.4: true
-  prisma@6.19.3: true
+  'prisma@7.10.1': true
   '@swc/core': true
   esbuild: true
+  '@parcel/watcher': false
+minimumReleaseAgeExclude:
+  - '@nestjs/common@12.6.3'
+  - '@nestjs/core@12.6.3'
+  - '@nestjs/platform-express@12.6.3'
+  - '@nestjs/testing@12.6.3'

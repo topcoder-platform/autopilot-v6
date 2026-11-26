@@ -1,6 +1,5 @@
 datasource db {
   provider = "postgresql"
-  url      = env("CHALLENGE_DB_URL")
 }
 
 generator client {

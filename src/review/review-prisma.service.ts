@@ -1,3 +1,4 @@
+import { createPostgresAdapter } from '../prisma-adapter';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
@@ -12,24 +13,10 @@ export class ReviewPrismaService
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>('review.dbUrl');
 
-    super(
-      databaseUrl
-        ? {
-            datasources: {
-              db: {
-                url: databaseUrl,
-              },
-            },
-          }
-        : undefined,
-    );
+    super({
+      adapter: createPostgresAdapter(databaseUrl ?? process.env.REVIEW_DB_URL),
+    });
 
-    if (!databaseUrl) {
-      Logger.warn(
-        'REVIEW_DB_URL is not configured. Prisma client will rely on the default environment resolution.',
-        ReviewPrismaService.name,
-      );
-    }
   }
 
   async onModuleDestroy(): Promise<void> {

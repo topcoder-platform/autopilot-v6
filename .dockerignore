@@ -44,4 +44,5 @@ docs/
 
 # OS files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+**/*.tsbuildinfo
